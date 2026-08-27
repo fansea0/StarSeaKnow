@@ -1,5 +1,6 @@
 package com.fansea.ai.auth;
 
+import com.fansea.ai.mapper.TenantMapper;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,8 +13,8 @@ public class PasswordEncoderConfig {
     }
 
     @Bean
-    public FilterRegistrationBean<JwtAuthFilter> jwtAuthFilterRegistration(JwtService jwtService) {
-        FilterRegistrationBean<JwtAuthFilter> reg = new FilterRegistrationBean<>(new JwtAuthFilter(jwtService));
+    public FilterRegistrationBean<JwtAuthFilter> jwtAuthFilterRegistration(JwtService jwtService, TenantMapper tenants) {
+        FilterRegistrationBean<JwtAuthFilter> reg = new FilterRegistrationBean<>(new JwtAuthFilter(jwtService, tenants));
         reg.addUrlPatterns("/*");
         reg.setOrder(10); // 在 CorsFilter 之后,Controller 之前
         return reg;

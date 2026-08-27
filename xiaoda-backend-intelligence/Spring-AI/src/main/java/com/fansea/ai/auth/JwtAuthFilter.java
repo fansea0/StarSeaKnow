@@ -1,5 +1,7 @@
 package com.fansea.ai.auth;
 
+import com.fansea.ai.domain.Tenant;
+import com.fansea.ai.mapper.TenantMapper;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -18,8 +20,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     );
 
     private final JwtService jwtService;
+    private final TenantMapper tenants;
 
-    public JwtAuthFilter(JwtService jwtService) { this.jwtService = jwtService; }
+    public JwtAuthFilter(JwtService jwtService, TenantMapper tenants) {
+        this.jwtService = jwtService;
+        this.tenants = tenants;
+    }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest req) {
@@ -43,6 +49,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 if (c.getSub() == null || !c.getSub().startsWith(subjectPrefix)) {
                     throw new AuthException(AuthErrorCode.MISSING_TOKEN, "invalid token subject");
                 }
+                if (kind == AuthContext.Kind.BUSINESS && !hasActiveTenant(c.getTenantId())) {
+                    throw new AuthException(AuthErrorCode.CROSS_TENANT, "tenant is disabled or not found");
+                }
                 long uid = Long.parseLong(c.getSub().substring(subjectPrefix.length()));
                 ctx = new AuthContext(kind, uid, c.getTenantId(), c.getRole(), c.getJti());
             } catch (AuthException e) {
@@ -59,5 +68,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         } finally {
             AuthContext.clear();
         }
+    }
+
+    private boolean hasActiveTenant(Long tenantId) {
+        if (tenantId == null) {
+            return false;
+        }
+        Tenant tenant = tenants.selectById(tenantId);
+        return tenant != null && Integer.valueOf(1).equals(tenant.getStatus());
     }
 }
