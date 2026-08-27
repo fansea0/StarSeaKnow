@@ -9,53 +9,37 @@
       <el-button data-testid="create-knowledge" type="primary" @click="showCreate = true">创建知识库</el-button>
     </header>
 
-    <section v-if="knowledgeList.length" class="knowledge-management" aria-label="知识库管理">
-      <div class="knowledge-toolbar">
-        <el-input
-          v-model.trim="searchQuery"
-          data-testid="knowledge-search"
-          clearable
-          placeholder="搜索知识库名称或描述"
-          aria-label="搜索知识库名称或描述"
-        />
+    <section v-if="knowledgeList.length" class="knowledge-list" aria-label="知识库列表">
+      <div class="knowledge-list__header" aria-hidden="true">
+        <span>知识库</span>
+        <span>文档数</span>
+        <span>已关联智能体</span>
+        <span>操作</span>
       </div>
-
-      <section v-if="filteredKnowledgeList.length" class="knowledge-list" aria-label="知识库列表">
-        <div class="knowledge-list__header" aria-hidden="true">
-          <span>知识库</span>
-          <span>描述</span>
-          <span>文档数</span>
-          <span>已关联智能体</span>
-          <span>操作</span>
-        </div>
-        <article
-          v-for="kb in filteredKnowledgeList"
-          :key="kb.id"
-          class="knowledge-row"
-          role="link"
-          tabindex="0"
-          :aria-label="`打开知识库 ${kb.name}`"
-          @click="goToDetail(kb.id)"
-          @keyup.enter="goToDetail(kb.id)"
-        >
-          <div class="knowledge-row__identity">
-            <span class="knowledge-row__badge" aria-hidden="true">KB</span>
-            <h2 class="knowledge-row__title">{{ kb.name }}</h2>
-          </div>
+      <article
+        v-for="kb in knowledgeList"
+        :key="kb.id"
+        class="knowledge-row"
+        role="link"
+        tabindex="0"
+        :aria-label="`打开知识库 ${kb.name}`"
+        @click="goToDetail(kb.id)"
+        @keyup.enter="goToDetail(kb.id)"
+      >
+        <span class="knowledge-row__badge" aria-hidden="true">KB</span>
+        <div class="knowledge-row__content">
+          <h2 class="knowledge-row__title">{{ kb.name }}</h2>
           <p class="knowledge-row__description">{{ kb.desc || '暂未添加描述' }}</p>
-          <span class="knowledge-row__document-count">{{ kb.docCount || 0 }}</span>
-          <span class="knowledge-row__agent-count">{{ kb.agentCount || 0 }}</span>
-          <div class="knowledge-row__actions">
-            <el-button class="knowledge-row__enter" text type="primary" @click.stop="goToDetail(kb.id)">进入知识库</el-button>
-            <el-button :aria-label="`删除知识库 ${kb.name}`" class="knowledge-row__delete" type="danger" circle @click.stop="handleDelete(kb.id)"><el-icon class="knowledge-row__delete-icon"><Delete /></el-icon></el-button>
-          </div>
-        </article>
-      </section>
-
-      <section v-else data-testid="knowledge-search-empty" class="knowledge-search-empty" aria-live="polite">
-        <h2>没有找到匹配的知识库</h2>
-        <p>换一个关键词，或创建一个新的知识库。</p>
-      </section>
+        </div>
+        <div class="knowledge-row__meta" aria-label="知识库统计">
+          <span>{{ kb.docCount || 0 }} 篇文档</span>
+          <span>关联 {{ kb.agentCount || 0 }} 个智能体</span>
+        </div>
+        <div class="knowledge-row__actions">
+          <el-button class="knowledge-row__enter" text type="primary" @click.stop="goToDetail(kb.id)">进入知识库</el-button>
+          <el-button :aria-label="`删除知识库 ${kb.name}`" class="knowledge-row__delete" type="danger" circle @click.stop="handleDelete(kb.id)"><el-icon class="knowledge-row__delete-icon"><Delete /></el-icon></el-button>
+        </div>
+      </article>
     </section>
 
     <section v-else class="empty-state knowledge-page__empty" aria-live="polite">
@@ -92,7 +76,6 @@ export default {
   data() {
     return {
       knowledgeList: [],
-      searchQuery: '',
       showCreate: false,
       createForm: {
         name: '',
@@ -112,17 +95,6 @@ export default {
   },
   mounted() {
     this.fetchKnowledgeList()
-  },
-  computed: {
-    filteredKnowledgeList() {
-      const query = this.searchQuery.trim().toLowerCase()
-      if (!query) return this.knowledgeList
-      return this.knowledgeList.filter(item => {
-        const name = String(item.name || '').toLowerCase()
-        const description = String(item.desc || '').toLowerCase()
-        return name.includes(query) || description.includes(query)
-      })
-    }
   },
   methods: {
     async fetchKnowledgeList() {
@@ -202,29 +174,21 @@ export default {
 .knowledge-page h1 { margin: 4px 0 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: clamp(28px, 3vw, 36px); line-height: 1.2; }
 .knowledge-page__header p { margin: 8px 0 0; color: var(--sea-muted); }
 
-.knowledge-management { width: 100%; }
-.knowledge-toolbar { display: flex; justify-content: flex-end; margin-bottom: 14px; }
-.knowledge-toolbar :deep(.el-input) { width: min(100%, 320px); }
-.knowledge-toolbar :deep(.el-input__wrapper) { min-height: 38px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--sea-muted) 28%, var(--sea-paper)) inset; }
 .knowledge-list { width: 100%; }
-.knowledge-list__header { display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(200px, 1.4fr) 72px 116px 120px; align-items: center; min-height: 36px; padding: 0 18px; color: var(--sea-muted); font-size: 12px; }
+.knowledge-list__header { display: grid; grid-template-columns: minmax(0, 1fr) 92px 132px 120px; align-items: center; min-height: 36px; padding: 0 18px; color: var(--sea-muted); font-size: 12px; }
 .knowledge-list__header > span:not(:first-child) { text-align: right; }
-.knowledge-row { display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(200px, 1.4fr) 72px 116px auto; align-items: center; column-gap: 16px; min-height: 74px; margin-bottom: 10px; padding: 12px 18px; cursor: pointer; border: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted)); border-radius: 7px; background: var(--sea-paper); transition: background 180ms ease, border-color 180ms ease; }
+.knowledge-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 224px auto; align-items: center; column-gap: 16px; min-height: 84px; margin-bottom: 10px; padding: 14px 18px; cursor: pointer; border: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted)); border-radius: 7px; background: var(--sea-paper); transition: background 180ms ease, border-color 180ms ease; }
 .knowledge-row:hover, .knowledge-row:focus-visible { border-color: color-mix(in srgb, var(--sea-signal) 48%, var(--sea-muted)); background: color-mix(in srgb, var(--sea-signal) 4%, var(--sea-paper)); }
 .knowledge-row__badge { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid color-mix(in srgb, var(--sea-signal) 28%, var(--sea-paper)); border-radius: 6px; background: color-mix(in srgb, var(--sea-signal) 7%, var(--sea-paper)); color: var(--sea-signal); font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
-.knowledge-row__identity { display: flex; align-items: center; min-width: 0; gap: 12px; }
+.knowledge-row__content { min-width: 0; }
 .knowledge-row__title { margin: 0 0 3px; overflow: hidden; color: var(--sea-deep); font-size: 15px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .knowledge-row__description { margin: 0; overflow: hidden; color: var(--sea-muted); font-size: 13px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
-.knowledge-row__document-count, .knowledge-row__agent-count { color: var(--sea-muted); font-family: 'JetBrains Mono', monospace; font-size: 13px; text-align: right; }
+.knowledge-row__meta { display: flex; justify-content: flex-end; gap: 18px; color: var(--sea-muted); font-size: 12px; white-space: nowrap; }
 .knowledge-row__actions { display: flex; align-items: center; gap: 8px; }
 .knowledge-row__enter { min-height: 32px; padding-inline: 9px; font-size: 13px; font-weight: 700; }
 .knowledge-row__delete { flex: 0 0 auto; border-color: var(--sea-danger); background: var(--sea-danger); color: var(--sea-paper); }
 .knowledge-row__delete:hover, .knowledge-row__delete:focus-visible { border-color: var(--el-color-danger-dark-2); background: var(--el-color-danger-dark-2); color: var(--sea-paper); }
 .knowledge-row__delete-icon { font-size: 16px; }
-
-.knowledge-search-empty { display: grid; place-items: center; min-height: 190px; border: 1px dashed color-mix(in srgb, var(--sea-mist) 62%, var(--sea-muted)); border-radius: 8px; background: color-mix(in srgb, var(--sea-paper) 88%, var(--sea-mist)); text-align: center; }
-.knowledge-search-empty h2 { margin: 0; color: var(--sea-deep); font-size: 16px; }
-.knowledge-search-empty p { margin: 7px 0 0; color: var(--sea-muted); font-size: 13px; }
 
 .knowledge-page__empty { display: grid; place-items: center; min-height: 260px; border: 1px dashed var(--el-border-color); border-radius: 12px; background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist)); }
 .knowledge-page__empty h2 { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 21px; }
@@ -234,17 +198,10 @@ export default {
   .knowledge-page { padding-top: 8px; }
   .knowledge-page__header { align-items: flex-start; flex-direction: column; }
   .knowledge-page__header > .el-button { width: 100%; }
-  .knowledge-toolbar { justify-content: stretch; }
-  .knowledge-toolbar :deep(.el-input) { width: 100%; }
   .knowledge-list__header { display: none; }
-  .knowledge-row { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 8px; margin-bottom: 8px; padding: 14px 12px; }
-  .knowledge-row__description { grid-column: 1 / -1; grid-row: 2; }
-  .knowledge-row__document-count { grid-column: 1; grid-row: 3; text-align: left; }
-  .knowledge-row__document-count::after { content: ' 篇文档'; }
-  .knowledge-row__agent-count { grid-column: 1; grid-row: 3; justify-self: end; text-align: right; }
-  .knowledge-row__agent-count::before { content: '关联 '; }
-  .knowledge-row__agent-count::after { content: ' 个智能体'; }
-  .knowledge-row__actions { grid-column: 2; grid-row: 1; gap: 0; }
+  .knowledge-row { grid-template-columns: 38px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 8px; margin-bottom: 8px; padding: 14px 12px; }
+  .knowledge-row__meta { grid-column: 2 / -1; justify-content: flex-start; gap: 12px; }
+  .knowledge-row__actions { grid-column: 3; grid-row: 1; gap: 0; }
   .knowledge-row__enter { display: none; }
 }
 </style>
