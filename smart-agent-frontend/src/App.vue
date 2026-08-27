@@ -110,7 +110,7 @@ onMounted(() => {
   height: 100vh;
   padding: 24px 16px 18px;
   background: var(--sea-deep);
-  color: #d9e8ee;
+  color: color-mix(in srgb, var(--sea-paper) 88%, var(--sea-mist));
 }
 
 .brand {
@@ -119,7 +119,7 @@ onMounted(() => {
   gap: 10px;
   min-height: 48px;
   padding: 0 8px 22px;
-  border-bottom: 1px solid rgb(234 241 245 / 18%);
+  border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 18%, transparent);
   color: var(--sea-paper);
   font-family: 'Noto Serif SC', serif;
   font-size: 19px;
@@ -150,20 +150,20 @@ onMounted(() => {
   margin: 3px 0;
   padding: 0 12px !important;
   border-radius: 8px;
-  color: #c3d2dc;
+  color: color-mix(in srgb, var(--sea-mist) 82%, var(--sea-muted));
   font-size: 15px;
   line-height: 44px;
 }
 
 .workspace-menu .el-menu-item:hover {
-  background: rgb(234 241 245 / 10%);
+  background: color-mix(in srgb, var(--sea-mist) 10%, transparent);
   color: var(--sea-paper);
 }
 
 .workspace-menu .el-menu-item.is-active {
   border-right: 0;
-  background: rgb(0 166 166 / 22%);
-  color: #d8ffff;
+  background: color-mix(in srgb, var(--sea-signal) 22%, transparent);
+  color: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-signal));
   font-weight: 600;
 }
 
@@ -174,13 +174,13 @@ onMounted(() => {
   gap: 8px;
   min-height: 52px;
   padding: 12px 8px 0;
-  border-top: 1px solid rgb(234 241 245 / 18%);
+  border-top: 1px solid color-mix(in srgb, var(--sea-mist) 18%, transparent);
 }
 
 .account-actions__name {
   min-width: 0;
   overflow: hidden;
-  color: #d9e8ee;
+  color: color-mix(in srgb, var(--sea-paper) 88%, var(--sea-mist));
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -188,11 +188,11 @@ onMounted(() => {
 
 .account-actions .el-button {
   min-width: 40px;
-  color: #b8d9dc;
+  color: color-mix(in srgb, var(--sea-mist) 75%, var(--sea-signal));
 }
 
 .account-actions .el-button:hover {
-  color: #e5ffff;
+  color: color-mix(in srgb, var(--sea-paper) 92%, var(--sea-signal));
 }
 
 .workspace-main {
@@ -206,7 +206,7 @@ onMounted(() => {
   align-items: center;
   height: 44px;
   margin-bottom: 12px;
-  border-bottom: 1px solid #d6e2e6;
+  border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 85%, var(--sea-muted));
 }
 
 .tide-line span {
@@ -261,7 +261,7 @@ onMounted(() => {
   .brand {
     min-height: 52px;
     padding: 10px 16px;
-    border-bottom: 1px solid rgb(234 241 245 / 18%);
+    border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 18%, transparent);
   }
 
   .workspace-navigation {
