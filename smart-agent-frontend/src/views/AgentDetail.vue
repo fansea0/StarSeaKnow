@@ -1,7 +1,7 @@
 <template>
-  <div class="agent-detail-root">
+  <div class="detail-workbench">
     <!-- 左侧设置区 -->
-    <section class="agent-settings">
+    <section class="settings-pane">
       <el-form :model="agentInfo" label-width="80px" class="agent-form">
         <el-form-item label="名称">
           <el-input v-model="agentInfo.name" maxlength="32" />
@@ -45,10 +45,10 @@
       </el-dialog>
     </section>
     <!-- 右侧调试预览区 -->
-    <section class="agent-chat">
+    <section class="preview-pane">
       <div class="chat-header-row">
         <div class="chat-header">调试预览</div>
-        <el-button class="save-agent-btn" type="primary" icon="el-icon-check" @click="saveAgent">保存</el-button>
+        <el-button data-testid="save-agent" class="save-agent-btn" type="primary" icon="el-icon-check" @click="saveAgent">保存</el-button>
       </div>
       <div class="chat-history" ref="chatHistoryRef">
         <div v-for="(msg, idx) in chatHistory" :key="idx" :class="['chat-msg', msg.role]">
@@ -58,9 +58,9 @@
               <template v-if="idx === 0">
                 <div v-if="prologueGreeting" class="prologue-greeting" v-html="renderMarkdown(prologueGreeting)"></div>
                 <div v-if="prologueQuestions.length" class="prologue-questions">
-                  <div v-for="(q, i) in prologueQuestions" :key="i" class="question-chip" @click="sendQuestion(q)">
+                  <button v-for="(q, i) in prologueQuestions" :key="i" type="button" class="question-chip" @click="sendQuestion(q)">
                     <span class="question-chip-text">{{ q }}</span>
-                  </div>
+                  </button>
                 </div>
               </template>
               <div v-else v-html="renderMarkdown(msg.content)"></div>
@@ -77,7 +77,7 @@
       </div>
       <div class="chat-input-row">
         <el-input v-model="inputMsg" placeholder="请输入内容..." @keyup.enter="sendMsg" class="chat-input" />
-        <el-button type="primary" icon="el-icon-s-promotion" @click="sendMsg">发送</el-button>
+        <el-button data-testid="send-message" type="primary" icon="el-icon-s-promotion" @click="sendMsg">发送</el-button>
       </div>
     </section>
   </div>
@@ -249,27 +249,28 @@ export default {
 </script>
 
 <style scoped>
-.agent-detail-root {
-  margin-top: 40px;
+.detail-workbench {
+  --workbench-rule: color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  margin-top: 24px;
   display: flex;
-  height: 640px;
-  background: linear-gradient(120deg, #f5faff 0%, #eaf6ff 100%);
-  border-radius: 18px;
-  box-shadow: 0 4px 24px rgba(64,158,255,0.10);
+  min-height: 640px;
+  border: 1px solid var(--workbench-rule);
+  border-radius: 12px;
+  background: var(--sea-paper);
+  box-shadow: 0 12px 32px rgb(17 36 59 / 10%);
   overflow: hidden;
   width: 100%;
 }
-.agent-settings {
+.settings-pane {
   flex: 0 0 40%;
-  background: #fff;
-  padding: 20px 36px 36px 36px;
-  border-right: 1.5px solid #e0e6ed;
+  background: var(--sea-paper);
+  padding: 28px 30px 32px;
+  border-right: 1px solid var(--workbench-rule);
   min-width: 340px;
-  box-shadow: 2px 0 8px rgba(64,158,255,0.04);
   overflow-y: auto;
 }
 .agent-form .el-form-item {
-  margin-bottom: 22px;
+  margin-bottom: 20px;
 }
 .knowledge-header-row {
   display: flex;
@@ -277,27 +278,27 @@ export default {
   justify-content: space-between;
   margin-bottom: 10px;
   font-weight: 600;
-  font-size: 16px;
+  color: var(--sea-deep);
+  font-size: 15px;
 }
 .knowledge-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
-  margin-bottom: 28px;
+  gap: 10px;
+  margin-bottom: 24px;
 }
 .kb-card {
   display: flex;
   align-items: center;
   padding: 6px 12px;
-  border-radius: 10px;
-  background: #f0f7ff;
+  border: 1px solid color-mix(in srgb, var(--sea-signal) 20%, var(--sea-paper));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sea-signal) 6%, var(--sea-paper));
   min-width: 90px;
   max-width: 140px;
-  box-shadow: 0 1px 4px rgba(64,158,255,0.08);
-  transition: box-shadow 0.2s;
 }
 .kb-card:hover {
-  box-shadow: 0 6px 18px rgba(64,158,255,0.18);
+  border-color: var(--sea-signal);
 }
 .kb-card-content {
   display: flex;
@@ -312,24 +313,17 @@ export default {
 .kb-name {
   flex: unset;
   font-size: 12px;
-  color: #409eff;
+  color: var(--sea-ink);
   font-weight: 500;
   margin-right: 4px;
   text-align: center;
 }
-.kb-card .el-button {
-  transition: background 0.2s;
-  flex-shrink: 0;
-}
-.kb-card .el-button:hover {
-  background: #ffeded;
-  color: #f56c6c;
-}
-.agent-chat {
+.kb-card .el-button { flex-shrink: 0; }
+.preview-pane {
   flex: 0 0 60%;
   display: flex;
   flex-direction: column;
-  background: #fafdff;
+  background: var(--sea-deep);
   padding: 0;
   min-width: 400px;
 }
@@ -337,50 +331,26 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 50px 18px 36px;
-  border-bottom: 1.5px solid #e0e6ed;
-  background: #fafdff;
-  gap: 18px;
+  padding: 18px 26px 18px 28px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 22%, transparent);
+  background: color-mix(in srgb, var(--sea-deep) 88%, black);
+  gap: 16px;
 }
 .save-agent-btn {
   font-weight: 600;
-  font-size: 15px;
-  border-radius: 20px;
-  background: linear-gradient(90deg, #67c23a 0%, #409eff 100%);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(64,158,255,0.10);
-  border: none;
-  padding: 0 16px;
-  height: 32px;
-  transition: background 0.2s, color 0.2s;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  text-align: center !important;
-  width: auto;
-  margin-right: 30px;
-  margin-top: 5px;
-}
-.save-agent-btn .el-button__text, 
-.save-agent-btn span {
-  width: 100%;
-  text-align: center !important;
-  flex: 1;
-  display: block;
-}
-.save-agent-btn:hover {
-  background: linear-gradient(90deg, #409eff 0%, #67c23a 100%);
-  color: #fff;
-  opacity: 0.92;
+  border: 0;
+  color: var(--sea-deep);
+  background: var(--sea-sand);
+  box-shadow: none;
 }
 .chat-history {
   flex: 1;
   overflow-y: auto;
-  padding: 28px 36px 18px 36px;
-  background: #fafdff;
+  padding: 28px;
+  background: var(--sea-deep);
 }
 .chat-msg {
-  margin-bottom: 22px;
+  margin-bottom: 18px;
   display: flex;
   align-items: flex-start;
 }
@@ -394,26 +364,24 @@ export default {
   border-radius: 50%;
   object-fit: cover;
   margin-right: 14px;
-  background: #eaf6ff;
-  box-shadow: 0 2px 8px rgba(64,158,255,0.10);
+  background: var(--sea-mist);
 }
 .msg-bubble {
-  background: linear-gradient(120deg, #f5faff 0%, #eaf6ff 100%);
-  border-radius: 16px;
-  padding: 14px 20px;
+  background: #254662;
+  border-radius: 4px 14px 14px;
+  padding: 13px 16px;
   width: 100%;
   max-width: 80%;
   font-size: 16px;
-  color: #333;
+  color: var(--sea-paper);
   word-break: break-all;
-  box-shadow: 0 2px 8px rgba(64,158,255,0.06);
-  transition: background 0.2s;
   box-sizing: border-box;
 }
 .msg-bubble.user {
-  background: linear-gradient(120deg, #409eff 0%, #67c23a 100%);
-  color: #fff;
-  margin-right: 50px;
+  background: var(--sea-signal);
+  border-radius: 14px 4px 14px 14px;
+  color: var(--sea-deep);
+  margin-right: 0;
 }
 .user {
   flex-direction: row-reverse;
@@ -421,13 +389,13 @@ export default {
 .prologue-greeting {
   margin-bottom: 18px;
   font-size: 16px;
-  color: #333;
+  color: var(--sea-paper);
   font-weight: 500;
 }
 .prologue-questions {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   margin-bottom: 6px;
   width: 100%;
   max-width: 100%;
@@ -436,15 +404,14 @@ export default {
   word-break: break-word;
 }
 .question-chip {
-  background: #f4f8ff;
-  color: #409eff;
-  border-radius: 12px;
-  padding: 14px 18px;
-  font-size: 16px;
+  border: 1px solid color-mix(in srgb, var(--sea-signal) 55%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--sea-paper) 82%, var(--sea-signal));
+  border-radius: 7px;
+  padding: 11px 14px;
+  font: inherit;
+  font-size: 14px;
   cursor: pointer;
-  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
-  border: 1px solid #e3eaf5;
-  box-shadow: 0 1px 4px rgba(64,158,255,0.06);
   text-align: left;
   font-weight: 500;
   width: 100%;
@@ -456,10 +423,10 @@ export default {
   margin-left: 0;
   word-break: break-word;
 }
-.question-chip:hover {
-  background: #409eff;
-  color: #fff;
-  box-shadow: 0 4px 16px rgba(64,158,255,0.13);
+.question-chip:hover,
+.question-chip:focus-visible {
+  background: color-mix(in srgb, var(--sea-signal) 24%, transparent);
+  color: var(--sea-paper);
 }
 .question-chip-text {
   flex: 1;
@@ -468,24 +435,36 @@ export default {
 .chat-input-row {
   display: flex;
   align-items: center;
-  padding: 18px 36px 28px 36px;
-  border-top: 1.5px solid #e0e6ed;
-  background: #fafdff;
+  padding: 18px 28px 24px;
+  border-top: 1px solid color-mix(in srgb, var(--sea-mist) 22%, transparent);
+  background: color-mix(in srgb, var(--sea-deep) 88%, black);
 }
 .chat-input {
   flex: 1;
   margin-right: 8px;
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(64,158,255,0.06);
+  box-shadow: none;
   max-width: 700px;
 }
-.el-button {
-  border-radius: 8px;
-  font-weight: 500;
-}
 .chat-header {
-  font-size: 18px;
+  color: var(--sea-paper);
+  font-size: 16px;
   font-weight: 700;
-  color: #409eff;
+}
+
+@media (max-width: 720px) {
+  .detail-workbench {
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .settings-pane,
+  .preview-pane {
+    flex-basis: auto;
+    min-width: 0;
+  }
+
+  .settings-pane { border-right: 0; border-bottom: 1px solid var(--workbench-rule); }
+  .preview-pane { min-height: 50vh; }
+  .chat-history { min-height: 50vh; }
 }
 </style>

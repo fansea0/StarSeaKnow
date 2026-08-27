@@ -1,5 +1,5 @@
 <template>
-  <div class="md-converter">
+  <div class="md-converter tool-panel">
     <div class="converter-header">
       <h3>MD文件生成</h3>
       <el-input
@@ -18,7 +18,7 @@
       />
     </div>
     <div class="converter-footer">
-      <el-button type="primary" @click="convertToMd">生成为md</el-button>
+      <el-button data-testid="convert-markdown" type="primary" @click="convertToMd">生成为md</el-button>
     </div>
   </div>
 </template>
@@ -74,10 +74,10 @@ export default {
 
 <style scoped>
 .md-converter {
-  height: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
 
 .converter-header {
@@ -88,9 +88,10 @@ export default {
 
 .converter-header h3 {
   margin: 0;
-  font-size: 18px;
-  color: #333;
-  font-weight: 500;
+  color: var(--sea-deep);
+  font-family: 'Noto Serif SC', serif;
+  font-size: 20px;
+  font-weight: 700;
 }
 
 .title-input {
@@ -100,10 +101,11 @@ export default {
 
 .converter-content {
   flex: 1;
-  min-height: 0;
-  background: #fafafa;
-  border-radius: 4px;
-  padding: 16px;
+  min-height: 460px;
+  border: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sea-mist) 38%, var(--sea-paper));
+  padding: 12px;
 }
 
 .md-editor {
@@ -115,12 +117,17 @@ export default {
   height: 100%;
   font-family: 'Courier New', Courier, monospace;
   resize: none;
-  background: #fff;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
+  background: var(--sea-paper);
+  border: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  border-radius: 6px;
 }
 
 .converter-footer {
-  padding: 16px 0;
+  padding: 4px 0 0;
+}
+
+@media (max-width: 720px) {
+  .md-converter { min-height: 50vh; }
+  .converter-content { min-height: 50vh; }
 }
 </style>

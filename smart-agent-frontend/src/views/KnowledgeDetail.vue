@@ -1,12 +1,12 @@
 <template>
-  <div class="kb-detail-root">
-    <aside class="sidebar">
+  <div class="detail-workbench knowledge-workbench">
+    <aside class="settings-pane secondary-nav">
       <el-menu :default-active="activeTab" @select="activeTab = $event" class="side-menu">
         <el-menu-item index="docs">文档</el-menu-item>
         <el-menu-item index="settings">设置</el-menu-item>
       </el-menu>
     </aside>
-    <main class="main-content">
+    <main class="content-pane">
       <div v-if="activeTab === 'docs'">
         <div class="docs-header-row">
           <h3>文档列表</h3>
@@ -16,14 +16,15 @@
             :show-file-list="false"
             :before-upload="beforeUpload"
             :data="{ knowledgeId }"
-            :headers="{ }"
+            :headers="uploadHeaders"
             :on-success="onUploadSuccess"
             :on-error="onUploadError"
           >
-            <el-button type="primary" icon="el-icon-upload">上传文档</el-button>
+            <el-button data-testid="upload-document" type="primary" icon="el-icon-upload">上传文档</el-button>
           </el-upload>
         </div>
-        <el-table :data="docList" border style="width: 100%; margin-top: 16px;">
+        <div class="document-table-wrap">
+          <el-table :data="docList" border style="width: 100%; margin-top: 16px;">
           <el-table-column prop="fileName" label="文件名称" min-width="180" />
           <el-table-column label="文件大小" min-width="100">
             <template #default="scope">
@@ -55,7 +56,8 @@
               <el-button size="small" type="danger" @click="deleteFile(scope.row)" :loading="deleteLoadingId===scope.row.id">删除文件</el-button>
             </template>
           </el-table-column>
-        </el-table>
+          </el-table>
+        </div>
       </div>
       <div v-else-if="activeTab === 'settings'">
         <h3>知识库设置</h3>
@@ -67,7 +69,7 @@
             <el-input v-model="kbInfo.desc" type="textarea" rows="3" />
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" @click="saveKnowledge" :loading="saveLoading">保存</el-button>
+            <el-button data-testid="save-knowledge" type="primary" @click="saveKnowledge" :loading="saveLoading">保存</el-button>
           </el-form-item>
         </el-form>
       </div>
@@ -78,6 +80,7 @@
 <script>
 import axios from 'axios'
 import { apiUrl } from '../api/http'
+import { useAuthStore } from '../stores/auth'
 import { Check, Close, Minus } from '@element-plus/icons-vue'
 export default {
   name: 'KnowledgeDetail',
@@ -112,6 +115,12 @@ export default {
         this.fetchDocList()
       }
     }
+  },
+  computed: {
+    uploadHeaders() {
+      const accessToken = useAuthStore().accessToken
+      return accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+    },
   },
   methods: {
     setKnowledgeId() {
@@ -227,36 +236,87 @@ export default {
 </script>
 
 <style scoped>
-.kb-detail-root {
+.detail-workbench {
   display: flex;
   min-height: 600px;
-  background: #fff;
-  border-radius: 18px;
-  box-shadow: 0 2px 12px rgba(64,158,255,0.08);
+  border: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  border-radius: 12px;
+  background: var(--sea-paper);
+  box-shadow: 0 12px 32px rgb(17 36 59 / 8%);
   overflow: hidden;
 }
-.sidebar {
-  width: 180px;
-  background: #f7faff;
-  border-right: 1px solid #f0f0f0;
-  padding-top: 32px;
+.settings-pane {
+  width: 196px;
+  flex: 0 0 196px;
+  background: color-mix(in srgb, var(--sea-mist) 52%, var(--sea-paper));
+  border-right: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  padding: 20px 12px;
 }
 .side-menu {
   border: none;
   background: transparent;
 }
-.main-content {
+.side-menu :deep(.el-menu-item) {
+  min-width: 156px;
+  margin: 4px 0;
+  border-radius: 7px;
+  color: var(--sea-muted);
+  font-weight: 600;
+}
+.side-menu :deep(.el-menu-item.is-active) {
+  background: color-mix(in srgb, var(--sea-signal) 12%, var(--sea-paper));
+  color: var(--sea-ink);
+}
+.content-pane {
   flex: 1;
-  padding: 40px 48px 32px 48px;
-  background: #fff;
+  min-width: 0;
+  padding: 32px 36px;
+  background: var(--sea-paper);
 }
 .docs-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.docs-header-row h3,
+.content-pane h3 {
+  margin: 0;
+  color: var(--sea-deep);
+  font-family: 'Noto Serif SC', serif;
 }
 .upload-btn {
-  margin-left: 16px;
+  flex: 0 0 auto;
+}
+.document-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+@media (max-width: 720px) {
+  .detail-workbench {
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .settings-pane {
+    width: 100%;
+    flex-basis: auto;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+    padding: 10px 12px;
+  }
+
+  .side-menu {
+    display: flex;
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .side-menu :deep(.el-menu-item) { min-width: 112px; }
+  .content-pane { min-height: 50vh; padding: 24px 18px; }
+  .docs-header-row { align-items: flex-start; flex-direction: column; }
 }
 </style>
