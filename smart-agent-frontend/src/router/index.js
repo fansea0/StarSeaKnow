@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { h } from 'vue'
 import { installGuards } from './guards'
 import Agent from '../views/Agent.vue'
 import Knowledge from '../views/Knowledge.vue'
@@ -9,10 +8,8 @@ import Login from '../views/Login.vue'
 import AcceptInvite from '../views/AcceptInvite.vue'
 import Forbidden from '../views/Forbidden.vue'
 import TenantMembers from '../views/TenantMembers.vue'
-
-const SystemRoutePlaceholder = {
-  render: () => h('div')
-}
+import Overview from '../views/system/Overview.vue'
+import Tenants from '../views/system/Tenants.vue'
 
 const routes = [
   {
@@ -38,13 +35,13 @@ const routes = [
       {
         path: 'overview',
         name: 'SystemOverview',
-        component: SystemRoutePlaceholder,
+        component: Overview,
         meta: { requiresPlatformAdmin: true }
       },
       {
         path: 'tenants',
         name: 'SystemTenants',
-        component: SystemRoutePlaceholder,
+        component: Tenants,
         meta: { requiresPlatformAdmin: true }
       }
     ]
