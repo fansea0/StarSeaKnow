@@ -10,8 +10,10 @@ import Forbidden from '../views/Forbidden.vue'
 import TenantMembers from '../views/TenantMembers.vue'
 import Overview from '../views/system/Overview.vue'
 import Tenants from '../views/system/Tenants.vue'
+import Invitations from '../views/system/Invitations.vue'
 import Register from '../views/Register.vue'
 import ChangeInitialPassword from '../views/ChangeInitialPassword.vue'
+import TenantProfile from '../views/TenantProfile.vue'
 
 const routes = [
   {
@@ -45,6 +47,12 @@ const routes = [
         name: 'SystemTenants',
         component: Tenants,
         meta: { requiresPlatformAdmin: true }
+      },
+      {
+        path: 'invitations',
+        name: 'SystemInvitations',
+        component: Invitations,
+        meta: { requiresPlatformAdmin: true }
       }
     ]
   },
@@ -76,7 +84,8 @@ const routes = [
   { path: '/change-initial-password', name: 'ChangeInitialPassword', component: ChangeInitialPassword, meta: { requiresPlatformAdmin: true } },
   { path: '/accept-invite/:code', name: 'AcceptInvite', component: AcceptInvite, meta: { public: true } },
   { path: '/403', name: 'Forbidden', component: Forbidden, meta: { public: true } },
-  { path: '/tenant/members', name: 'TenantMembers', component: TenantMembers, meta: { requiresAdmin: true } }
+  { path: '/tenant/members', name: 'TenantMembers', component: TenantMembers, meta: { requiresAdmin: true } },
+  { path: '/tenant/profile', name: 'TenantProfile', component: TenantProfile, meta: { requiresAdmin: true } }
 ]
 
 const router = createRouter({

@@ -12,6 +12,7 @@
           <el-menu-item index="/tools">工具</el-menu-item>
         </template>
         <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/members">成员</el-menu-item>
+        <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/profile">租户设置</el-menu-item>
         <el-menu-item v-if="auth.user?.role === 'platform_admin'" index="/system">系统管理</el-menu-item>
       </el-menu>
       <div v-if="auth.user" class="user-area">
@@ -51,13 +52,14 @@ onMounted(() => {
 <style>
 .app-root {
   min-height: 100vh;
+  width: 100%;
   background: #f5f6fa;
 }
 .main-header {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100vw;
+  width: 100%;
   z-index: 100;
   background: #fff;
   box-shadow: 0 2px 8px rgba(0,0,0,0.06);
@@ -119,12 +121,13 @@ onMounted(() => {
   color: #666;
 }
 .main-content {
-  padding-top: 24px;
+  padding-top: 64px;
   min-height: calc(100vh - 64px);
   background: #f5f6fa;
   width: 100vw;
   box-sizing: border-box;
 }
+#app { display: block; min-height: 100vh; width: 100%; }
 .content-wrapper {
   width: 100%;
   max-width: none;

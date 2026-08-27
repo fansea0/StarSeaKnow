@@ -4,14 +4,15 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Tenants from './Tenants.vue'
 
-const { get, post, confirm } = vi.hoisted(() => ({
+const { get, post, patch, confirm } = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  patch: vi.fn(),
   confirm: vi.fn(),
 }))
 
 vi.mock('../../api/http', () => ({
-  http: { get, post },
+  http: { get, post, patch },
 }))
 
 vi.mock('element-plus', () => ({
@@ -41,6 +42,7 @@ describe('platform tenant workspace', () => {
   beforeEach(() => {
     get.mockReset()
     post.mockReset()
+    patch.mockReset()
     confirm.mockReset()
     get.mockResolvedValue({ data: { data: { items: [], page: 1, pageSize: 20, total: 0 } } })
   })
@@ -58,17 +60,16 @@ describe('platform tenant workspace', () => {
     expect(wrapper.vm.page).toBe(2)
   })
 
-  it('displays inviteCode after a successful create request', async () => {
+  it('saves only the internal platform remark', async () => {
     const wrapper = mountTenants()
     await flushPromises()
-    wrapper.vm.createForm.code = 'acme'
-    wrapper.vm.createForm.name = 'Acme'
-    post.mockResolvedValueOnce({ data: { data: { inviteCode: 'invite-123', inviteExpiresAt: '2026-09-03T00:00:00Z' } } })
+    wrapper.vm.remarkForm.remark = '需要在九月回访'
+    patch.mockResolvedValueOnce({ data: { data: null } })
 
-    await wrapper.vm.createTenant()
+    await wrapper.vm.saveRemark({ id: 10, name: 'Acme' })
 
-    expect(post).toHaveBeenCalledWith('/platform/tenants', { code: 'acme', name: 'Acme' })
-    expect(wrapper.text()).toContain('invite-123')
+    expect(patch).toHaveBeenCalledWith('/platform/tenants/10/remark', { remark: '需要在九月回访' })
+    expect(post).not.toHaveBeenCalledWith('/platform/tenants', expect.anything())
   })
 
   it('does not disable before confirmation', async () => {
