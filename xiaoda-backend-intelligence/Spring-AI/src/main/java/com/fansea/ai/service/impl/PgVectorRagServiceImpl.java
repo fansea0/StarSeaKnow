@@ -1,9 +1,9 @@
 package com.fansea.ai.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fangsa.ai.auth.AuthContext;
-import com.fangsa.ai.auth.AuthErrorCode;
-import com.fangsa.ai.auth.AuthException;
+import com.fansea.ai.auth.AuthContext;
+import com.fansea.ai.auth.AuthErrorCode;
+import com.fansea.ai.auth.AuthException;
 import com.fansea.ai.domain.File;
 import com.fansea.ai.domain.KnowledgeFile;
 import com.fansea.ai.service.FileService;

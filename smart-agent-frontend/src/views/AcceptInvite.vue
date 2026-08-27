@@ -10,6 +10,7 @@
         <el-input v-model="form.password" type="password" show-password />
       </el-form-item>
       <el-button type="primary" native-type="submit" :loading="loading" style="width:100%">接受并登录</el-button>
+    </el-form>
     </el-card>
 </template>
 <script setup>

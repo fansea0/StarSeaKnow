@@ -31,6 +31,14 @@ export const useAuthStore = defineStore('auth', {
       this.user = r.data.data.user
       this.ready = true
     },
+    async loginPlatform(username, password) {
+      const r = await http.post('/platform/auth/login', { username, password })
+      this.accessToken = r.data.data.accessToken
+      this.expiresAt = r.data.data.expiresAt
+      this.user = { username, role: 'platform_admin' }
+      this.tenant = null
+      this.ready = true
+    },
     async logout() {
       try { await http.post('/auth/logout') } catch (e) {}
       this.clear()

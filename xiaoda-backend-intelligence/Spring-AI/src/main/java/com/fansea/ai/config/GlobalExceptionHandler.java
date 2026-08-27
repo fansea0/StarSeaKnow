@@ -1,6 +1,6 @@
 package com.fansea.ai.config;
 
-import com.fangsa.ai.auth.AuthException;
+import com.fansea.ai.auth.AuthException;
 import com.fansea.ai.domain.dto.AjaxResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -89,4 +89,3 @@ public class GlobalExceptionHandler
     }
 
 }
-

@@ -2,7 +2,13 @@
   <el-card style="max-width:380px;margin:80px auto">
     <h2>登录</h2>
     <el-form :model="form" label-width="80px" @submit.prevent="onSubmit">
-      <el-form-item label="租户 code">
+      <el-form-item label="登录类型">
+        <el-radio-group v-model="loginType">
+          <el-radio value="tenant">租户用户</el-radio>
+          <el-radio value="platform">平台管理员</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item v-if="loginType === 'tenant'" label="租户 code">
         <el-input v-model="form.tenantCode" placeholder="如 acme" />
       </el-form-item>
       <el-form-item label="用户名">
@@ -26,13 +32,19 @@ const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const form = reactive({ tenantCode: '', username: '', password: '' })
+const loginType = ref('tenant')
 const loading = ref(false)
 
 async function onSubmit() {
   loading.value = true
   try {
-    await auth.login(form.tenantCode, form.username, form.password)
-    router.push(route.query.redirect || '/knowledge')
+    if (loginType.value === 'platform') {
+      await auth.loginPlatform(form.username, form.password)
+      router.push('/system')
+    } else {
+      await auth.login(form.tenantCode, form.username, form.password)
+      router.push(route.query.redirect || '/knowledge')
+    }
   } catch (e) {
     ElMessage.error(e.response?.data?.msg || '登录失败')
   } finally { loading.value = false }

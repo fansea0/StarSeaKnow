@@ -1,13 +1,13 @@
-package com.fanseA.ai.controller;
+package com.fansea.ai.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fangsa.ai.auth.RequireLogin;
-import com.fanseA.ai.domain.Agent;
-import com.fanseA.ai.domain.AgentKnowledge;
-import com.fanseA.ai.history.RepositoryHistory;
-import com.fanseA.ai.service.AgentKnowledgeService;
-import com.fanseA.ai.service.AgentService;
-import com.fanseA.ai.service.RagService;
+import com.fansea.ai.auth.RequireLogin;
+import com.fansea.ai.domain.Agent;
+import com.fansea.ai.domain.AgentKnowledge;
+import com.fansea.ai.history.RepositoryHistory;
+import com.fansea.ai.service.AgentKnowledgeService;
+import com.fansea.ai.service.AgentService;
+import com.fansea.ai.service.RagService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.document.Document;
