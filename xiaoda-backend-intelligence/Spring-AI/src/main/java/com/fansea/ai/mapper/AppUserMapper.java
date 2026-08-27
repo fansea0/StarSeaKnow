@@ -12,6 +12,11 @@ public interface AppUserMapper extends BaseMapper<AppUser> {
 
     @InterceptorIgnore(tenantLine = "true")
     @Select("SELECT id, tenant_id, username, password_hash, display_name, role, status, last_login_at, create_time, update_time " +
+            "FROM app_user WHERE username = #{username}")
+    AppUser selectByUsername(@Param("username") String username);
+
+    @InterceptorIgnore(tenantLine = "true")
+    @Select("SELECT id, tenant_id, username, password_hash, display_name, role, status, last_login_at, create_time, update_time " +
             "FROM app_user WHERE id = #{id}")
     AppUser selectByIdForRefresh(@Param("id") long id);
 }

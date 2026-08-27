@@ -14,5 +14,6 @@ public class PlatformAdmin {
     private Long id;
     private String username;
     private String passwordHash;
+    private Boolean mustChangePassword;
     private OffsetDateTime createTime;
 }
