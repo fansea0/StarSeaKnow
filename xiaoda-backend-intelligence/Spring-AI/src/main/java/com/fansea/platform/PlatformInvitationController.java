@@ -63,11 +63,13 @@ public class PlatformInvitationController {
     @RequireRole("platform_admin")
     public AjaxResult list(@RequestParam(defaultValue = "1") long page,
                            @RequestParam(defaultValue = "20") long pageSize,
-                           @RequestParam(required = false) String status) {
+                           @RequestParam(required = false) String status,
+                           @RequestParam(required = false) String expiry) {
         QueryWrapper<PlatformInvitation> query = new QueryWrapper<>();
         if (status != null && !status.isBlank()) {
             query.eq("status", status);
         }
+        applyExpiryFilter(query, expiry);
         query.orderByDesc("create_time");
         Page<PlatformInvitation> result = invitations.selectPage(new Page<>(page, pageSize), query);
         Map<String, Object> data = new LinkedHashMap<>();
@@ -76,6 +78,22 @@ public class PlatformInvitationController {
         data.put("pageSize", pageSize);
         data.put("total", result.getTotal());
         return AjaxResult.success(data);
+    }
+
+    private static void applyExpiryFilter(QueryWrapper<PlatformInvitation> query, String expiry) {
+        if (expiry == null || expiry.isBlank()) {
+            return;
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        switch (expiry) {
+            case "VALID" -> query.ge("valid_until", now);
+            case "EXPIRED" -> query.lt("valid_until", now);
+            case "EXPIRING_SOON" -> query.eq("status", "ACTIVE")
+                    .le("valid_from", now)
+                    .gt("valid_until", now)
+                    .le("valid_until", now.plusHours(24));
+            default -> throw new AuthException(AuthErrorCode.REGISTRATION_INVALID, "unknown invitation expiry filter");
+        }
     }
 
     @PostMapping("/{id}/disable")

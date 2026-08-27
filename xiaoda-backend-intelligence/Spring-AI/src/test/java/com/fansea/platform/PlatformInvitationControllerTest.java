@@ -1,5 +1,6 @@
 package com.fansea.platform;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fansea.ai.auth.AuthAspect;
 import com.fansea.ai.auth.AuthController;
 import com.fansea.ai.auth.AuthContext;
@@ -30,6 +31,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
+import org.mockito.ArgumentCaptor;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -37,7 +39,9 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
@@ -140,6 +144,25 @@ class PlatformInvitationControllerTest {
         mockMvc.perform(get("/platform/invitations"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(40301));
+    }
+
+    @Test
+    void invitationListFiltersExpiringSoonBeforeApplyingPagination() throws Exception {
+        when(invitations.selectPage(any(), any())).thenAnswer(invocation -> {
+            com.baomidou.mybatisplus.extension.plugins.pagination.Page<PlatformInvitation> page = invocation.getArgument(0);
+            page.setRecords(List.of());
+            page.setTotal(0L);
+            return page;
+        });
+
+        mockMvc.perform(get("/platform/invitations?expiry=EXPIRING_SOON&page=2&pageSize=10"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<QueryWrapper<PlatformInvitation>> query = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(invitations).selectPage(any(), query.capture());
+        assertThat(query.getValue().getExpression().getNormal().getSqlSegment())
+                .contains("valid_until")
+                .contains("status");
     }
 
     @Test

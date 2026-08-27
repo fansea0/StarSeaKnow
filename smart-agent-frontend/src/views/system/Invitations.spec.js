@@ -49,4 +49,16 @@ describe('platform invitation workspace', () => {
     await wrapper.vm.disableInvitation({ id: 8, code: 'YQ-7A5K' })
     expect(post).not.toHaveBeenCalled()
   })
+
+  it('sends the expiry filter to the paginated invitation endpoint and labels the 24-hour threshold', async () => {
+    const wrapper = mountInvitations()
+    await flushPromises()
+    get.mockClear()
+    wrapper.vm.filters.expiry = 'EXPIRING_SOON'
+
+    await wrapper.vm.applyFilters()
+
+    expect(get).toHaveBeenCalledWith('/platform/invitations', { params: { page: 1, pageSize: 20, status: undefined, expiry: 'EXPIRING_SOON' } })
+    expect(wrapper.text()).toContain('24小时内到期')
+  })
 })
