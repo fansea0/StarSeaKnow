@@ -1,3 +1,14 @@
+-- Deliberately fail before changing any schema or login name if legacy tenant
+-- accounts use the same username. Resolve those records explicitly first.
+SELECT COALESCE((
+    SELECT ('Cannot migrate app_user to globally unique usernames; resolve duplicate username records first: ' || username)::INTEGER
+    FROM app_user
+    GROUP BY username
+    HAVING COUNT(*) > 1
+    ORDER BY username
+    LIMIT 1
+), 1);
+
 ALTER TABLE platform_admin
     ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT TRUE;
 
@@ -6,20 +17,6 @@ ALTER TABLE tenant
 
 ALTER TABLE app_user
     DROP CONSTRAINT IF EXISTS app_user_tenant_id_username_key;
-
--- Tenant-scoped usernames were allowed before this migration. Retain the first
--- occurrence and make legacy duplicates globally addressable before enforcing
--- the new login identifier constraint.
-WITH duplicate_usernames AS (
-    SELECT id,
-           ROW_NUMBER() OVER (PARTITION BY username ORDER BY id) AS occurrence
-    FROM app_user
-)
-UPDATE app_user
-SET username = LEFT(username, 48) || '-' || app_user.id
-FROM duplicate_usernames
-WHERE app_user.id = duplicate_usernames.id
-  AND duplicate_usernames.occurrence > 1;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_app_user_username ON app_user(username);
 
