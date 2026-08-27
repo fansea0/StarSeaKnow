@@ -63,6 +63,8 @@ public class GlobalExceptionHandler
             http = 409;
         } else if (code == 41001) {
             http = 410;
+        } else if (code == 40401) {
+            http = 404;
         } else {
             http = 400;
         }

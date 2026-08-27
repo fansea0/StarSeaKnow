@@ -69,6 +69,7 @@ class AuthIntegrationTest {
                 Map.of("Authorization", "Bearer " + suAccess), null);
         long tenantId = create.body.get("data").get("tenantId").asLong();
         String inviteCode = create.body.get("data").get("inviteCode").asText();
+        assertNotEquals("", create.body.get("data").get("inviteExpiresAt").asText());
 
         // 3. accept invite (POST /auth/accept-invite -> {accessToken, expiresAt, user})
         Resp accept = http("/auth/accept-invite",

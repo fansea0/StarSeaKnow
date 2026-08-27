@@ -8,7 +8,8 @@ public enum AuthErrorCode {
     FORBIDDEN_ROLE(40301),
     CROSS_TENANT(40302),
     INVITE_INVALID(41001),
-    USERNAME_CONFLICT(40901);
+    USERNAME_CONFLICT(40901),
+    TENANT_NOT_FOUND(40401);
 
     private final int code;
     AuthErrorCode(int code) { this.code = code; }
