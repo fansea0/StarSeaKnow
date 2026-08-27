@@ -16,7 +16,7 @@
             :show-file-list="false"
             :before-upload="beforeUpload"
             :data="{ knowledgeId }"
-            :headers="uploadHeaders"
+            :headers="{ }"
             :on-success="onUploadSuccess"
             :on-error="onUploadError"
           >
@@ -80,7 +80,6 @@
 <script>
 import axios from 'axios'
 import { apiUrl } from '../api/http'
-import { useAuthStore } from '../stores/auth'
 import { Check, Close, Minus } from '@element-plus/icons-vue'
 export default {
   name: 'KnowledgeDetail',
@@ -115,12 +114,6 @@ export default {
         this.fetchDocList()
       }
     }
-  },
-  computed: {
-    uploadHeaders() {
-      const accessToken = useAuthStore().accessToken
-      return accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-    },
   },
   methods: {
     setKnowledgeId() {

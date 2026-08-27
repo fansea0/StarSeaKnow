@@ -257,7 +257,7 @@ export default {
   border: 1px solid var(--workbench-rule);
   border-radius: 12px;
   background: var(--sea-paper);
-  box-shadow: 0 12px 32px rgb(17 36 59 / 10%);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--sea-deep) 10%, transparent);
   overflow: hidden;
   width: 100%;
 }
@@ -333,7 +333,7 @@ export default {
   justify-content: space-between;
   padding: 18px 26px 18px 28px;
   border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 22%, transparent);
-  background: color-mix(in srgb, var(--sea-deep) 88%, black);
+  background: color-mix(in srgb, var(--sea-deep) 88%, var(--sea-ink));
   gap: 16px;
 }
 .save-agent-btn {
@@ -367,7 +367,7 @@ export default {
   background: var(--sea-mist);
 }
 .msg-bubble {
-  background: #254662;
+  background: color-mix(in srgb, var(--sea-deep) 78%, var(--sea-signal));
   border-radius: 4px 14px 14px;
   padding: 13px 16px;
   width: 100%;
@@ -437,7 +437,7 @@ export default {
   align-items: center;
   padding: 18px 28px 24px;
   border-top: 1px solid color-mix(in srgb, var(--sea-mist) 22%, transparent);
-  background: color-mix(in srgb, var(--sea-deep) 88%, black);
+  background: color-mix(in srgb, var(--sea-deep) 88%, var(--sea-ink));
 }
 .chat-input {
   flex: 1;

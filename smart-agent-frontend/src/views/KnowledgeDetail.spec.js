@@ -36,7 +36,7 @@ describe('knowledge document upload', () => {
     get.mockResolvedValue({ data: { code: 200, data: {} } })
   })
 
-  it('sends the active access token with the upload request', () => {
+  it('keeps the upload headers empty when a tenant token is available', () => {
     useAuthStore().accessToken = 'tenant-access-token'
     const wrapper = mount(KnowledgeDetail, {
       global: {
@@ -46,8 +46,6 @@ describe('knowledge document upload', () => {
       },
     })
 
-    expect(wrapper.getComponent({ name: 'ElUpload' }).props('headers')).toEqual({
-      Authorization: 'Bearer tenant-access-token',
-    })
+    expect(wrapper.getComponent({ name: 'ElUpload' }).props('headers')).toEqual({})
   })
 })
