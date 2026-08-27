@@ -1,38 +1,43 @@
 <template>
-  <main class="entity-page">
-    <header class="entity-page__header">
+  <main class="knowledge-page">
+    <header class="knowledge-page__header">
       <div>
-        <span class="entity-page__eyebrow">知识管理</span>
+        <span class="knowledge-page__eyebrow">整理资料</span>
         <h1>知识库</h1>
-        <p>沉淀资料，让智能体更可靠地回答问题。</p>
+        <p>将团队文件整理为可检索的资料索引，持续为智能体提供依据。</p>
       </div>
       <el-button data-testid="create-knowledge" type="primary" @click="showCreate = true">创建知识库</el-button>
     </header>
 
-    <section v-if="knowledgeList.length" class="entity-grid" aria-label="知识库列表">
-      <el-card
+    <section v-if="knowledgeList.length" class="knowledge-shelf" aria-label="知识库列表">
+      <article
         v-for="kb in knowledgeList"
         :key="kb.id"
-        class="entity-card"
-        shadow="hover"
+        class="knowledge-row"
+        role="link"
+        tabindex="0"
+        :aria-label="`打开知识库 ${kb.name}`"
         @click="goToDetail(kb.id)"
+        @keyup.enter="goToDetail(kb.id)"
       >
-        <div class="entity-card__content">
-          <span class="entity-card__kind">知识库</span>
-          <h2 class="entity-card__title">{{ kb.name }}</h2>
-          <p class="entity-card__description">{{ kb.desc || '暂未添加描述' }}</p>
+        <span class="knowledge-row__marker" aria-hidden="true">文</span>
+        <div class="knowledge-row__content">
+          <span class="knowledge-row__kind">资料索引</span>
+          <h2 class="knowledge-row__title">{{ kb.name }}</h2>
+          <p class="knowledge-row__description">{{ kb.desc || '暂未添加描述' }}</p>
         </div>
-        <div class="entity-card__footer">
-          <dl class="entity-card__stats" aria-label="知识库统计">
+        <dl class="knowledge-row__stats" aria-label="知识库统计">
             <div><dt>文档</dt><dd>{{ kb.docCount || 0 }}</dd></div>
             <div><dt>智能体</dt><dd>{{ kb.agentCount || 0 }}</dd></div>
-          </dl>
-          <el-button :aria-label="`删除知识库 ${kb.name}`" class="entity-card__delete" type="danger" circle @click.stop="handleDelete(kb.id)"><el-icon class="entity-card__delete-icon"><Delete /></el-icon></el-button>
+        </dl>
+        <div class="knowledge-row__actions">
+          <span class="knowledge-row__open">打开资料</span>
+          <el-button :aria-label="`删除知识库 ${kb.name}`" class="knowledge-row__delete" type="danger" circle @click.stop="handleDelete(kb.id)"><el-icon class="knowledge-row__delete-icon"><Delete /></el-icon></el-button>
         </div>
-      </el-card>
+      </article>
     </section>
 
-    <section v-else class="empty-state entity-page__empty" aria-live="polite">
+    <section v-else class="empty-state knowledge-page__empty" aria-live="polite">
       <h2>还没有知识库</h2>
       <p>从第一个知识库开始，集中管理智能体需要的资料。</p>
       <el-button type="primary" @click="showCreate = true">创建知识库</el-button>
@@ -158,160 +163,42 @@ export default {
 </script>
 
 <style scoped>
-.entity-page {
-  width: 100%;
-  padding: 12px 0 12px;
-}
+.knowledge-page { width: 100%; padding: 12px 0; }
+.knowledge-page__header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 26px; }
+.knowledge-page__eyebrow { color: var(--sea-signal); font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: .08em; }
+.knowledge-page h1 { margin: 4px 0 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: clamp(28px, 3vw, 36px); line-height: 1.2; }
+.knowledge-page__header p { margin: 8px 0 0; color: var(--sea-muted); }
 
-.entity-page__header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 26px;
-}
+.knowledge-shelf { width: 100%; border-top: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted)); }
+.knowledge-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; align-items: center; column-gap: 20px; min-height: 104px; padding: 16px 18px; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted)); background: var(--sea-paper); transition: background 180ms ease, border-color 180ms ease; }
+.knowledge-row:hover, .knowledge-row:focus-visible { border-bottom-color: color-mix(in srgb, var(--sea-signal) 52%, var(--sea-muted)); background: color-mix(in srgb, var(--sea-signal) 5%, var(--sea-paper)); }
+.knowledge-row__marker { display: grid; place-items: center; width: 34px; height: 40px; border-left: 3px solid var(--sea-sand); color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 16px; font-weight: 700; }
+.knowledge-row__content { min-width: 0; }
+.knowledge-row__kind { display: inline-flex; color: var(--sea-muted); font-size: 12px; font-weight: 600; letter-spacing: .08em; }
+.knowledge-row__title { margin: 3px 0 2px; overflow: hidden; color: var(--sea-deep); font-size: 17px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-row__description { margin: 0; overflow: hidden; color: var(--sea-muted); font-size: 13px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-row__stats { display: flex; align-items: center; gap: 24px; margin: 0; }
+.knowledge-row__stats div { min-width: 44px; }
+.knowledge-row__stats dt { color: var(--sea-muted); font-size: 12px; }
+.knowledge-row__stats dd { margin: 2px 0 0; color: var(--sea-ink); font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 600; }
+.knowledge-row__actions { display: flex; align-items: center; gap: 14px; }
+.knowledge-row__open { color: var(--sea-signal); font-size: 13px; font-weight: 700; }
+.knowledge-row__open::after { content: '→'; margin-left: 5px; }
+.knowledge-row__delete { flex: 0 0 auto; border-color: var(--sea-danger); background: var(--sea-danger); color: var(--sea-paper); }
+.knowledge-row__delete:hover, .knowledge-row__delete:focus-visible { border-color: var(--el-color-danger-dark-2); background: var(--el-color-danger-dark-2); color: var(--sea-paper); }
+.knowledge-row__delete-icon { font-size: 16px; }
 
-.entity-page__eyebrow {
-  color: var(--sea-signal);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-}
-
-.entity-page h1 {
-  margin: 4px 0 0;
-  color: var(--sea-deep);
-  font-family: 'Noto Serif SC', serif;
-  font-size: clamp(28px, 3vw, 36px);
-  line-height: 1.2;
-}
-
-.entity-page__header p {
-  margin: 8px 0 0;
-  color: var(--sea-muted);
-}
-
-.entity-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr));
-  gap: 16px;
-  width: 100%;
-}
-
-.entity-card {
-  min-height: 228px;
-  cursor: pointer;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 12px;
-  background: var(--sea-paper);
-  box-shadow: 0 8px 20px rgb(17 36 59 / 5%);
-  transition: border-color 180ms ease, box-shadow 180ms ease;
-}
-
-.entity-card:hover {
-  border-color: color-mix(in srgb, var(--sea-signal) 48%, var(--el-border-color-light));
-  box-shadow: 0 12px 26px rgb(17 36 59 / 9%);
-}
-
-.entity-card :deep(.el-card__body) {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 226px;
-  padding: 22px;
-}
-
-.entity-card__content { min-width: 0; }
-
-.entity-card__kind {
-  display: inline-flex;
-  padding: 3px 8px;
-  border-radius: var(--el-border-radius-round);
-  background: color-mix(in srgb, var(--sea-signal) 12%, var(--sea-paper));
-  color: var(--sea-signal);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.entity-card__title {
-  margin: 12px 0 8px;
-  overflow: hidden;
-  color: var(--sea-deep);
-  font-size: 19px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.entity-card__description {
-  display: -webkit-box;
-  min-height: 44px;
-  margin: 0;
-  overflow: hidden;
-  color: var(--sea-muted);
-  font-size: 14px;
-  line-height: 1.6;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.entity-card__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  width: 100%;
-  margin-top: auto;
-  padding-top: 18px;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
-.entity-card__stats {
-  display: flex;
-  gap: 20px;
-  margin: 0;
-}
-
-.entity-card__stats div { min-width: 42px; }
-.entity-card__stats dt { color: var(--sea-muted); font-size: 12px; }
-.entity-card__stats dd { margin: 2px 0 0; color: var(--sea-ink); font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 500; }
-
-.entity-card__delete {
-  flex: 0 0 auto;
-  border-color: var(--sea-danger);
-  background: var(--sea-danger);
-  color: var(--sea-paper);
-}
-
-.entity-card__delete:hover,
-.entity-card__delete:focus-visible {
-  border-color: var(--el-color-danger-dark-2);
-  background: var(--el-color-danger-dark-2);
-  color: var(--sea-paper);
-}
-
-.entity-card__delete-icon {
-  font-size: 16px;
-}
-
-.entity-page__empty {
-  display: grid;
-  place-items: center;
-  min-height: 260px;
-  border: 1px dashed var(--el-border-color);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist));
-}
-
-.entity-page__empty h2 { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 21px; }
-.entity-page__empty p { margin: 8px 0 16px; }
+.knowledge-page__empty { display: grid; place-items: center; min-height: 260px; border: 1px dashed var(--el-border-color); border-radius: 12px; background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist)); }
+.knowledge-page__empty h2 { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 21px; }
+.knowledge-page__empty p { margin: 8px 0 16px; }
 
 @media (max-width: 640px) {
-  .entity-page { padding-top: 8px; }
-  .entity-page__header { align-items: flex-start; flex-direction: column; }
-  .entity-page__header > .el-button { width: 100%; }
-  .entity-grid { grid-template-columns: 1fr; }
+  .knowledge-page { padding-top: 8px; }
+  .knowledge-page__header { align-items: flex-start; flex-direction: column; }
+  .knowledge-page__header > .el-button { width: 100%; }
+  .knowledge-row { grid-template-columns: 38px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 10px; padding: 16px 10px; }
+  .knowledge-row__stats { grid-column: 2 / -1; gap: 20px; }
+  .knowledge-row__actions { grid-column: 3; grid-row: 1; gap: 0; }
+  .knowledge-row__open { display: none; }
 }
 </style>

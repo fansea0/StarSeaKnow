@@ -1,35 +1,39 @@
 <template>
-  <main class="entity-page">
-    <header class="entity-page__header">
+  <main class="agent-page">
+    <header class="agent-page__header">
       <div>
-        <span class="entity-page__eyebrow">智能协作</span>
+        <span class="agent-page__eyebrow">配置协作者</span>
         <h1>智能体</h1>
-        <p>配置面向团队的专属助手，快速连接知识与任务。</p>
+        <p>为团队配置角色清晰、随时可以对话验证的专属协作者。</p>
       </div>
-      <el-button data-testid="create-agent" type="primary" @click="showCreate = true">创建智能体</el-button>
+      <el-button data-testid="create-agent" type="primary" @click="showCreate = true">新增智能体</el-button>
     </header>
 
-    <section v-if="agentList.length" class="entity-grid" aria-label="智能体列表">
-      <el-card
+    <section v-if="agentList.length" class="agent-roster" aria-label="智能体列表">
+      <article
         v-for="agent in agentList"
         :key="agent.id"
-        class="entity-card"
-        shadow="hover"
+        class="agent-profile"
+        role="link"
+        tabindex="0"
+        :aria-label="`打开并调试智能体 ${agent.name}`"
         @click="goToDetail(agent.id)"
+        @keyup.enter="goToDetail(agent.id)"
       >
-        <div class="entity-card__content">
-          <span class="entity-card__kind">智能体</span>
-          <h2 class="entity-card__title">{{ agent.name }}</h2>
-          <p class="entity-card__description">{{ agent.description || '暂未添加描述' }}</p>
+        <div class="agent-profile__marker" aria-hidden="true">协</div>
+        <div class="agent-profile__content">
+          <span class="agent-profile__kind">团队协作者</span>
+          <h2 class="agent-profile__title">{{ agent.name }}</h2>
+          <p class="agent-profile__mission">{{ agent.description || '暂未添加描述' }}</p>
         </div>
-        <div class="entity-card__footer">
-          <span class="entity-card__hint">查看配置与对话能力</span>
-          <el-button :aria-label="`删除智能体 ${agent.name}`" class="entity-card__delete" type="danger" circle @click.stop="handleDelete(agent.id)"><el-icon class="entity-card__delete-icon"><Delete /></el-icon></el-button>
+        <div class="agent-profile__actions">
+          <el-button class="agent-profile__open" text type="primary" @click.stop="goToDetail(agent.id)">打开并调试</el-button>
+          <el-button :aria-label="`删除智能体 ${agent.name}`" class="agent-profile__delete" type="danger" circle @click.stop="handleDelete(agent.id)"><el-icon class="agent-profile__delete-icon"><Delete /></el-icon></el-button>
         </div>
-      </el-card>
+      </article>
     </section>
 
-    <section v-else class="empty-state entity-page__empty" aria-live="polite">
+    <section v-else class="empty-state agent-page__empty" aria-live="polite">
       <h2>还没有智能体</h2>
       <p>创建第一个智能体，为团队提供稳定的专属协作入口。</p>
       <el-button type="primary" @click="showCreate = true">创建智能体</el-button>
@@ -152,12 +156,12 @@ export default {
 </script>
 
 <style scoped>
-.entity-page {
+.agent-page {
   width: 100%;
   padding: 12px 0 12px;
 }
 
-.entity-page__header {
+.agent-page__header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -165,7 +169,7 @@ export default {
   margin-bottom: 26px;
 }
 
-.entity-page__eyebrow {
+.agent-page__eyebrow {
   color: var(--sea-signal);
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
@@ -173,7 +177,7 @@ export default {
   letter-spacing: 0.08em;
 }
 
-.entity-page h1 {
+.agent-page h1 {
   margin: 4px 0 0;
   color: var(--sea-deep);
   font-family: 'Noto Serif SC', serif;
@@ -181,67 +185,76 @@ export default {
   line-height: 1.2;
 }
 
-.entity-page__header p {
+.agent-page__header p {
   margin: 8px 0 0;
   color: var(--sea-muted);
 }
 
-.entity-grid {
+.agent-roster {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+  gap: 22px 28px;
   width: 100%;
 }
 
-.entity-card {
-  min-height: 228px;
+.agent-profile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  min-height: 186px;
+  padding: 28px 0 25px;
   cursor: pointer;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 70%, var(--sea-muted));
+  border-left: 3px solid color-mix(in srgb, var(--sea-sand) 74%, var(--sea-paper));
   background: var(--sea-paper);
-  box-shadow: 0 8px 20px rgb(17 36 59 / 5%);
-  transition: border-color 180ms ease, box-shadow 180ms ease;
+  transition: border-color 180ms ease, background 180ms ease;
 }
 
-.entity-card:hover {
-  border-color: color-mix(in srgb, var(--sea-signal) 48%, var(--el-border-color-light));
-  box-shadow: 0 12px 26px rgb(17 36 59 / 9%);
+.agent-profile:hover,
+.agent-profile:focus-visible {
+  border-left-color: var(--sea-signal);
+  background: color-mix(in srgb, var(--sea-signal) 4%, var(--sea-paper));
 }
 
-.entity-card :deep(.el-card__body) {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 226px;
-  padding: 22px;
+.agent-profile__marker {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: 1px 16px 0 20px;
+  border: 1px solid color-mix(in srgb, var(--sea-sand) 72%, var(--sea-paper));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sea-sand) 19%, var(--sea-paper));
+  color: var(--sea-deep);
+  font-family: 'Noto Serif SC', serif;
+  font-size: 15px;
+  font-weight: 700;
 }
 
-.entity-card__content { min-width: 0; }
+.agent-profile__content { min-width: 0; }
 
-.entity-card__kind {
+.agent-profile__kind {
   display: inline-flex;
-  padding: 3px 8px;
-  border-radius: var(--el-border-radius-round);
-  background: color-mix(in srgb, var(--sea-signal) 12%, var(--sea-paper));
-  color: var(--sea-signal);
+  color: var(--sea-muted);
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
 }
 
-.entity-card__title {
-  margin: 12px 0 8px;
+.agent-profile__title {
+  margin: 8px 0 9px;
   overflow: hidden;
   color: var(--sea-deep);
-  font-size: 19px;
+  font-family: 'Noto Serif SC', serif;
+  font-size: 22px;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.entity-card__description {
+.agent-profile__mission {
   display: -webkit-box;
-  min-height: 44px;
+  min-height: 46px;
   margin: 0;
   overflow: hidden;
   color: var(--sea-muted);
@@ -251,38 +264,39 @@ export default {
   -webkit-line-clamp: 2;
 }
 
-.entity-card__footer {
+.agent-profile__actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  width: 100%;
-  margin-top: auto;
-  padding-top: 18px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  gap: 8px;
+  margin: auto 20px 0 18px;
 }
 
-.entity-card__hint { color: var(--sea-muted); font-size: 13px; }
+.agent-profile__open {
+  padding: 7px 9px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.agent-profile__open::after { content: '↗'; margin-left: 5px; }
 
-.entity-card__delete {
+.agent-profile__delete {
   flex: 0 0 auto;
   border-color: var(--sea-danger);
   background: var(--sea-danger);
   color: var(--sea-paper);
 }
 
-.entity-card__delete:hover,
-.entity-card__delete:focus-visible {
+.agent-profile__delete:hover,
+.agent-profile__delete:focus-visible {
   border-color: var(--el-color-danger-dark-2);
   background: var(--el-color-danger-dark-2);
   color: var(--sea-paper);
 }
 
-.entity-card__delete-icon {
+.agent-profile__delete-icon {
   font-size: 16px;
 }
 
-.entity-page__empty {
+.agent-page__empty {
   display: grid;
   place-items: center;
   min-height: 260px;
@@ -291,13 +305,16 @@ export default {
   background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist));
 }
 
-.entity-page__empty h2 { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 21px; }
-.entity-page__empty p { margin: 8px 0 16px; }
+.agent-page__empty h2 { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 21px; }
+.agent-page__empty p { margin: 8px 0 16px; }
 
 @media (max-width: 640px) {
-  .entity-page { padding-top: 8px; }
-  .entity-page__header { align-items: flex-start; flex-direction: column; }
-  .entity-page__header > .el-button { width: 100%; }
-  .entity-grid { grid-template-columns: 1fr; }
+  .agent-page { padding-top: 8px; }
+  .agent-page__header { align-items: flex-start; flex-direction: column; }
+  .agent-page__header > .el-button { width: 100%; }
+  .agent-roster { grid-template-columns: 1fr; gap: 12px; }
+  .agent-profile { min-height: 160px; padding: 22px 0; }
+  .agent-profile__marker { margin-left: 14px; margin-right: 12px; }
+  .agent-profile__actions { margin-right: 12px; margin-left: 10px; }
 }
 </style>

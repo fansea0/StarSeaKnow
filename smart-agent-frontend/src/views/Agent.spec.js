@@ -33,7 +33,7 @@ describe('agent list', () => {
     })
   })
 
-  it('renders the agent create action and returned card title', async () => {
+  it('renders active collaborators with their open-and-debug action', async () => {
     const wrapper = shallowMount(Agent, {
       global: {
         stubs,
@@ -43,8 +43,10 @@ describe('agent list', () => {
 
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="create-agent"]').text()).toBe('创建智能体')
-    expect(wrapper.get('.entity-card__title').text()).toBe('产品顾问')
+    expect(wrapper.get('.agent-page__eyebrow').text()).toBe('配置协作者')
+    expect(wrapper.get('[data-testid="create-agent"]').text()).toBe('新增智能体')
+    expect(wrapper.get('.agent-profile__title').text()).toBe('产品顾问')
+    expect(wrapper.get('.agent-profile__open').text()).toContain('打开并调试')
   })
 
   it('renders a contrasting trash-can icon in every delete control', async () => {
@@ -57,7 +59,7 @@ describe('agent list', () => {
 
     await flushPromises()
 
-    expect(wrapper.get('[aria-label="删除智能体 产品顾问"] .entity-card__delete-icon').exists()).toBe(true)
+    expect(wrapper.get('[aria-label="删除智能体 产品顾问"] .agent-profile__delete-icon').exists()).toBe(true)
   })
 
   it('creates an agent from only its name and description', async () => {

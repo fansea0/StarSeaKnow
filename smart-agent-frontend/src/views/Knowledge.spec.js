@@ -29,7 +29,7 @@ describe('knowledge list', () => {
     })
   })
 
-  it('renders the knowledge create action and returned card title', async () => {
+  it('renders knowledge bases as document-index rows', async () => {
     const wrapper = shallowMount(Knowledge, {
       global: {
         stubs,
@@ -39,8 +39,11 @@ describe('knowledge list', () => {
 
     await flushPromises()
 
+    expect(wrapper.get('.knowledge-page__eyebrow').text()).toBe('整理资料')
     expect(wrapper.get('[data-testid="create-knowledge"]').text()).toBe('创建知识库')
-    expect(wrapper.get('.entity-card__title').text()).toBe('产品资料')
+    expect(wrapper.get('.knowledge-row__title').text()).toBe('产品资料')
+    expect(wrapper.get('.knowledge-row__stats').text()).toContain('文档')
+    expect(wrapper.get('.knowledge-row__stats').text()).toContain('智能体')
   })
 
   it('renders a contrasting trash-can icon in every delete control', async () => {
@@ -53,6 +56,6 @@ describe('knowledge list', () => {
 
     await flushPromises()
 
-    expect(wrapper.get('[aria-label="删除知识库 产品资料"] .entity-card__delete-icon').exists()).toBe(true)
+    expect(wrapper.get('[aria-label="删除知识库 产品资料"] .knowledge-row__delete-icon').exists()).toBe(true)
   })
 })
