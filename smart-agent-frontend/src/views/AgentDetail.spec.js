@@ -52,6 +52,7 @@ describe('agent detail debug workbench', () => {
     })
 
     expect(wrapper.get('[data-testid="agent-editor-canvas"]').classes()).toContain('settings-pane')
+    expect(wrapper.get('[data-testid="agent-editor-canvas"]').classes()).toContain('settings-pane--flush')
     expect(wrapper.get('[data-testid="knowledge-links"]').classes()).toContain('knowledge-list')
     expect(wrapper.find('.kb-card').exists()).toBe(false)
   })

@@ -1,7 +1,7 @@
 <template>
   <div data-testid="agent-workbench" class="detail-workbench detail-workbench--viewport">
     <!-- 左侧设置区 -->
-    <section data-testid="agent-editor-canvas" class="settings-pane">
+    <section data-testid="agent-editor-canvas" class="settings-pane settings-pane--flush">
       <el-form :model="agentInfo" label-width="96px" class="agent-form">
         <div class="form-section-label">
           <span>基础资料</span>
@@ -267,14 +267,14 @@ export default {
 <style scoped>
 .detail-workbench {
   --workbench-rule: color-mix(in srgb, var(--sea-mist) 68%, var(--sea-muted));
-  --workbench-canvas: color-mix(in srgb, var(--sea-mist) 48%, var(--sea-paper));
-  margin-top: 24px;
+  --workbench-canvas: var(--sea-paper);
+  margin-top: 20px;
   display: flex;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--sea-paper) 72%, var(--sea-muted));
-  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  border-radius: 10px;
   background: var(--workbench-canvas);
-  box-shadow: 0 12px 28px color-mix(in srgb, var(--sea-deep) 7%, transparent);
+  box-shadow: none;
   overflow: hidden;
   width: 100%;
 }
@@ -287,25 +287,28 @@ export default {
 
 .settings-pane {
   --form-label-width: 96px;
-  flex: 0 0 42%;
-  background: transparent;
-  padding: 32px 36px 30px;
+  flex: 0 0 43%;
+  padding: 30px 34px 28px;
   border-right: 1px solid var(--workbench-rule);
   min-width: 340px;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.settings-pane--flush {
+  background: var(--sea-paper);
 }
 .form-section-label {
   display: grid;
   gap: 3px;
-  margin: 0 0 16px var(--form-label-width);
+  margin: 0 0 18px;
 }
 .form-section-label span,
 .knowledge-header-row > div > span {
   color: var(--sea-deep);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: .04em;
+  letter-spacing: .02em;
 }
 .form-section-label small,
 .knowledge-header-row small {
@@ -314,10 +317,12 @@ export default {
   line-height: 1.5;
 }
 .form-section-label--conversation {
-  margin-top: 34px;
+  margin-top: 30px;
+  padding-top: 26px;
+  border-top: 1px solid var(--workbench-rule);
 }
 .agent-form .el-form-item {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 .agent-form :deep(.el-form-item__label) {
   width: var(--form-label-width) !important;
@@ -360,20 +365,22 @@ export default {
 .knowledge-link {
   width: auto;
   max-width: min(100%, 220px);
-  border: 1px solid color-mix(in srgb, var(--sea-signal) 28%, var(--sea-paper));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--sea-signal) 5%, var(--sea-paper));
+  border: 0;
+  border-left: 3px solid var(--sea-sand);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--sea-mist) 56%, var(--sea-paper));
 }
 .knowledge-link:hover {
-  border-color: color-mix(in srgb, var(--sea-signal) 66%, var(--sea-paper));
+  border-left-color: var(--sea-signal);
+  background: color-mix(in srgb, var(--sea-signal) 8%, var(--sea-paper));
 }
 .knowledge-link-content {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
-  min-height: 32px;
-  padding: 3px 4px 3px 10px;
+  min-height: 34px;
+  padding: 3px 3px 3px 8px;
 }
 .kb-icon {
   flex: 0 0 auto;
@@ -394,22 +401,30 @@ export default {
 }
 .knowledge-link .el-button {
   flex: 0 0 auto;
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
   padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sea-danger);
+}
+.knowledge-link .el-button:hover,
+.knowledge-link .el-button:focus-visible {
+  background: color-mix(in srgb, var(--sea-danger) 10%, transparent);
+  color: var(--sea-danger);
 }
 .knowledge-link .el-button :deep(.el-icon) {
   font-size: 14px;
 }
 .preview-pane {
-  flex: 1 1 58%;
+  flex: 1 1 57%;
   display: flex;
   min-width: 400px;
   min-height: 0;
-  padding: 18px;
-  background: color-mix(in srgb, var(--sea-mist) 30%, var(--sea-paper));
+  padding: 24px;
+  background: color-mix(in srgb, var(--sea-mist) 36%, var(--sea-paper));
 }
 .preview-instrument {
   display: flex;
