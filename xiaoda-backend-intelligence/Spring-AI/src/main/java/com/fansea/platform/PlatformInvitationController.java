@@ -8,8 +8,10 @@ import com.fansea.ai.auth.AuthErrorCode;
 import com.fansea.ai.auth.AuthException;
 import com.fansea.ai.auth.RequireRole;
 import com.fansea.ai.domain.PlatformInvitation;
+import com.fansea.ai.domain.Tenant;
 import com.fansea.ai.domain.dto.AjaxResult;
 import com.fansea.ai.mapper.PlatformInvitationMapper;
+import com.fansea.ai.mapper.TenantMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,6 +26,7 @@ import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -34,8 +37,17 @@ public class PlatformInvitationController {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final PlatformInvitationMapper invitations;
+    private final TenantMapper tenants;
 
     public record CreateInvitationReq(OffsetDateTime validFrom, OffsetDateTime validUntil) {
+    }
+
+    public record UsedTenantDisplay(Long id, String name, String code) {
+    }
+
+    public record InvitationListItem(Long id, String code, String status,
+                                     OffsetDateTime validFrom, OffsetDateTime validUntil, OffsetDateTime usedAt,
+                                     Long usedTenantId, UsedTenantDisplay usedTenant, OffsetDateTime createTime) {
     }
 
     @PostMapping
@@ -72,8 +84,21 @@ public class PlatformInvitationController {
         applyExpiryFilter(query, expiry);
         query.orderByDesc("create_time");
         Page<PlatformInvitation> result = invitations.selectPage(new Page<>(page, pageSize), query);
+        List<Long> usedTenantIds = result.getRecords().stream()
+                .map(PlatformInvitation::getUsedTenantId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<Long, UsedTenantDisplay> usedTenants = usedTenantIds.isEmpty() ? Map.of() : tenants.selectBatchIds(usedTenantIds).stream()
+                .collect(java.util.stream.Collectors.toMap(Tenant::getId,
+                        tenant -> new UsedTenantDisplay(tenant.getId(), tenant.getName(), tenant.getCode())));
+        List<InvitationListItem> items = result.getRecords().stream()
+                .map(invitation -> new InvitationListItem(invitation.getId(), invitation.getCode(), invitation.getStatus(),
+                        invitation.getValidFrom(), invitation.getValidUntil(), invitation.getUsedAt(), invitation.getUsedTenantId(),
+                        invitation.getUsedTenantId() == null ? null : usedTenants.get(invitation.getUsedTenantId()), invitation.getCreateTime()))
+                .toList();
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("items", result.getRecords());
+        data.put("items", items);
         data.put("page", page);
         data.put("pageSize", pageSize);
         data.put("total", result.getTotal());
@@ -86,7 +111,9 @@ public class PlatformInvitationController {
         }
         OffsetDateTime now = OffsetDateTime.now();
         switch (expiry) {
-            case "VALID" -> query.ge("valid_until", now);
+            case "VALID" -> query.eq("status", "ACTIVE")
+                    .le("valid_from", now)
+                    .ge("valid_until", now);
             case "EXPIRED" -> query.lt("valid_until", now);
             case "EXPIRING_SOON" -> query.eq("status", "ACTIVE")
                     .le("valid_from", now)

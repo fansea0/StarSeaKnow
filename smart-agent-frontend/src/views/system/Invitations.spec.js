@@ -61,4 +61,13 @@ describe('platform invitation workspace', () => {
     expect(get).toHaveBeenCalledWith('/platform/invitations', { params: { page: 1, pageSize: 20, status: undefined, expiry: 'EXPIRING_SOON' } })
     expect(wrapper.text()).toContain('24小时内到期')
   })
+
+  it('renders the registered tenant from the invitation list response', async () => {
+    get.mockResolvedValueOnce({ data: { data: { items: [{ id: 12, code: 'used-code', status: 'USED', usedTenant: { id: 9, name: '海洋工作区', code: 'ocean' } }], page: 1, pageSize: 20, total: 1 } } })
+    const wrapper = mountInvitations()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('注册租户')
+    expect(wrapper.text()).toContain('海洋工作区（ocean）')
+  })
 })

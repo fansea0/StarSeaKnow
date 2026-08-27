@@ -166,6 +166,53 @@ class PlatformInvitationControllerTest {
     }
 
     @Test
+    void invitationListFiltersAvailableInvitationsByActiveAndCurrentValidityWindow() throws Exception {
+        when(invitations.selectPage(any(), any())).thenAnswer(invocation -> {
+            com.baomidou.mybatisplus.extension.plugins.pagination.Page<PlatformInvitation> page = invocation.getArgument(0);
+            page.setRecords(List.of());
+            page.setTotal(0L);
+            return page;
+        });
+
+        mockMvc.perform(get("/platform/invitations?expiry=VALID"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<QueryWrapper<PlatformInvitation>> query = ArgumentCaptor.forClass(QueryWrapper.class);
+        verify(invitations).selectPage(any(), query.capture());
+        assertThat(query.getValue().getExpression().getNormal().getSqlSegment())
+                .contains("status")
+                .contains("valid_from")
+                .contains("valid_until");
+    }
+
+    @Test
+    void invitationListReturnsUsedTenantDisplayFromOneBatchLookup() throws Exception {
+        PlatformInvitation invitation = new PlatformInvitation();
+        invitation.setId(12L);
+        invitation.setCode("used-code");
+        invitation.setStatus("USED");
+        invitation.setUsedTenantId(9L);
+        when(invitations.selectPage(any(), any())).thenAnswer(invocation -> {
+            com.baomidou.mybatisplus.extension.plugins.pagination.Page<PlatformInvitation> page = invocation.getArgument(0);
+            page.setRecords(List.of(invitation));
+            page.setTotal(1L);
+            return page;
+        });
+        Tenant tenant = new Tenant();
+        tenant.setId(9L);
+        tenant.setName("海洋工作区");
+        tenant.setCode("ocean");
+        when(tenants.selectBatchIds(List.of(9L))).thenReturn(List.of(tenant));
+
+        mockMvc.perform(get("/platform/invitations"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].usedTenant.name").value("海洋工作区"))
+                .andExpect(jsonPath("$.data.items[0].usedTenant.code").value("ocean"));
+
+        verify(tenants).selectBatchIds(List.of(9L));
+    }
+
+    @Test
     void platformAdminMustChangePassword_beforeManagementAccess() throws Exception {
         PlatformAdmin admin = new PlatformAdmin();
         admin.setId(1L);
