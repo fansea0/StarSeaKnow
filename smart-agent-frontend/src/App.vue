@@ -1,41 +1,80 @@
 <template>
   <div class="app-root">
-    <header class="main-header">
-      <div class="logo-area">
-        <img src="./assets/logo.png" alt="logo" class="logo-img" />
-        <span class="brand-name">小达智能体</span>
-      </div>
-      <el-menu :default-active="activeMenu" mode="horizontal" router class="main-menu">
-        <template v-if="auth.user?.role !== 'platform_admin'">
-          <el-menu-item index="/agent">智能体</el-menu-item>
-          <el-menu-item index="/knowledge">知识库</el-menu-item>
-          <el-menu-item index="/tools">工具</el-menu-item>
-        </template>
-        <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/members">成员</el-menu-item>
-        <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/profile">租户设置</el-menu-item>
-        <el-menu-item v-if="auth.user?.role === 'platform_admin'" index="/system">系统管理</el-menu-item>
-      </el-menu>
-      <div v-if="auth.user" class="user-area">
-        <span class="user-name">{{ auth.user.displayName || auth.user.username }}</span>
-        <el-button size="small" type="text" @click="auth.logout()">退出</el-button>
-      </div>
-    </header>
-    <div class="main-content">
-      <div class="content-wrapper">
-        <router-view></router-view>
-      </div>
+    <template v-if="isPublicPage">
+      <router-view />
+    </template>
+
+    <div v-else class="workspace-shell">
+      <aside class="workspace-sidebar">
+        <router-link class="brand" to="/knowledge">
+          <img src="./assets/logo.png" alt="" class="brand__mark" />
+          <span>小达智能体</span>
+        </router-link>
+
+        <nav class="workspace-navigation" aria-label="工作区导航">
+          <el-menu :default-active="activeMenu" router class="workspace-menu">
+            <template v-if="auth.user?.role !== 'platform_admin'">
+              <el-menu-item index="/agent">智能体</el-menu-item>
+              <el-menu-item index="/knowledge">知识库</el-menu-item>
+              <el-menu-item index="/tools">工具</el-menu-item>
+            </template>
+            <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/members">成员</el-menu-item>
+            <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/profile">租户设置</el-menu-item>
+            <el-menu-item v-if="auth.user?.role === 'platform_admin'" index="/system">系统管理</el-menu-item>
+          </el-menu>
+        </nav>
+
+        <div v-if="auth.user" class="account-actions">
+          <span class="account-actions__name">{{ auth.user.displayName || auth.user.username }}</span>
+          <el-button type="text" @click="auth.logout()">退出</el-button>
+        </div>
+      </aside>
+
+      <main class="workspace-main">
+        <div class="tide-line" :data-section="activeSection" :aria-label="`当前工作区：${activeSectionLabel}`">
+          <span aria-hidden="true"></span>
+        </div>
+        <router-view />
+      </main>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
 const activeMenu = ref(route.path)
+const publicPaths = new Set(['/login', '/register', '/403', '/change-initial-password'])
+
+const isPublicPage = computed(() => (
+  route.matched.some((record) => record.meta.public) ||
+  publicPaths.has(route.path) ||
+  route.path.startsWith('/accept-invite/')
+))
+
+const activeSection = computed(() => {
+  if (route.path.startsWith('/agent')) return 'agent'
+  if (route.path.startsWith('/knowledge')) return 'knowledge'
+  if (route.path.startsWith('/tools')) return 'tools'
+  if (route.path.startsWith('/tenant')) return 'tenant'
+  if (route.path.startsWith('/system')) return 'system'
+  return 'workspace'
+})
+
+const sectionLabels = {
+  agent: '智能体',
+  knowledge: '知识库',
+  tools: '工具',
+  tenant: '租户管理',
+  system: '系统管理',
+  workspace: '工作区',
+}
+
+const activeSectionLabel = computed(() => sectionLabels[activeSection.value])
 
 watch(
   () => route.path,
@@ -52,87 +91,212 @@ onMounted(() => {
 <style>
 .app-root {
   min-height: 100vh;
-  width: 100%;
-  background: #f5f6fa;
+  background: var(--sea-mist);
 }
-.main-header {
-  position: fixed;
+
+.workspace-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 100vh;
+  width: 100%;
+}
+
+.workspace-sidebar {
+  position: sticky;
   top: 0;
-  left: 0;
-  width: 100%;
-  z-index: 100;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
   display: flex;
-  align-items: center;
-  padding: 0 32px;
-  height: 64px;
-}
-.logo-area {
-  display: flex;
-  align-items: center;
-  margin-right: 32px;
-}
-.logo-img {
-  width: 36px;
-  height: 36px;
-  margin-right: 10px;
-}
-.brand-name {
-  font-size: 20px;
-  font-weight: bold;
-  color: #409eff;
-  letter-spacing: 2px;
-}
-.main-menu {
-  flex: 1;
-  background: transparent;
-  border-bottom: none;
-  box-shadow: none;
+  flex-direction: column;
   min-width: 0;
+  height: 100vh;
+  padding: 24px 16px 18px;
+  background: var(--sea-deep);
+  color: #d9e8ee;
 }
-.main-menu .el-menu-item {
-  font-size: 16px;
-  padding: 0 32px;
-  height: 64px;
-  line-height: 64px;
-  color: #333;
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 8px 22px;
+  border-bottom: 1px solid rgb(234 241 245 / 18%);
+  color: var(--sea-paper);
+  font-family: 'Noto Serif SC', serif;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+}
+
+.brand__mark {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.workspace-navigation {
+  flex: 1;
+  min-height: 0;
+  padding-top: 18px;
+}
+
+.workspace-menu {
+  border-right: 0;
   background: transparent;
-  transition: color 0.2s, background 0.2s;
 }
-.main-menu .el-menu-item.is-active {
-  color: #409eff;
-  background: #eaf6ff;
-  border-bottom: 2.5px solid #409eff;
+
+.workspace-menu .el-menu-item {
+  height: 44px;
+  margin: 3px 0;
+  padding: 0 12px !important;
+  border-radius: 8px;
+  color: #c3d2dc;
+  font-size: 15px;
+  line-height: 44px;
+}
+
+.workspace-menu .el-menu-item:hover {
+  background: rgb(234 241 245 / 10%);
+  color: var(--sea-paper);
+}
+
+.workspace-menu .el-menu-item.is-active {
+  border-right: 0;
+  background: rgb(0 166 166 / 22%);
+  color: #d8ffff;
   font-weight: 600;
 }
-.main-menu .el-menu-item:hover {
-  color: #409eff;
-  background: #f4faff;
-}
-.user-area {
+
+.account-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-left: 16px;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 52px;
+  padding: 12px 8px 0;
+  border-top: 1px solid rgb(234 241 245 / 18%);
 }
-.user-name {
+
+.account-actions__name {
+  min-width: 0;
+  overflow: hidden;
+  color: #d9e8ee;
   font-size: 14px;
-  color: #666;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.main-content {
-  padding-top: 64px;
-  min-height: calc(100vh - 64px);
-  background: #f5f6fa;
-  width: 100vw;
-  box-sizing: border-box;
+
+.account-actions .el-button {
+  min-width: 40px;
+  color: #b8d9dc;
 }
-#app { display: block; min-height: 100vh; width: 100%; }
-.content-wrapper {
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+
+.account-actions .el-button:hover {
+  color: #e5ffff;
+}
+
+.workspace-main {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 32px 36px;
+}
+
+.tide-line {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #d6e2e6;
+}
+
+.tide-line span {
+  position: relative;
+  display: block;
+  width: 64px;
+  height: 2px;
+  background: var(--sea-signal);
+  transition: width 180ms ease;
+}
+
+.tide-line span::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--sea-mist);
+  border-radius: 50%;
+  background: var(--sea-signal);
+  content: '';
+  transform: translateY(-50%);
+}
+
+.tide-line[data-section='agent'] span { width: 92px; }
+.tide-line[data-section='knowledge'] span { width: 120px; }
+.tide-line[data-section='tools'] span { width: 76px; }
+.tide-line[data-section='tenant'] span { width: 104px; }
+.tide-line[data-section='system'] span { width: 112px; }
+
+@media (max-width: 1024px) and (min-width: 721px) {
+  .workspace-shell { grid-template-columns: 196px minmax(0, 1fr); }
+  .workspace-sidebar { padding-right: 12px; padding-left: 12px; }
+  .workspace-main { padding-right: 24px; padding-left: 24px; }
+}
+
+@media (max-width: 720px) {
+  .workspace-shell {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .workspace-sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    padding: 0;
+  }
+
+  .brand {
+    min-height: 52px;
+    padding: 10px 16px;
+    border-bottom: 1px solid rgb(234 241 245 / 18%);
+  }
+
+  .workspace-navigation {
+    width: 100%;
+    overflow-x: auto;
+    padding: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .workspace-menu {
+    display: flex;
+    width: max-content;
+    min-width: 100%;
+    padding: 8px 12px;
+  }
+
+  .workspace-menu .el-menu-item {
+    flex: 0 0 auto;
+    margin: 0 2px;
+  }
+
+  .account-actions {
+    min-height: 48px;
+    padding: 8px 16px;
+  }
+
+  .workspace-main {
+    width: 100%;
+    min-width: 0;
+    padding: 0 16px 24px;
+  }
+
+  .tide-line {
+    height: 38px;
+    margin-bottom: 8px;
+  }
 }
 </style>
