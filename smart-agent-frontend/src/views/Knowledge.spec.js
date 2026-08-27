@@ -29,7 +29,7 @@ describe('knowledge list', () => {
     })
   })
 
-  it('renders knowledge bases as document-index rows', async () => {
+  it('renders knowledge bases as lightweight management rows', async () => {
     const wrapper = shallowMount(Knowledge, {
       global: {
         stubs,
@@ -41,9 +41,11 @@ describe('knowledge list', () => {
 
     expect(wrapper.get('.knowledge-page__eyebrow').text()).toBe('整理资料')
     expect(wrapper.get('[data-testid="create-knowledge"]').text()).toBe('创建知识库')
+    expect(wrapper.get('.knowledge-list__header').text()).toContain('文档数')
     expect(wrapper.get('.knowledge-row__title').text()).toBe('产品资料')
-    expect(wrapper.get('.knowledge-row__stats').text()).toContain('文档')
-    expect(wrapper.get('.knowledge-row__stats').text()).toContain('智能体')
+    expect(wrapper.get('.knowledge-row__meta').text()).toContain('4 篇文档')
+    expect(wrapper.get('.knowledge-row__meta').text()).toContain('关联 2 个智能体')
+    expect(wrapper.get('.knowledge-row__enter').text()).toBe('进入知识库')
   })
 
   it('renders a contrasting trash-can icon in every delete control', async () => {
