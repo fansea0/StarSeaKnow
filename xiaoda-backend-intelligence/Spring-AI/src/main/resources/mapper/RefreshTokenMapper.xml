@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.fangsa.ai.mapper.RefreshTokenMapper">
+    <update id="revokeById">
+        UPDATE refresh_token SET revoked_at = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND revoked_at IS NULL
+    </update>
+    <update id="revokeByFamily">
+        UPDATE refresh_token SET revoked_at = CURRENT_TIMESTAMP
+        WHERE family_id = #{familyId,jdbcType=OTHER,typeHandler=com.fangsa.ai.auth.UuidTypeHandler}
+          AND revoked_at IS NULL
+    </update>
+</mapper>

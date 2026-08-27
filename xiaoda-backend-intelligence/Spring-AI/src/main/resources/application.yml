@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: Spring-AI
+  datasource:
+    url: jdbc:postgresql://localhost:5432/aichat
+    username: postgres
+    password: 123456
+  ai:
+    vectorstore:
+      pgvector:
+        ##embedding的向量维度，这里的768是根据nomic-embed-text返回的向量维度配置的
+        dimensions: 768
+    openai:
+      embedding:
+        enabled: false # 关闭openai的embedding自动配置，防止与Ollama的embedding冲突
+      api-key: sk-9fba15d576ec47529925b14e526478f0
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      chat:
+        options:
+          model: qwen-plus
+          temperature: 0.9
+
+    ollama:
+      chat:
+        enabled: false  # 关闭Ollama的chat自动配置，防止与openai的chat冲突
+      embedding:
+        model: modelscope.cn/VBNn0x/Dmeta-embedding-zh-gguf:latest
+
+
+logging:
+  level: # 配置启动查看对话日志
+    org.springframework.ai.chat.client.advisor: debug
+    com.fansea.ai: debug
+mybatis-plus:
+  configuration:
+    cache-enabled: true
+
+file:
+  uploadPath: ${user.dir}/src/main/resources/file/
+  outputPath: ${user.dir}/src/main/resources/output/
+
+jwt:
+  secret: dev-secret-please-change-32bytes-minimum-length-required
+  access-ttl-millis: 900000       # 15 min
+  refresh-ttl-millis: 2592000000  # 30 days

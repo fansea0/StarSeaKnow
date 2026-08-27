@@ -1,0 +1,126 @@
+package com.fanseA.ai.controller;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fangsa.ai.auth.RequireLogin;
+import com.fangsa.ai.auth.RequireRole;
+import com.fanseA.ai.domain.AgentKnowledge;
+import com.fanseA.ai.domain.File;
+import com.fanseA.ai.domain.Knowledge;
+import com.fanseA.ai.domain.KnowledgeFile;
+import com.fanseA.ai.domain.dto.AjaxResult;
+import com.fanseA.ai.domain.vo.FileVo;
+import com.fanseA.ai.domain.vo.KnowledgeVo;
+import com.fanseA.ai.service.AgentKnowledgeService;
+import com.fanseA.ai.service.FileService;
+import com.fanseA.ai.service.KnowledgeFileService;
+import com.fanseA.ai.service.KnowledgeService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+/**
+ * @Projectname: Spring-AI
+ * @Filename: KnowledgeController
+ * @Author: FANSEA
+ * @Date:2025/5/3 13:50
+ */
+@RequiredArgsConstructor
+@RestController
+@Slf4j
+@RequestMapping("/knowledge")
+@RequireLogin
+public class KnowledgeController {
+
+    private final KnowledgeService knowledgeService;
+    private final KnowledgeFileService knowledgeFileService;
+    private final AgentKnowledgeService agentKnowledgeService;
+    private final FileService fileService;
+
+    @RequireRole("tenant_admin")
+    @PostMapping("/file")
+    public AjaxResult fileEmbedding(Long knowledgeId, Long fileId) {
+        // TODO: 文件分块 ---> 向量化处理 ---> 存入pgvector
+        knowledgeService.loadEmbedding(knowledgeId, fileId);
+        return AjaxResult.success();
+    }
+
+    @GetMapping("/file/list")
+    public AjaxResult fileList(Long knowledgeId) {
+        List<KnowledgeFile> knowledgeFiles = knowledgeFileService.list(new LambdaQueryWrapper<KnowledgeFile>().eq(KnowledgeFile::getKnowledgeId, knowledgeId));
+        List<FileVo> files = knowledgeFiles.stream().map(k -> {
+            FileVo fileVo = new FileVo();
+            File file = fileService.getById(k.getFileId());
+            BeanUtils.copyProperties(file,fileVo, FileVo.class);
+            return fileVo;
+        }).toList();
+        return AjaxResult.success(files);
+    }
+
+    @GetMapping("/file/count")
+    public AjaxResult knowledgeFileCount(Long knowledgeId){
+        long count = knowledgeFileService.count(new LambdaQueryWrapper<KnowledgeFile>().eq(KnowledgeFile::getKnowledgeId, knowledgeId));
+        return AjaxResult.success(count);
+    }
+
+    // 新增知识库
+    @RequireRole("tenant_admin")
+    @CacheEvict(value = "knowledge", allEntries = true)
+    @PostMapping("/add")
+    public AjaxResult addKnowledge(@RequestBody Knowledge knowledge) {
+        knowledgeService.save(knowledge);
+        return AjaxResult.success();
+    }
+
+    @RequireRole("tenant_admin")
+    @PutMapping("/update/{knowledgeId}")
+    @CacheEvict(value = "knowledge", allEntries = true)
+    public AjaxResult updateKnowledge(@PathVariable Long knowledgeId, @RequestBody Knowledge knowledge) {
+        knowledge.setId(knowledgeId);
+        knowledgeService.updateById(knowledge);
+        return AjaxResult.success();
+    }
+
+    @RequireRole("tenant_admin")
+    @DeleteMapping("/delete/{knowledgeId}")
+    @CacheEvict(value = "knowledge", allEntries = true)
+    public AjaxResult deleteKnowledge(@PathVariable Long knowledgeId) {
+        knowledgeService.removeById(knowledgeId);
+        return AjaxResult.success();
+    }
+
+    @GetMapping("/{knowledgeId}")
+    public AjaxResult getKnowledgeById(@PathVariable Long knowledgeId) {
+        Knowledge knowledge = knowledgeService.getById(knowledgeId);
+        return AjaxResult.success(knowledge);
+    }
+
+    @GetMapping("/list")
+    public AjaxResult listAllKnowledge() {
+        List<Knowledge> knowledgeList = knowledgeService.list();
+        return AjaxResult.success(knowledgeList);
+    }
+
+    @Cacheable(value = "knowledge")
+    @GetMapping("/list/vo")
+    public AjaxResult listAllKnowledgeVo() {
+        log.info("查询所有知识库列表 - " + System.currentTimeMillis());
+        List<Knowledge> knowledgeList = knowledgeService.list();
+        List<KnowledgeVo> list = knowledgeList.stream().map(k -> {
+            long fileCount = knowledgeFileService.count(new LambdaQueryWrapper<KnowledgeFile>().eq(KnowledgeFile::getKnowledgeId, k.getId()));
+            long agentCount = agentKnowledgeService.count(new LambdaQueryWrapper<AgentKnowledge>().eq(AgentKnowledge::getKnowledgeId, k.getId()));
+            KnowledgeVo knowledgeVo = new KnowledgeVo();
+            BeanUtils.copyProperties(k, knowledgeVo, KnowledgeVo.class);
+            knowledgeVo.setFileCount(fileCount);
+            knowledgeVo.setAgentCount(agentCount);
+            return knowledgeVo;
+        }).toList();
+        return AjaxResult.success(list);
+    }
+
+
+}
