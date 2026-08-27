@@ -21,3 +21,9 @@
 
 - Google Fonts 使用外部网络资源；离线环境会回退到系统字体。
 - 构建仍报告仓库已有的 `/deep/`/`>>>` 弃用提示及大 chunk 警告。
+
+## Review fix round 1
+
+- 为原生 `button`/`input` 及 Element Plus `.el-button`、`.el-input__wrapper`、`.el-input__inner` 增加全局 `min-height: 40px`，满足交互目标尺寸基线。
+- `npm test -- Register.spec.js`：通过，3 tests。
+- `npm run build`：通过；仍仅有既有 deep combinator 弃用和大 chunk 警告。

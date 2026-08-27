@@ -59,6 +59,7 @@ html { scroll-behavior: smooth; }
 body, button, input, textarea, select { font-family: 'Noto Sans SC', sans-serif; }
 body { min-width: 320px; margin: 0; padding: 0; background: var(--sea-mist); color: var(--sea-ink); }
 button, input { font-size: inherit; }
+button, input, .el-button, .el-input__wrapper, .el-input__inner { min-height: 40px; }
 code, .mono { font-family: 'JetBrains Mono', monospace; }
 #app { min-height: 100vh; }
 
