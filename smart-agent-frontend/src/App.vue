@@ -6,11 +6,13 @@
         <span class="brand-name">小达智能体</span>
       </div>
       <el-menu :default-active="activeMenu" mode="horizontal" router class="main-menu">
-        <el-menu-item index="/agent">智能体</el-menu-item>
-        <el-menu-item index="/knowledge">知识库</el-menu-item>
-        <el-menu-item index="/tools">工具</el-menu-item>
+        <template v-if="auth.user?.role !== 'platform_admin'">
+          <el-menu-item index="/agent">智能体</el-menu-item>
+          <el-menu-item index="/knowledge">知识库</el-menu-item>
+          <el-menu-item index="/tools">工具</el-menu-item>
+        </template>
         <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/members">成员</el-menu-item>
-        <el-menu-item index="/system">系统管理</el-menu-item>
+        <el-menu-item v-if="auth.user?.role === 'platform_admin'" index="/system">系统管理</el-menu-item>
       </el-menu>
       <div v-if="auth.user" class="user-area">
         <span class="user-name">{{ auth.user.displayName || auth.user.username }}</span>

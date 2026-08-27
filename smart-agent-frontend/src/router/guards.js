@@ -11,6 +11,9 @@ export function installGuards(router) {
     if (to.meta.requiresAdmin && auth.user?.role !== 'tenant_admin') {
       return '/403'
     }
+    if (to.meta.requiresPlatformAdmin && auth.user?.role !== 'platform_admin') {
+      return '/403'
+    }
     return true
   })
 }

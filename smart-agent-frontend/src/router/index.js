@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { h } from 'vue'
 import { installGuards } from './guards'
 import Agent from '../views/Agent.vue'
 import Knowledge from '../views/Knowledge.vue'
@@ -8,6 +9,10 @@ import Login from '../views/Login.vue'
 import AcceptInvite from '../views/AcceptInvite.vue'
 import Forbidden from '../views/Forbidden.vue'
 import TenantMembers from '../views/TenantMembers.vue'
+
+const SystemRoutePlaceholder = {
+  render: () => h('div')
+}
 
 const routes = [
   {
@@ -27,7 +32,22 @@ const routes = [
   {
     path: '/system',
     name: 'System',
-    component: System
+    component: System,
+    redirect: '/system/overview',
+    children: [
+      {
+        path: 'overview',
+        name: 'SystemOverview',
+        component: SystemRoutePlaceholder,
+        meta: { requiresPlatformAdmin: true }
+      },
+      {
+        path: 'tenants',
+        name: 'SystemTenants',
+        component: SystemRoutePlaceholder,
+        meta: { requiresPlatformAdmin: true }
+      }
+    ]
   },
   {
     path: '/tools',
@@ -65,4 +85,4 @@ const router = createRouter({
 
 installGuards(router)
 
-export default router 
+export default router
