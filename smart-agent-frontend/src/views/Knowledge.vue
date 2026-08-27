@@ -43,7 +43,7 @@
 
 <script>
 import { ref } from 'vue'
-import axios from 'axios'
+import { http } from '../api/http'
 import { Delete } from '@element-plus/icons-vue'
 export default {
   name: 'Knowledge',
@@ -74,7 +74,7 @@ export default {
   methods: {
     async fetchKnowledgeList() {
       try {
-        const res = await axios.get('http://localhost:8080/knowledge/list/vo')
+        const res = await http.get('/knowledge/list/vo')
         if (res.data && res.data.code === 200) {
           this.knowledgeList = (res.data.data || []).map(item => ({
             name: item.name,
@@ -98,7 +98,7 @@ export default {
         if (valid) {
           this.loading = true
           try {
-            const res = await axios.post('http://localhost:8080/knowledge/add', {
+            const res = await http.post('/knowledge/add', {
               name: this.createForm.name,
               description: this.createForm.desc
             })
@@ -126,7 +126,7 @@ export default {
         type: 'warning',
       }).then(async () => {
         try {
-          const res = await axios.delete(`http://localhost:8080/knowledge/delete/${id}`)
+          const res = await http.delete(`/knowledge/delete/${id}`)
           if (res.data && res.data.code === 200) {
             this.$message.success('删除成功')
             this.fetchKnowledgeList()
@@ -234,4 +234,4 @@ export default {
   background: #ffeded;
   color: #d9001b;
 }
-</style> 
+</style>

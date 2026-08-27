@@ -44,7 +44,7 @@
 </template>
 
 <script>
-import axios from 'axios'
+import { http } from '../api/http'
 import { Delete } from '@element-plus/icons-vue'
 export default {
   name: 'Agent',
@@ -86,7 +86,7 @@ export default {
   methods: {
     async fetchAgentList() {
       try {
-        const res = await axios.get('http://localhost:8080/agent/list')
+        const res = await http.get('/agent/list')
         if (res.data && res.data.code === 200) {
           // 兼容data为数组或对象
           if (Array.isArray(res.data.data)) {
@@ -111,7 +111,7 @@ export default {
         if (valid) {
           this.loading = true
           try {
-            const res = await axios.post('http://localhost:8080/agent/add', this.createForm)
+            const res = await http.post('/agent/add', this.createForm)
             if (res.data && res.data.code === 200) {
               await this.fetchAgentList()
               this.showCreate = false
@@ -135,7 +135,7 @@ export default {
         type: 'warning',
       }).then(async () => {
         try {
-          const res = await axios.delete(`http://localhost:8080/agent/delete/${id}`)
+          const res = await http.delete(`/agent/delete/${id}`)
           if (res.data && res.data.code === 200) {
             this.$message.success('删除成功')
             this.fetchAgentList()
@@ -236,4 +236,4 @@ export default {
   background: #ffeded;
   color: #d9001b;
 }
-</style> 
+</style>
