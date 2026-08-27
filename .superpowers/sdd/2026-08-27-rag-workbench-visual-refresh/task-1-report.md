@@ -16,6 +16,7 @@
 - `npm test -- Register.spec.js`：通过，3 tests。
 - `npm run build`：通过；Vite 构建成功。现有组件的 deprecated deep combinator 与大 chunk 提示仍存在，均非本任务引入的构建失败。
 - `git diff --check`：通过。
+- 复核后进一步覆盖 `.el-select` 和 `.el-date-editor` 根目标，随后重新执行以上测试、构建及 `git diff --check`，结果仍全部通过。
 
 ## Concerns
 
@@ -27,3 +28,11 @@
 - 为原生 `button`/`input` 及 Element Plus `.el-button`、`.el-input__wrapper`、`.el-input__inner` 增加全局 `min-height: 40px`，满足交互目标尺寸基线。
 - `npm test -- Register.spec.js`：通过，3 tests。
 - `npm run build`：通过；仍仅有既有 deep combinator 弃用和大 chunk 警告。
+
+## Review fix round 2
+
+- 将原生及 Element Plus 按钮目标统一为至少 40×40；`.el-button.is-circle` 固定宽高 40px 并移除内边距，保持圆形几何。
+- 为 Element Plus select、date-picker wrapper、radio、radio-button 和 switch 增加至少 40px 的触达区域；未设置输入控件最小宽度，避免破坏表单布局。
+- `npm test -- Register.spec.js`：通过，3 tests。
+- `npm run build`：通过；仍仅有既有 deep combinator 弃用和大 chunk 警告。
+- `git diff --check`：通过。

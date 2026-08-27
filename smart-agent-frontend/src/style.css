@@ -59,7 +59,12 @@ html { scroll-behavior: smooth; }
 body, button, input, textarea, select { font-family: 'Noto Sans SC', sans-serif; }
 body { min-width: 320px; margin: 0; padding: 0; background: var(--sea-mist); color: var(--sea-ink); }
 button, input { font-size: inherit; }
-button, input, .el-button, .el-input__wrapper, .el-input__inner { min-height: 40px; }
+button, .el-button { min-width: 40px; min-height: 40px; }
+input, .el-input__wrapper, .el-input__inner { min-height: 40px; }
+.el-button.is-circle { width: 40px; height: 40px; padding: 0; }
+.el-select, .el-select__wrapper, .el-date-editor, .el-date-editor.el-input__wrapper, .el-date-editor .el-input__wrapper { min-height: 40px; }
+.el-radio, .el-switch { min-width: 40px; min-height: 40px; }
+.el-radio-button__inner { min-height: 40px; display: inline-flex; align-items: center; }
 code, .mono { font-family: 'JetBrains Mono', monospace; }
 #app { min-height: 100vh; }
 
