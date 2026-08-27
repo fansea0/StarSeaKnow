@@ -38,5 +38,8 @@ describe('agent detail debug workbench', () => {
     expect(wrapper.get('[data-testid="agent-workbench"]').classes()).toContain('detail-workbench--viewport')
     expect(wrapper.get('[data-testid="debug-preview"]').classes()).toContain('preview-pane--adaptive')
     expect(wrapper.get('[data-testid="chat-composer"]').exists()).toBe(true)
+    expect(wrapper.get('.preview-instrument').element.contains(wrapper.get('[data-testid="chat-composer"]').element)).toBe(true)
+    expect(wrapper.text()).toContain('基础资料')
+    expect(wrapper.text()).toContain('对话设定')
   })
 })

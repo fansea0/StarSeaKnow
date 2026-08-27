@@ -3,12 +3,20 @@
     <!-- 左侧设置区 -->
     <section class="settings-pane">
       <el-form :model="agentInfo" label-width="80px" class="agent-form">
+        <div class="form-section-label">
+          <span>基础资料</span>
+          <small>定义团队识别的智能体信息</small>
+        </div>
         <el-form-item label="名称">
           <el-input v-model="agentInfo.name" maxlength="32" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="agentInfo.description" maxlength="256" />
         </el-form-item>
+        <div class="form-section-label form-section-label--conversation">
+          <span>对话设定</span>
+          <small>设定首次出现时的语气与职责</small>
+        </div>
         <el-form-item label="开场白">
           <el-input v-model="agentInfo.prologue" maxlength="512" type="textarea" rows="6" />
         </el-form-item>
@@ -17,7 +25,10 @@
         </el-form-item>
       </el-form>
       <div class="knowledge-header-row">
-        <span>关联知识库</span>
+        <div>
+          <span>知识来源</span>
+          <small>为本智能体提供可检索的资料</small>
+        </div>
         <el-button size="small" type="primary" icon="el-icon-plus" @click="showAddKnowledge = true">新增关联</el-button>
       </div>
       <div class="knowledge-list">
@@ -27,7 +38,7 @@
             <el-icon v-else-if="kb.type==='md'" class="kb-icon"><i class="el-icon-document-checked"></i></el-icon>
             <el-icon v-else class="kb-icon"><i class="el-icon-folder"></i></el-icon>
             <span class="kb-name">{{ kb.name }}</span>
-            <el-button type="danger" size="small" circle @click="removeKnowledge(kb.id)">
+            <el-button type="danger" size="small" circle :aria-label="`移除知识库：${kb.name}`" @click="removeKnowledge(kb.id)">
               <el-icon><Delete /></el-icon>
             </el-button>
           </div>
@@ -46,38 +57,43 @@
     </section>
     <!-- 右侧调试预览区 -->
     <section data-testid="debug-preview" class="preview-pane preview-pane--adaptive">
-      <div class="chat-header-row">
-        <div class="chat-header">调试预览</div>
-        <el-button data-testid="save-agent" class="save-agent-btn" type="primary" icon="el-icon-check" @click="saveAgent">保存</el-button>
-      </div>
-      <div class="chat-history" ref="chatHistoryRef">
-        <div v-for="(msg, idx) in chatHistory" :key="idx" :class="['chat-msg', msg.role]">
-          <div v-if="msg.role==='assistant'" class="msg-content">
-            <img class="avatar-img" src="../assets/avatar.jpg" alt="avatar" />
-            <div class="msg-bubble">
-              <template v-if="idx === 0">
-                <div v-if="prologueGreeting" class="prologue-greeting" v-html="renderMarkdown(prologueGreeting)"></div>
-                <div v-if="prologueQuestions.length" class="prologue-questions">
-                  <button v-for="(q, i) in prologueQuestions" :key="i" type="button" class="question-chip" @click="sendQuestion(q)">
-                    <span class="question-chip-text">{{ q }}</span>
-                  </button>
-                </div>
-              </template>
-              <div v-else v-html="renderMarkdown(msg.content)"></div>
+      <div class="preview-instrument">
+        <div class="chat-header-row">
+          <div class="chat-heading">
+            <div class="chat-header">调试预览</div>
+            <span>实时会话</span>
+          </div>
+          <el-button data-testid="save-agent" class="save-agent-btn" type="primary" icon="el-icon-check" @click="saveAgent">保存</el-button>
+        </div>
+        <div class="chat-history" ref="chatHistoryRef">
+          <div v-for="(msg, idx) in chatHistory" :key="idx" :class="['chat-msg', msg.role]">
+            <div v-if="msg.role==='assistant'" class="msg-content">
+              <img class="avatar-img" src="../assets/avatar.jpg" alt="助手头像" />
+              <div class="msg-bubble">
+                <template v-if="idx === 0">
+                  <div v-if="prologueGreeting" class="prologue-greeting" v-html="renderMarkdown(prologueGreeting)"></div>
+                  <div v-if="prologueQuestions.length" class="prologue-questions">
+                    <button v-for="(q, i) in prologueQuestions" :key="i" type="button" class="question-chip" @click="sendQuestion(q)">
+                      <span class="question-chip-text">{{ q }}</span>
+                    </button>
+                  </div>
+                </template>
+                <div v-else v-html="renderMarkdown(msg.content)"></div>
+              </div>
+            </div>
+            <div v-else class="msg-content user">
+              <div class="msg-bubble user">{{ msg.content }}</div>
             </div>
           </div>
-          <div v-else class="msg-content user">
-            <div class="msg-bubble user">{{ msg.content }}</div>
+          <div v-if="streamingMsg" class="chat-msg assistant">
+            <img class="avatar-img" src="../assets/avatar.jpg" alt="助手头像" />
+            <div class="msg-bubble"><div v-html="renderMarkdown(streamingMsg)"></div></div>
           </div>
         </div>
-        <div v-if="streamingMsg" class="chat-msg assistant">
-          <img class="avatar-img" src="../assets/avatar.jpg" alt="avatar" />
-          <div class="msg-bubble"><div v-html="renderMarkdown(streamingMsg)"></div></div>
+        <div data-testid="chat-composer" class="chat-input-row">
+          <el-input v-model="inputMsg" placeholder="输入消息，测试此智能体…" @keyup.enter="sendMsg" class="chat-input" />
+          <el-button data-testid="send-message" type="primary" icon="el-icon-s-promotion" @click="sendMsg">发送</el-button>
         </div>
-      </div>
-      <div data-testid="chat-composer" class="chat-input-row">
-        <el-input v-model="inputMsg" placeholder="请输入内容..." @keyup.enter="sendMsg" class="chat-input" />
-        <el-button data-testid="send-message" type="primary" icon="el-icon-s-promotion" @click="sendMsg">发送</el-button>
       </div>
     </section>
   </div>
@@ -250,13 +266,17 @@ export default {
 
 <style scoped>
 .detail-workbench {
-  --workbench-rule: color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  --workbench-rule: color-mix(in srgb, var(--sea-mist) 68%, var(--sea-muted));
+  --workbench-canvas: color-mix(in srgb, var(--sea-mist) 48%, var(--sea-paper));
   margin-top: 24px;
   display: flex;
-  border: 1px solid var(--workbench-rule);
-  border-radius: 12px;
-  background: var(--sea-paper);
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--sea-deep) 10%, transparent);
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--sea-paper) 72%, var(--sea-muted));
+  border-radius: 16px;
+  background: var(--workbench-canvas);
+  box-shadow:
+    0 16px 36px color-mix(in srgb, var(--sea-deep) 9%, transparent),
+    0 2px 5px color-mix(in srgb, var(--sea-deep) 6%, transparent);
   overflow: hidden;
   width: 100%;
 }
@@ -268,203 +288,296 @@ export default {
 }
 
 .settings-pane {
-  flex: 0 0 40%;
-  background: var(--sea-paper);
-  padding: 28px 30px 32px;
+  flex: 0 0 42%;
+  background: color-mix(in srgb, var(--sea-paper) 88%, var(--sea-mist));
+  padding: 28px 30px 30px;
   border-right: 1px solid var(--workbench-rule);
+  border-radius: 10px 0 0 10px;
   min-width: 340px;
   min-height: 0;
   overflow-y: auto;
 }
+.form-section-label {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 14px 80px;
+}
+.form-section-label span,
+.knowledge-header-row > div > span {
+  color: var(--sea-deep);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.form-section-label small,
+.knowledge-header-row small {
+  color: var(--sea-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.form-section-label--conversation {
+  margin-top: 28px;
+}
 .agent-form .el-form-item {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
+}
+.agent-form :deep(.el-form-item__label) {
+  color: var(--sea-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+.agent-form :deep(.el-input__wrapper),
+.chat-input :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sea-muted) 34%, var(--sea-paper)) inset;
+}
+.agent-form :deep(.el-textarea__inner) {
+  line-height: 1.65;
+  resize: vertical;
 }
 .knowledge-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
-  font-weight: 600;
-  color: var(--sea-deep);
-  font-size: 15px;
+  gap: 16px;
+  margin: 28px 0 12px;
+  padding-top: 22px;
+  border-top: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+}
+.knowledge-header-row > div {
+  display: grid;
+  gap: 3px;
+}
+.knowledge-header-row .el-button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding-inline: 12px;
 }
 .knowledge-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 24px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 .kb-card {
-  display: flex;
-  align-items: center;
-  padding: 6px 12px;
-  border: 1px solid color-mix(in srgb, var(--sea-signal) 20%, var(--sea-paper));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--sea-signal) 6%, var(--sea-paper));
-  min-width: 90px;
-  max-width: 140px;
+  width: auto;
+  max-width: min(100%, 220px);
+  border: 1px solid color-mix(in srgb, var(--sea-signal) 22%, var(--sea-paper));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--sea-signal) 5%, var(--sea-paper));
+  box-shadow: none;
 }
 .kb-card:hover {
-  border-color: var(--sea-signal);
+  border-color: color-mix(in srgb, var(--sea-signal) 66%, var(--sea-paper));
 }
 .kb-card-content {
   display: flex;
   align-items: center;
+  gap: 7px;
   width: 100%;
-  justify-content: center;
+  min-height: 34px;
+  padding: 5px 6px 5px 10px;
 }
 .kb-icon {
-  margin-right: 6px;
-  font-size: 16px;
+  flex: 0 0 auto;
+  color: var(--sea-signal);
+  font-size: 15px;
 }
 .kb-name {
-  flex: unset;
-  font-size: 12px;
+  display: -webkit-box;
+  flex: 1 1 auto;
+  overflow: hidden;
   color: var(--sea-ink);
-  font-weight: 500;
-  margin-right: 4px;
-  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
-.kb-card .el-button { flex-shrink: 0; }
-.preview-pane {
-  flex: 0 0 60%;
-  display: flex;
-  flex-direction: column;
-  background: var(--sea-deep);
+.kb-card :deep(.el-card__body) {
   padding: 0;
+}
+.kb-card .el-button {
+  flex: 0 0 auto;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+}
+.kb-card .el-button :deep(.el-icon) {
+  font-size: 14px;
+}
+.preview-pane {
+  flex: 1 1 58%;
+  display: flex;
   min-width: 400px;
   min-height: 0;
+  padding: 14px;
+  background: var(--workbench-canvas);
+  border-radius: 0 10px 10px 0;
+}
+.preview-instrument {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--sea-mist) 58%, var(--sea-muted));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist));
+  box-shadow: 0 5px 13px color-mix(in srgb, var(--sea-deep) 7%, transparent);
 }
 .chat-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 26px 18px 28px;
-  border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 22%, transparent);
-  background: color-mix(in srgb, var(--sea-deep) 88%, var(--sea-ink));
+  min-height: 62px;
+  padding: 12px 16px 12px 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 24%, transparent);
+  background: var(--sea-deep);
   gap: 16px;
 }
+.chat-heading {
+  display: grid;
+  gap: 1px;
+}
+.chat-heading > span {
+  color: color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: .08em;
+}
+.chat-header {
+  color: var(--sea-paper);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
 .save-agent-btn {
-  font-weight: 600;
+  min-height: 36px;
+  padding-inline: 15px;
   border: 0;
   color: var(--sea-deep);
+  font-weight: 700;
   background: var(--sea-sand);
   box-shadow: none;
+}
+.save-agent-btn:hover,
+.save-agent-btn:focus-visible {
+  color: var(--sea-deep);
+  background: color-mix(in srgb, var(--sea-sand) 82%, var(--sea-paper));
 }
 .chat-history {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 28px;
-  background: var(--sea-deep);
+  padding: 22px;
+  background: color-mix(in srgb, var(--sea-mist) 58%, var(--sea-paper));
 }
 .chat-msg {
-  margin-bottom: 18px;
   display: flex;
   align-items: flex-start;
+  margin-bottom: 16px;
 }
 .msg-content {
   display: flex;
   align-items: flex-start;
+  max-width: min(85%, 620px);
 }
 .avatar-img {
-  width: 38px;
-  height: 38px;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  margin: 2px 10px 0 0;
+  border: 1px solid color-mix(in srgb, var(--sea-sand) 58%, var(--sea-paper));
   border-radius: 50%;
+  background: var(--sea-paper);
   object-fit: cover;
-  margin-right: 14px;
-  background: var(--sea-mist);
 }
 .msg-bubble {
-  background: color-mix(in srgb, var(--sea-deep) 78%, var(--sea-signal));
-  border-radius: 4px 14px 14px;
-  padding: 13px 16px;
-  width: 100%;
-  max-width: 80%;
-  font-size: 16px;
-  color: var(--sea-paper);
-  word-break: break-all;
+  width: auto;
+  max-width: 100%;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--sea-muted) 24%, var(--sea-paper));
+  border-radius: 5px 12px 12px;
+  background: var(--sea-paper);
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--sea-deep) 5%, transparent);
   box-sizing: border-box;
+  color: var(--sea-ink);
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
 }
 .msg-bubble.user {
-  background: var(--sea-signal);
-  border-radius: 14px 4px 14px 14px;
-  color: var(--sea-deep);
-  margin-right: 0;
+  border-color: var(--sea-deep);
+  border-radius: 12px 5px 12px 12px;
+  background: var(--sea-deep);
+  color: var(--sea-paper);
+  box-shadow: none;
 }
 .user {
   flex-direction: row-reverse;
+  margin-left: auto;
 }
 .prologue-greeting {
-  margin-bottom: 18px;
-  font-size: 16px;
-  color: var(--sea-paper);
-  font-weight: 500;
+  margin-bottom: 14px;
+  color: var(--sea-ink);
+  font-weight: 600;
 }
 .prologue-questions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 6px;
+  display: grid;
+  gap: 7px;
   width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  word-break: break-word;
 }
 .question-chip {
-  border: 1px solid color-mix(in srgb, var(--sea-signal) 55%, transparent);
-  background: transparent;
-  color: color-mix(in srgb, var(--sea-paper) 82%, var(--sea-signal));
-  border-radius: 7px;
-  padding: 11px 14px;
-  font: inherit;
-  font-size: 14px;
-  cursor: pointer;
-  text-align: left;
-  font-weight: 500;
   width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  margin-left: 0;
-  word-break: break-word;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--sea-signal) 40%, var(--sea-paper));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sea-signal) 6%, var(--sea-paper));
+  color: var(--sea-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  text-align: left;
 }
 .question-chip:hover,
 .question-chip:focus-visible {
-  background: color-mix(in srgb, var(--sea-signal) 24%, transparent);
-  color: var(--sea-paper);
+  border-color: var(--sea-signal);
+  background: color-mix(in srgb, var(--sea-signal) 13%, var(--sea-paper));
 }
 .question-chip-text {
-  flex: 1;
-  text-align: left;
+  display: block;
 }
 .chat-input-row {
-  flex: 0 0 auto;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  padding: 18px 28px 24px;
-  border-top: 1px solid color-mix(in srgb, var(--sea-mist) 22%, transparent);
-  background: color-mix(in srgb, var(--sea-deep) 88%, var(--sea-ink));
+  gap: 8px;
+  padding: 13px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--sea-mist) 64%, var(--sea-muted));
+  background: var(--sea-paper);
 }
 .chat-input {
   flex: 1;
-  margin-right: 8px;
-  box-shadow: none;
-  max-width: 700px;
+  min-width: 0;
 }
-.chat-header {
-  color: var(--sea-paper);
-  font-size: 16px;
-  font-weight: 700;
+.chat-input-row .el-button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding-inline: 15px;
 }
 
 @media (max-width: 720px) {
   .detail-workbench--viewport {
     height: auto;
     max-height: none;
+    padding: 4px;
     flex-direction: column;
   }
 
@@ -475,12 +588,20 @@ export default {
   }
 
   .settings-pane {
+    padding: 24px 18px;
     border-right: 0;
     border-bottom: 1px solid var(--workbench-rule);
+    border-radius: 10px 10px 0 0;
     overflow-y: visible;
   }
 
-  .preview-pane { min-height: 0; }
+  .form-section-label { margin-left: 0; }
+
+  .preview-pane {
+    min-height: 0;
+    padding: 12px;
+    border-radius: 0 0 10px 10px;
+  }
 
   .chat-history {
     flex: 0 0 auto;
