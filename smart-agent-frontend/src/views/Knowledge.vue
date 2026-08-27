@@ -27,7 +27,7 @@
             <div><dt>文档</dt><dd>{{ kb.docCount || 0 }}</dd></div>
             <div><dt>智能体</dt><dd>{{ kb.agentCount || 0 }}</dd></div>
           </dl>
-          <el-button :aria-label="`删除知识库 ${kb.name}`" class="entity-card__delete" type="danger" circle @click.stop="handleDelete(kb.id)"><el-icon><Delete /></el-icon></el-button>
+          <el-button :aria-label="`删除知识库 ${kb.name}`" class="entity-card__delete" type="danger" circle @click.stop="handleDelete(kb.id)"><el-icon class="entity-card__delete-icon"><Delete /></el-icon></el-button>
         </div>
       </el-card>
     </section>
@@ -280,7 +280,20 @@ export default {
 
 .entity-card__delete {
   flex: 0 0 auto;
-  color: var(--sea-danger);
+  border-color: var(--sea-danger);
+  background: var(--sea-danger);
+  color: var(--sea-paper);
+}
+
+.entity-card__delete:hover,
+.entity-card__delete:focus-visible {
+  border-color: var(--el-color-danger-dark-2);
+  background: var(--el-color-danger-dark-2);
+  color: var(--sea-paper);
+}
+
+.entity-card__delete-icon {
+  font-size: 16px;
 }
 
 .entity-page__empty {

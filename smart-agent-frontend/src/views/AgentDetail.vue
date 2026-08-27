@@ -1,5 +1,5 @@
 <template>
-  <div class="detail-workbench">
+  <div data-testid="agent-workbench" class="detail-workbench detail-workbench--viewport">
     <!-- 左侧设置区 -->
     <section class="settings-pane">
       <el-form :model="agentInfo" label-width="80px" class="agent-form">
@@ -45,7 +45,7 @@
       </el-dialog>
     </section>
     <!-- 右侧调试预览区 -->
-    <section class="preview-pane">
+    <section data-testid="debug-preview" class="preview-pane preview-pane--adaptive">
       <div class="chat-header-row">
         <div class="chat-header">调试预览</div>
         <el-button data-testid="save-agent" class="save-agent-btn" type="primary" icon="el-icon-check" @click="saveAgent">保存</el-button>
@@ -75,7 +75,7 @@
           <div class="msg-bubble"><div v-html="renderMarkdown(streamingMsg)"></div></div>
         </div>
       </div>
-      <div class="chat-input-row">
+      <div data-testid="chat-composer" class="chat-input-row">
         <el-input v-model="inputMsg" placeholder="请输入内容..." @keyup.enter="sendMsg" class="chat-input" />
         <el-button data-testid="send-message" type="primary" icon="el-icon-s-promotion" @click="sendMsg">发送</el-button>
       </div>
@@ -253,7 +253,6 @@ export default {
   --workbench-rule: color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
   margin-top: 24px;
   display: flex;
-  min-height: 640px;
   border: 1px solid var(--workbench-rule);
   border-radius: 12px;
   background: var(--sea-paper);
@@ -261,12 +260,20 @@ export default {
   overflow: hidden;
   width: 100%;
 }
+
+.detail-workbench--viewport {
+  height: min(760px, calc(100dvh - 132px));
+  min-height: 0;
+  max-height: calc(100dvh - 132px);
+}
+
 .settings-pane {
   flex: 0 0 40%;
   background: var(--sea-paper);
   padding: 28px 30px 32px;
   border-right: 1px solid var(--workbench-rule);
   min-width: 340px;
+  min-height: 0;
   overflow-y: auto;
 }
 .agent-form .el-form-item {
@@ -326,6 +333,7 @@ export default {
   background: var(--sea-deep);
   padding: 0;
   min-width: 400px;
+  min-height: 0;
 }
 .chat-header-row {
   display: flex;
@@ -345,6 +353,7 @@ export default {
 }
 .chat-history {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 28px;
   background: var(--sea-deep);
@@ -433,6 +442,7 @@ export default {
   text-align: left;
 }
 .chat-input-row {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   padding: 18px 28px 24px;
@@ -452,8 +462,9 @@ export default {
 }
 
 @media (max-width: 720px) {
-  .detail-workbench {
-    min-height: 0;
+  .detail-workbench--viewport {
+    height: auto;
+    max-height: none;
     flex-direction: column;
   }
 
@@ -463,8 +474,18 @@ export default {
     min-width: 0;
   }
 
-  .settings-pane { border-right: 0; border-bottom: 1px solid var(--workbench-rule); }
-  .preview-pane { min-height: 50vh; }
-  .chat-history { min-height: 50vh; }
+  .settings-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--workbench-rule);
+    overflow-y: visible;
+  }
+
+  .preview-pane { min-height: 0; }
+
+  .chat-history {
+    flex: 0 0 auto;
+    min-height: 260px;
+    overflow-y: visible;
+  }
 }
 </style>

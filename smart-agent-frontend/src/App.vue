@@ -7,7 +7,9 @@
     <div v-else class="workspace-shell">
       <aside class="workspace-sidebar">
         <router-link class="brand" to="/knowledge">
-          <img src="./assets/logo.png" alt="" class="brand__mark" />
+          <span class="brand__mark-shell" aria-hidden="true">
+            <img :src="brandOtter" alt="" class="brand__mark" />
+          </span>
           <span>小达智能体</span>
         </router-link>
 
@@ -44,6 +46,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import brandOtter from './assets/brand-otter.png'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -109,7 +112,7 @@ onMounted(() => {
   min-width: 0;
   height: 100vh;
   padding: 24px 16px 18px;
-  background: var(--sea-deep);
+  background: color-mix(in srgb, var(--sea-deep) 92%, var(--sea-signal));
   color: color-mix(in srgb, var(--sea-paper) 88%, var(--sea-mist));
 }
 
@@ -119,7 +122,7 @@ onMounted(() => {
   gap: 10px;
   min-height: 48px;
   padding: 0 8px 22px;
-  border-bottom: 1px solid color-mix(in srgb, var(--sea-mist) 18%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--sea-sand) 28%, transparent);
   color: var(--sea-paper);
   font-family: 'Noto Serif SC', serif;
   font-size: 19px;
@@ -128,10 +131,24 @@ onMounted(() => {
   text-decoration: none;
 }
 
+.brand__mark-shell {
+  display: grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--sea-sand) 62%, var(--sea-paper));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sea-signal) 56%, var(--sea-paper));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sea-sand) 18%, transparent);
+}
+
 .brand__mark {
-  width: 32px;
-  height: 32px;
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 65% 55%;
+  transform: scale(1.48);
 }
 
 .workspace-navigation {

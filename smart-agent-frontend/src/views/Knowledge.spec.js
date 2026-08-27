@@ -42,4 +42,17 @@ describe('knowledge list', () => {
     expect(wrapper.get('[data-testid="create-knowledge"]').text()).toBe('创建知识库')
     expect(wrapper.get('.entity-card__title').text()).toBe('产品资料')
   })
+
+  it('renders a contrasting trash-can icon in every delete control', async () => {
+    const wrapper = shallowMount(Knowledge, {
+      global: {
+        stubs,
+        config: { globalProperties: { $message: { error: vi.fn() } } },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.get('[aria-label="删除知识库 产品资料"] .entity-card__delete-icon').exists()).toBe(true)
+  })
 })

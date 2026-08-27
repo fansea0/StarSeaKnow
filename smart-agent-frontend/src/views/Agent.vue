@@ -24,7 +24,7 @@
         </div>
         <div class="entity-card__footer">
           <span class="entity-card__hint">查看配置与对话能力</span>
-          <el-button :aria-label="`删除智能体 ${agent.name}`" class="entity-card__delete" type="danger" circle @click.stop="handleDelete(agent.id)"><el-icon><Delete /></el-icon></el-button>
+          <el-button :aria-label="`删除智能体 ${agent.name}`" class="entity-card__delete" type="danger" circle @click.stop="handleDelete(agent.id)"><el-icon class="entity-card__delete-icon"><Delete /></el-icon></el-button>
         </div>
       </el-card>
     </section>
@@ -43,12 +43,6 @@
         </el-form-item>
         <el-form-item label="描述" prop="description">
           <el-input v-model="createForm.description" maxlength="256" show-word-limit placeholder="请输入描述" />
-        </el-form-item>
-        <el-form-item label="开场白" prop="prologue">
-          <el-input v-model="createForm.prologue" maxlength="512" show-word-limit placeholder="请输入开场白" />
-        </el-form-item>
-        <el-form-item label="角色描述" prop="roleDescription">
-          <el-input v-model="createForm.roleDescription" maxlength="512" show-word-limit placeholder="请输入角色描述" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -71,9 +65,7 @@ export default {
       showCreate: false,
       createForm: {
         name: '',
-        description: '',
-        prologue: '',
-        roleDescription: ''
+        description: ''
       },
       rules: {
         name: [
@@ -82,14 +74,6 @@ export default {
         ],
         description: [
           { required: true, message: '请输入描述', trigger: 'blur' },
-          { max: 100, message: '最多100个字符', trigger: 'blur' }
-        ],
-        prologue: [
-          { required: true, message: '请输入开场白', trigger: 'blur' },
-          { max: 100, message: '最多100个字符', trigger: 'blur' }
-        ],
-        roleDescription: [
-          { required: true, message: '请输入角色描述', trigger: 'blur' },
           { max: 100, message: '最多100个字符', trigger: 'blur' }
         ]
       },
@@ -131,7 +115,7 @@ export default {
             if (res.data && res.data.code === 200) {
               await this.fetchAgentList()
               this.showCreate = false
-              this.createForm = { name: '', description: '', prologue: '', roleDescription: '' }
+              this.createForm = { name: '', description: '' }
               this.$message.success('创建成功！')
             } else {
               this.$message.error(res.data.msg || '创建失败')
@@ -282,7 +266,20 @@ export default {
 
 .entity-card__delete {
   flex: 0 0 auto;
-  color: var(--sea-danger);
+  border-color: var(--sea-danger);
+  background: var(--sea-danger);
+  color: var(--sea-paper);
+}
+
+.entity-card__delete:hover,
+.entity-card__delete:focus-visible {
+  border-color: var(--el-color-danger-dark-2);
+  background: var(--el-color-danger-dark-2);
+  color: var(--sea-paper);
+}
+
+.entity-card__delete-icon {
+  font-size: 16px;
 }
 
 .entity-page__empty {
