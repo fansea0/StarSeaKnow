@@ -1,6 +1,13 @@
 server:
   port: 8090
 
+platform:
+  bootstrap:
+    # Override PLATFORM_BOOTSTRAP_PASSWORD for every deployment. It is accepted
+    # only while the first platform administrator is being created.
+    username: ${PLATFORM_BOOTSTRAP_USERNAME:su}
+    password: ${PLATFORM_BOOTSTRAP_PASSWORD:ChangeMe!123}
+
 spring:
   application:
     name: Spring-AI
