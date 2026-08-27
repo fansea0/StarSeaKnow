@@ -3,6 +3,11 @@ set -euo pipefail
 BASE=${BASE:-http://localhost:8090}
 SU_USER=${SU_USER:-su}
 
+if [[ "${SMOKE_ALLOW_MUTATION:-}" != "1" ]]; then
+  echo "Refusing to run: this smoke test creates tenants/invitations and may change the initial platform password. Use a disposable local database and set SMOKE_ALLOW_MUTATION=1 to acknowledge." >&2
+  exit 2
+fi
+
 if [[ -z "${SU_PWD:-}" ]]; then
   echo "SU_PWD is required (the platform administrator password)." >&2
   exit 1

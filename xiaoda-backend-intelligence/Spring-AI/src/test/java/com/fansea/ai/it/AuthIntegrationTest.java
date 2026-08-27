@@ -3,6 +3,7 @@ package com.fansea.ai.it;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -48,14 +49,26 @@ class AuthIntegrationTest {
 
     @BeforeEach
     void resetSu() {
+        cleanAuthFixtures();
         // Reset platform su password to a known value via the project's PasswordEncoder
         // (not BCrypt.hashpw directly — see Task 19 ruling on the abstraction).
         jdbc.update("UPDATE platform_admin SET password_hash = ? WHERE username='su'",
                 encoder.hash("su-test-pw"));
+    }
+
+    @AfterEach
+    void cleanUp() {
+        cleanAuthFixtures();
+    }
+
+    private void cleanAuthFixtures() {
+        // Invitations have foreign keys to their consumed tenant/user. Delete only
+        // this test's invitations first, then its session, user and tenant data.
         jdbc.update("DELETE FROM platform_invitation WHERE code LIKE 'auth-it-%'");
-        jdbc.update("DELETE FROM invite");
-        jdbc.update("DELETE FROM refresh_token");
-        jdbc.update("DELETE FROM app_user WHERE username <> 'admin' OR id NOT IN (SELECT id FROM app_user WHERE username='admin')");
+        jdbc.update("DELETE FROM refresh_token WHERE user_id IN (SELECT id FROM app_user WHERE username = 'auth-it-admin')");
+        jdbc.update("DELETE FROM app_user WHERE username = 'auth-it-admin'");
+        jdbc.update("DELETE FROM tenant WHERE name = 'auth-it-admin 的工作区' AND NOT EXISTS " +
+                "(SELECT 1 FROM app_user WHERE app_user.tenant_id = tenant.id)");
     }
 
     @Test

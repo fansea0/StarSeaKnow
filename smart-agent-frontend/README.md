@@ -46,16 +46,16 @@ npm run test
 npm run build
 ```
 
-完整后端/前端启动与邀请码开户烟雾流程见仓库根目录的 `xiaoda-backend-intelligence/scripts/smoke-auth.sh`。为避免泄露凭据，脚本要求通过环境变量提供平台管理员密码，并且不会输出密码或访问令牌：
+完整后端/前端启动与邀请码开户烟雾流程见仓库根目录的 `xiaoda-backend-intelligence/scripts/smoke-auth.sh`。该脚本会创建邀请码、租户和用户；若管理员仍处于首次登录状态，还会修改其密码。因此只能对**可丢弃的本地测试数据库**执行，并必须显式确认写入操作。脚本不会输出密码或访问令牌：
 
 ```bash
-BASE=http://localhost:8090 SU_PWD='已知平台密码' \\
+SMOKE_ALLOW_MUTATION=1 BASE=http://localhost:8090 SU_PWD='已知平台密码' \\
   ../xiaoda-backend-intelligence/scripts/smoke-auth.sh
 ```
 
 如果该账号仍处于首次改密状态，还需要一次性提供新的平台管理员密码：
 
 ```bash
-BASE=http://localhost:8090 SU_PWD='初始密码' SU_NEW_PWD='新的强密码' \\
+SMOKE_ALLOW_MUTATION=1 BASE=http://localhost:8090 SU_PWD='初始密码' SU_NEW_PWD='新的强密码' \\
   ../xiaoda-backend-intelligence/scripts/smoke-auth.sh
 ```
