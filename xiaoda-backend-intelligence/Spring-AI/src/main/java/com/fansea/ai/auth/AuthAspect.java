@@ -35,6 +35,7 @@ public class AuthAspect {
     @Around("@annotation(com.fansea.ai.auth.RequireLogin) || @within(com.fansea.ai.auth.RequireLogin)")
     public Object requireLogin(ProceedingJoinPoint pjp) throws Throwable {
         checkAuth();
+        enforcePlatformInitialPasswordChange(pjp, AuthContext.current());
         return pjp.proceed();
     }
 

@@ -1,15 +1,23 @@
 package com.fansea.platform;
 
 import com.fansea.ai.auth.AuthAspect;
+import com.fansea.ai.auth.AuthController;
 import com.fansea.ai.auth.AuthContext;
 import com.fansea.ai.auth.AuthAuditLogger;
+import com.fansea.ai.auth.AuthService;
+import com.fansea.ai.auth.JwtService;
+import com.fansea.ai.auth.PasswordEncoder;
 import com.fansea.ai.auth.RefreshCookie;
+import com.fansea.ai.auth.RefreshTokenService;
+import com.fansea.ai.auth.TenantMemberController;
+import com.fansea.ai.auth.TenantRegistrationService;
 import com.fansea.ai.config.GlobalExceptionHandler;
 import com.fansea.ai.domain.PlatformAdmin;
 import com.fansea.ai.domain.PlatformInvitation;
 import com.fansea.ai.domain.Tenant;
 import com.fansea.ai.mapper.PlatformAdminMapper;
 import com.fansea.ai.mapper.PlatformInvitationMapper;
+import com.fansea.ai.mapper.AppUserMapper;
 import com.fansea.ai.mapper.TenantMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,9 +43,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest({PlatformInvitationController.class, PlatformTenantController.class, PlatformAuthController.class})
+@WebMvcTest({PlatformInvitationController.class, PlatformTenantController.class, PlatformAuthController.class,
+        AuthController.class, TenantMemberController.class})
 @Import({AuthAspect.class, GlobalExceptionHandler.class, PlatformInvitationController.class,
-        PlatformTenantController.class, PlatformAuthController.class})
+        PlatformTenantController.class, PlatformAuthController.class, AuthController.class, TenantMemberController.class})
 class PlatformInvitationControllerTest {
 
     @SpringBootConfiguration
@@ -60,6 +69,18 @@ class PlatformInvitationControllerTest {
     private PlatformAuthService authService;
     @MockBean
     private RefreshCookie cookies;
+    @MockBean
+    private AuthService businessAuthService;
+    @MockBean
+    private RefreshTokenService refreshTokens;
+    @MockBean
+    private JwtService jwt;
+    @MockBean
+    private TenantRegistrationService registration;
+    @MockBean
+    private AppUserMapper users;
+    @MockBean
+    private PasswordEncoder passwordEncoder;
 
     @BeforeEach
     void setPlatformAdminContext() {
@@ -134,6 +155,27 @@ class PlatformInvitationControllerTest {
                         .contentType("application/json")
                         .content("{\"currentPassword\":\"old\",\"newPassword\":\"Strong!123\",\"confirmPassword\":\"Strong!123\"}"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void platformAdminMustChangePassword_blocksAllRequireLoginEndpoints_butNotBusinessUsers() throws Exception {
+        PlatformAdmin admin = new PlatformAdmin();
+        admin.setId(1L);
+        admin.setMustChangePassword(true);
+        when(admins.selectById(1L)).thenReturn(admin);
+
+        mockMvc.perform(get("/tenant/members"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(40301));
+        mockMvc.perform(get("/auth/me"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(40301));
+
+        AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 2L, 1L, "tenant_member", "test-jti"));
+        when(users.selectList(any())).thenReturn(List.of());
+        mockMvc.perform(get("/tenant/members"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
     }
 
     @Test
