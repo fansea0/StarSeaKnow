@@ -1,6 +1,5 @@
 package com.fansea.ai.auth;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fansea.ai.domain.AppUser;
 import com.fansea.ai.domain.Tenant;
 import com.fansea.ai.mapper.AppUserMapper;
@@ -8,7 +7,6 @@ import com.fansea.ai.mapper.TenantMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.List;
 
 @Service
 public class AuthService {
@@ -33,21 +31,27 @@ public class AuthService {
     }
     public record LoginResult(String accessToken, String refreshRaw, Instant expiresAt, UserView user) {}
 
-    public LoginResult login(String tenantCode, String username, String rawPwd, String ip, String ua) {
-        Tenant t = tenants.selectList(new QueryWrapper<Tenant>().eq("code", tenantCode).eq("status", 1))
-                .stream().findFirst()
-                .orElseThrow(() -> { audit.loginFail(tenantCode, username, ip); return new AuthException(AuthErrorCode.MISSING_TOKEN, "bad credentials"); });
-
-        AppUser u = users.selectList(new QueryWrapper<AppUser>()
-                .eq("tenant_id", t.getId()).eq("username", username).eq("status", 1)
-        ).stream().findFirst()
-                .orElseThrow(() -> { audit.loginFail(tenantCode, username, ip); return new AuthException(AuthErrorCode.MISSING_TOKEN, "bad credentials"); });
-
-        if (!encoder.matches(rawPwd, u.getPasswordHash())) {
-            audit.loginFail(tenantCode, username, ip);
+    public LoginResult login(String username, String rawPwd, String ip, String ua) {
+        AppUser u = users.selectByUsername(username);
+        if (u == null || !Integer.valueOf(1).equals(u.getStatus())) {
+            audit.loginFail("username", username, ip);
+            throw new AuthException(AuthErrorCode.MISSING_TOKEN, "bad credentials");
+        }
+        Tenant t = tenants.selectById(u.getTenantId());
+        if (t == null || !Integer.valueOf(1).equals(t.getStatus())) {
+            audit.loginFail("username", username, ip);
             throw new AuthException(AuthErrorCode.MISSING_TOKEN, "bad credentials");
         }
 
+        if (!encoder.matches(rawPwd, u.getPasswordHash())) {
+            audit.loginFail("username", username, ip);
+            throw new AuthException(AuthErrorCode.MISSING_TOKEN, "bad credentials");
+        }
+
+        return issueBusinessSession(u, ip, ua);
+    }
+
+    LoginResult issueBusinessSession(AppUser u, String ip, String ua) {
         String access = jwt.signAccess(u.getId(), u.getTenantId(), u.getRole());
         RefreshTokenService.IssueResult rr = refresh.issue(u.getId(), ua, ip);
         audit.login(u.getId(), u.getTenantId(), ip, ua);

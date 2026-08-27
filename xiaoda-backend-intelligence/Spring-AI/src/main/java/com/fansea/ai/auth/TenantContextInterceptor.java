@@ -9,7 +9,7 @@ import java.util.Set;
 public class TenantContextInterceptor implements HandlerInterceptor {
 
     private static final Set<String> EXCLUDED_PREFIXES = Set.of(
-            "/auth/login", "/auth/refresh", "/auth/accept-invite",
+            "/auth/login", "/auth/refresh", "/auth/register",
             "/platform/auth/login", "/platform/auth/refresh", "/platform/auth/logout",
             "/error"
     );

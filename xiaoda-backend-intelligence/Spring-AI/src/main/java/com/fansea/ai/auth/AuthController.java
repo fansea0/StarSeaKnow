@@ -18,14 +18,16 @@ public class AuthController {
     private final RefreshTokenService refresh;
     private final JwtService jwt;
     private final AuthAuditLogger audit;
-    private final AcceptInviteService accept;
+    private final TenantRegistrationService registration;
     private final RefreshCookie cookies;
 
-    public record LoginReq(@NotBlank String tenantCode, @NotBlank String username, @NotBlank String password) {}
+    public record LoginReq(@NotBlank String username, @NotBlank String password) {}
+    public record RegisterReq(@NotBlank String inviteCode, @NotBlank String username,
+                              @NotBlank String password, @NotBlank String confirmPassword) {}
 
     @PostMapping("/login")
     public AjaxResult login(@RequestBody LoginReq req, HttpServletResponse resp) {
-        AuthService.LoginResult r = auth.login(req.tenantCode(), req.username(), req.password(), null, null);
+        AuthService.LoginResult r = auth.login(req.username(), req.password(), null, null);
         cookies.setBusiness(resp, r.refreshRaw(), false);
         return AjaxResult.success(Map.of(
                 "accessToken", r.accessToken(),
@@ -55,10 +57,11 @@ public class AuthController {
         return AjaxResult.success();
     }
 
-    @PostMapping("/accept-invite")
-    public AjaxResult acceptInvite(@RequestBody Map<String, String> req, HttpServletResponse resp) {
-        AuthService.LoginResult r = accept.accept(
-                req.get("code"), req.get("password"), req.get("displayName"), null, null);
+    @PostMapping("/register")
+    public AjaxResult register(@RequestBody RegisterReq req, HttpServletResponse resp) {
+        AuthService.LoginResult r = registration.register(
+                new TenantRegistrationService.RegisterRequest(req.inviteCode(), req.username(), req.password(), req.confirmPassword()),
+                null, null);
         cookies.setBusiness(resp, r.refreshRaw(), false);
         return AjaxResult.success(Map.of(
                 "accessToken", r.accessToken(),
