@@ -32,7 +32,8 @@ public class PlatformAuthService {
         this.audit = audit;
     }
 
-    public record PlatformLoginResult(String accessToken, String refreshRaw, Instant expiresAt) {}
+    public record PlatformLoginResult(String accessToken, String refreshRaw, Instant expiresAt,
+                                      boolean mustChangePassword) {}
 
     public PlatformLoginResult login(String username, String rawPwd, String ip, String ua) {
         PlatformAdmin a = admins.selectList(new QueryWrapper<PlatformAdmin>().eq("username", username))
@@ -45,6 +46,32 @@ public class PlatformAuthService {
         // 平台 su 重新登录即可,前端 cookie sm_platform_refresh 设置 Max-Age=0 提示浏览器清掉。
         String access = jwt.signPlatformAccess(a.getId());
         audit.login(a.getId(), null, ip, ua);
-        return new PlatformLoginResult(access, null, Instant.now().plusSeconds(15 * 60));
+        return new PlatformLoginResult(access, null, Instant.now().plusSeconds(15 * 60),
+                Boolean.TRUE.equals(a.getMustChangePassword()));
+    }
+
+    public boolean changeInitialPassword(long platformAdminId, String currentPassword,
+                                         String newPassword, String confirmPassword) {
+        if (isBlank(currentPassword) || isBlank(newPassword) || isBlank(confirmPassword)) {
+            throw new AuthException(AuthErrorCode.REGISTRATION_INVALID, "password fields are required");
+        }
+        if (!newPassword.equals(confirmPassword)) {
+            throw new AuthException(AuthErrorCode.REGISTRATION_INVALID, "password confirmation does not match");
+        }
+        if (newPassword.length() < 8) {
+            throw new AuthException(AuthErrorCode.REGISTRATION_INVALID, "password must be at least 8 characters");
+        }
+        PlatformAdmin admin = admins.selectById(platformAdminId);
+        if (admin == null || !encoder.matches(currentPassword, admin.getPasswordHash())) {
+            throw new AuthException(AuthErrorCode.MISSING_TOKEN, "bad credentials");
+        }
+        admin.setPasswordHash(encoder.hash(newPassword));
+        admin.setMustChangePassword(false);
+        admins.updateById(admin);
+        return false;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }

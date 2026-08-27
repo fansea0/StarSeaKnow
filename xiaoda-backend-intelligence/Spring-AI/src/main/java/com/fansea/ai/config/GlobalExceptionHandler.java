@@ -59,7 +59,7 @@ public class GlobalExceptionHandler
             http = 401;
         } else if (code == 40301 || code == 40302) {
             http = 403;
-        } else if (code == 40901) {
+        } else if (code == 40901 || code == 40902) {
             http = 409;
         } else if (code == 41001 || code == 41002) {
             http = 410;

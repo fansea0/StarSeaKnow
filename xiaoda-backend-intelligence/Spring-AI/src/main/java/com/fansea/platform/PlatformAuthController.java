@@ -1,6 +1,9 @@
 package com.fansea.platform;
 
 import com.fansea.ai.auth.RefreshCookie;
+import com.fansea.ai.auth.AllowInitialPasswordChange;
+import com.fansea.ai.auth.AuthContext;
+import com.fansea.ai.auth.RequireRole;
 import com.fansea.ai.domain.dto.AjaxResult;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +23,7 @@ public class PlatformAuthController {
     private final RefreshCookie cookies;
 
     public record LoginReq(String username, String password) {}
+    public record ChangeInitialPasswordReq(String currentPassword, String newPassword, String confirmPassword) {}
 
     @PostMapping("/login")
     public AjaxResult login(@RequestBody LoginReq req, HttpServletResponse resp) {
@@ -27,8 +31,18 @@ public class PlatformAuthController {
         cookies.setPlatform(resp, "", true);
         return AjaxResult.success(Map.of(
                 "accessToken", r.accessToken(),
-                "expiresAt", r.expiresAt().toEpochMilli()
+                "expiresAt", r.expiresAt().toEpochMilli(),
+                "mustChangePassword", r.mustChangePassword()
         ));
+    }
+
+    @PostMapping("/change-initial-password")
+    @RequireRole("platform_admin")
+    @AllowInitialPasswordChange
+    public AjaxResult changeInitialPassword(@RequestBody ChangeInitialPasswordReq req) {
+        boolean mustChangePassword = svc.changeInitialPassword(AuthContext.current().getUserId(),
+                req.currentPassword(), req.newPassword(), req.confirmPassword());
+        return AjaxResult.success(Map.of("mustChangePassword", mustChangePassword));
     }
 
     @PostMapping("/logout")
