@@ -42,4 +42,17 @@ describe('agent detail debug workbench', () => {
     expect(wrapper.text()).toContain('基础资料')
     expect(wrapper.text()).toContain('对话设定')
   })
+
+  it('uses one flush editing canvas with inline knowledge links', () => {
+    const wrapper = shallowMount(AgentDetail, {
+      global: {
+        stubs,
+        mocks: { $route: { params: { id: '1' } }, $message: { error: vi.fn() } },
+      },
+    })
+
+    expect(wrapper.get('[data-testid="agent-editor-canvas"]').classes()).toContain('settings-pane')
+    expect(wrapper.get('[data-testid="knowledge-links"]').classes()).toContain('knowledge-list')
+    expect(wrapper.find('.kb-card').exists()).toBe(false)
+  })
 })

@@ -1,8 +1,8 @@
 <template>
   <div data-testid="agent-workbench" class="detail-workbench detail-workbench--viewport">
     <!-- 左侧设置区 -->
-    <section class="settings-pane">
-      <el-form :model="agentInfo" label-width="80px" class="agent-form">
+    <section data-testid="agent-editor-canvas" class="settings-pane">
+      <el-form :model="agentInfo" label-width="96px" class="agent-form">
         <div class="form-section-label">
           <span>基础资料</span>
           <small>定义团队识别的智能体信息</small>
@@ -31,9 +31,9 @@
         </div>
         <el-button size="small" type="primary" icon="el-icon-plus" @click="showAddKnowledge = true">新增关联</el-button>
       </div>
-      <div class="knowledge-list">
-        <el-card v-for="kb in knowledgeList" :key="kb.id" class="kb-card" shadow="hover">
-          <div class="kb-card-content">
+      <div data-testid="knowledge-links" class="knowledge-list">
+        <div v-for="kb in knowledgeList" :key="kb.id" class="knowledge-link">
+          <div class="knowledge-link-content">
             <el-icon v-if="kb.type==='txt'" class="kb-icon"><i class="el-icon-document"></i></el-icon>
             <el-icon v-else-if="kb.type==='md'" class="kb-icon"><i class="el-icon-document-checked"></i></el-icon>
             <el-icon v-else class="kb-icon"><i class="el-icon-folder"></i></el-icon>
@@ -42,7 +42,7 @@
               <el-icon><Delete /></el-icon>
             </el-button>
           </div>
-        </el-card>
+        </div>
       </div>
       <!-- 新增知识库关联弹窗 -->
       <el-dialog v-model="showAddKnowledge" title="新增知识库关联" width="400px">
@@ -270,13 +270,11 @@ export default {
   --workbench-canvas: color-mix(in srgb, var(--sea-mist) 48%, var(--sea-paper));
   margin-top: 24px;
   display: flex;
-  padding: 6px;
+  padding: 0;
   border: 1px solid color-mix(in srgb, var(--sea-paper) 72%, var(--sea-muted));
   border-radius: 16px;
   background: var(--workbench-canvas);
-  box-shadow:
-    0 16px 36px color-mix(in srgb, var(--sea-deep) 9%, transparent),
-    0 2px 5px color-mix(in srgb, var(--sea-deep) 6%, transparent);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--sea-deep) 7%, transparent);
   overflow: hidden;
   width: 100%;
 }
@@ -288,11 +286,11 @@ export default {
 }
 
 .settings-pane {
+  --form-label-width: 96px;
   flex: 0 0 42%;
-  background: color-mix(in srgb, var(--sea-paper) 88%, var(--sea-mist));
-  padding: 28px 30px 30px;
+  background: transparent;
+  padding: 32px 36px 30px;
   border-right: 1px solid var(--workbench-rule);
-  border-radius: 10px 0 0 10px;
   min-width: 340px;
   min-height: 0;
   overflow-y: auto;
@@ -300,7 +298,7 @@ export default {
 .form-section-label {
   display: grid;
   gap: 3px;
-  margin: 0 0 14px 80px;
+  margin: 0 0 16px var(--form-label-width);
 }
 .form-section-label span,
 .knowledge-header-row > div > span {
@@ -316,12 +314,13 @@ export default {
   line-height: 1.5;
 }
 .form-section-label--conversation {
-  margin-top: 28px;
+  margin-top: 34px;
 }
 .agent-form .el-form-item {
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 .agent-form :deep(.el-form-item__label) {
+  width: var(--form-label-width) !important;
   color: var(--sea-ink);
   font-size: 14px;
   font-weight: 600;
@@ -355,27 +354,26 @@ export default {
 .knowledge-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
   margin-bottom: 8px;
 }
-.kb-card {
+.knowledge-link {
   width: auto;
   max-width: min(100%, 220px);
-  border: 1px solid color-mix(in srgb, var(--sea-signal) 22%, var(--sea-paper));
-  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--sea-signal) 28%, var(--sea-paper));
+  border-radius: 999px;
   background: color-mix(in srgb, var(--sea-signal) 5%, var(--sea-paper));
-  box-shadow: none;
 }
-.kb-card:hover {
+.knowledge-link:hover {
   border-color: color-mix(in srgb, var(--sea-signal) 66%, var(--sea-paper));
 }
-.kb-card-content {
+.knowledge-link-content {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
-  min-height: 34px;
-  padding: 5px 6px 5px 10px;
+  min-height: 32px;
+  padding: 3px 4px 3px 10px;
 }
 .kb-icon {
   flex: 0 0 auto;
@@ -383,8 +381,8 @@ export default {
   font-size: 15px;
 }
 .kb-name {
-  display: -webkit-box;
   flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   color: var(--sea-ink);
   font-size: 13px;
@@ -392,13 +390,9 @@ export default {
   line-height: 1.35;
   text-align: left;
   text-overflow: ellipsis;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  white-space: nowrap;
 }
-.kb-card :deep(.el-card__body) {
-  padding: 0;
-}
-.kb-card .el-button {
+.knowledge-link .el-button {
   flex: 0 0 auto;
   width: 30px;
   min-width: 30px;
@@ -406,7 +400,7 @@ export default {
   min-height: 30px;
   padding: 0;
 }
-.kb-card .el-button :deep(.el-icon) {
+.knowledge-link .el-button :deep(.el-icon) {
   font-size: 14px;
 }
 .preview-pane {
@@ -414,9 +408,8 @@ export default {
   display: flex;
   min-width: 400px;
   min-height: 0;
-  padding: 14px;
-  background: var(--workbench-canvas);
-  border-radius: 0 10px 10px 0;
+  padding: 18px;
+  background: color-mix(in srgb, var(--sea-mist) 30%, var(--sea-paper));
 }
 .preview-instrument {
   display: flex;
@@ -424,10 +417,10 @@ export default {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--sea-mist) 58%, var(--sea-muted));
-  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--sea-mist) 68%, var(--sea-muted));
+  border-radius: 9px;
   background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist));
-  box-shadow: 0 5px 13px color-mix(in srgb, var(--sea-deep) 7%, transparent);
+  box-shadow: none;
 }
 .chat-header-row {
   display: flex;
@@ -577,7 +570,7 @@ export default {
   .detail-workbench--viewport {
     height: auto;
     max-height: none;
-    padding: 4px;
+    padding: 0;
     flex-direction: column;
   }
 
@@ -588,19 +581,23 @@ export default {
   }
 
   .settings-pane {
-    padding: 24px 18px;
+    padding: 26px 20px;
     border-right: 0;
     border-bottom: 1px solid var(--workbench-rule);
-    border-radius: 10px 10px 0 0;
     overflow-y: visible;
   }
 
+  .settings-pane { --form-label-width: 0px; }
+
   .form-section-label { margin-left: 0; }
+
+  .agent-form :deep(.el-form-item__label) {
+    width: auto !important;
+  }
 
   .preview-pane {
     min-height: 0;
     padding: 12px;
-    border-radius: 0 0 10px 10px;
   }
 
   .chat-history {
