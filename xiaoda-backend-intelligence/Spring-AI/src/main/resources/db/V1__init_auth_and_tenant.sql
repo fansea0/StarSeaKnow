@@ -3,6 +3,75 @@
 -- Apply order: existing tables first get tenant_id, then new tables.
 -- ============================================================
 
+-- Base application tables are created here so a fresh database can apply this
+-- migration without a separate manual `rag.sql` bootstrap step.
+CREATE TABLE IF NOT EXISTS agent (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(32) NOT NULL,
+    description VARCHAR(512),
+    prologue VARCHAR(512),
+    role_description VARCHAR(512),
+    create_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS knowledge (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(32) NOT NULL,
+    description VARCHAR(512),
+    create_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS file (
+    id BIGSERIAL PRIMARY KEY,
+    file_name VARCHAR(32) NOT NULL,
+    size BIGINT NOT NULL,
+    status SMALLINT NOT NULL DEFAULT 0 CHECK (status IN (0, 1)),
+    type VARCHAR(32) NOT NULL,
+    path VARCHAR(256) NOT NULL,
+    embedding_status SMALLINT NOT NULL DEFAULT 0 CHECK (embedding_status IN (0, 1, 2)),
+    create_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS agent_knowledge (
+    agent_id BIGINT NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
+    knowledge_id BIGINT NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
+    create_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (agent_id, knowledge_id)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_file (
+    knowledge_id BIGINT NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
+    file_id BIGINT NOT NULL REFERENCES file(id) ON DELETE CASCADE,
+    PRIMARY KEY (knowledge_id, file_id)
+);
+
+CREATE OR REPLACE FUNCTION update_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.update_time = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_update_agent_timestamp ON agent;
+CREATE TRIGGER trigger_update_agent_timestamp BEFORE UPDATE ON agent
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+DROP TRIGGER IF EXISTS trigger_update_knowledge_timestamp ON knowledge;
+CREATE TRIGGER trigger_update_knowledge_timestamp BEFORE UPDATE ON knowledge
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+DROP TRIGGER IF EXISTS trigger_update_file_timestamp ON file;
+CREATE TRIGGER trigger_update_file_timestamp BEFORE UPDATE ON file
+    FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+CREATE INDEX IF NOT EXISTS idx_agent_name ON agent(name);
+CREATE INDEX IF NOT EXISTS idx_knowledge_name ON knowledge(name);
+CREATE INDEX IF NOT EXISTS idx_file_name ON file(file_name);
+CREATE INDEX IF NOT EXISTS idx_file_status ON file(status);
+CREATE INDEX IF NOT EXISTS idx_file_type ON file(type);
+
 -- 0. Drop existing business data (per spec: 全新建)
 TRUNCATE agent, knowledge, file, agent_knowledge, knowledge_file RESTART IDENTITY CASCADE;
 

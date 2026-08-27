@@ -11,6 +11,11 @@ platform:
 spring:
   application:
     name: Spring-AI
+  flyway:
+    enabled: true
+    locations: classpath:db
+    baseline-on-migrate: true
+    baseline-version: 1
   datasource:
     url: jdbc:postgresql://localhost:5432/aichat
     username: postgres

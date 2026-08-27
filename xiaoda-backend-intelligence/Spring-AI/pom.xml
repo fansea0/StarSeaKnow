@@ -94,6 +94,14 @@
 			<artifactId>postgresql</artifactId>
 			<version>42.6.0</version>
 		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
 <!--		cache-->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -164,6 +172,7 @@
 					<include>**/*.yml</include>
 					<include>**/*.properties</include>
 					<include>**/*.xml</include>
+					<include>db/*.sql</include>
 					<include>**/mapper/*.xml</include>
 					<include>**/banner.txt</include>
 				</includes>
