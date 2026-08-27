@@ -68,7 +68,7 @@ public class AuthService {
 
     public RefreshResult refresh(String rawRefresh, String ip, String ua) {
         RefreshTokenService.RotateResult rr = refresh.rotate(rawRefresh, ua, ip);
-        AppUser u = users.selectById(rr.userId());
+        AppUser u = users.selectByIdForRefresh(rr.userId());
         if (u == null) throw new AuthException(AuthErrorCode.REFRESH_EXPIRED, "user gone");
         String access = jwt.signAccess(u.getId(), u.getTenantId(), u.getRole());
         audit.refresh(u.getId(), rr.familyId(), ip);
