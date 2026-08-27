@@ -10,6 +10,8 @@ import Forbidden from '../views/Forbidden.vue'
 import TenantMembers from '../views/TenantMembers.vue'
 import Overview from '../views/system/Overview.vue'
 import Tenants from '../views/system/Tenants.vue'
+import Register from '../views/Register.vue'
+import ChangeInitialPassword from '../views/ChangeInitialPassword.vue'
 
 const routes = [
   {
@@ -70,6 +72,8 @@ const routes = [
     component: () => import('../views/AgentDetail.vue')
   },
   { path: '/login', name: 'Login', component: Login, meta: { public: true } },
+  { path: '/register', name: 'Register', component: Register, meta: { public: true } },
+  { path: '/change-initial-password', name: 'ChangeInitialPassword', component: ChangeInitialPassword, meta: { requiresPlatformAdmin: true } },
   { path: '/accept-invite/:code', name: 'AcceptInvite', component: AcceptInvite, meta: { public: true } },
   { path: '/403', name: 'Forbidden', component: Forbidden, meta: { public: true } },
   { path: '/tenant/members', name: 'TenantMembers', component: TenantMembers, meta: { requiresAdmin: true } }

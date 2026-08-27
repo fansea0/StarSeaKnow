@@ -32,6 +32,7 @@ describe('platform management route guard', () => {
       ready: true,
       accessToken: null,
       user: null,
+      mustChangePassword: false,
     })
   })
 
@@ -51,5 +52,18 @@ describe('platform management route guard', () => {
     const guard = installTestGuard()
 
     await expect(guard({ meta: { requiresPlatformAdmin: true } })).resolves.toBe(true)
+  })
+
+  it('redirects a platform administrator who must change password to the change-password page', async () => {
+    auth.accessToken = 'platform-token'
+    auth.user = { role: 'platform_admin' }
+    auth.mustChangePassword = true
+
+    const guard = installTestGuard()
+
+    await expect(guard({ path: '/system/invitations', fullPath: '/system/invitations', meta: { requiresPlatformAdmin: true } }))
+      .resolves.toBe('/change-initial-password')
+    await expect(guard({ path: '/change-initial-password', fullPath: '/change-initial-password', meta: { requiresPlatformAdmin: true } }))
+      .resolves.toBe(true)
   })
 })

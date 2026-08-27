@@ -8,9 +8,6 @@
           <el-radio value="platform">平台管理员</el-radio>
         </el-radio-group>
       </el-form-item>
-      <el-form-item v-if="loginType === 'tenant'" label="租户 code">
-        <el-input v-model="form.tenantCode" placeholder="如 acme" />
-      </el-form-item>
       <el-form-item label="用户名">
         <el-input v-model="form.username" />
       </el-form-item>
@@ -19,6 +16,7 @@
       </el-form-item>
       <el-button type="primary" native-type="submit" :loading="loading" style="width:100%">登录</el-button>
     </el-form>
+    <p v-if="loginType === 'tenant'" class="register-link">还没有租户账号？<router-link to="/register">使用邀请码注册</router-link></p>
   </el-card>
 </template>
 
@@ -31,7 +29,7 @@ import { ElMessage } from 'element-plus'
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
-const form = reactive({ tenantCode: '', username: '', password: '' })
+const form = reactive({ username: '', password: '' })
 const loginType = ref('tenant')
 const loading = ref(false)
 
@@ -40,9 +38,9 @@ async function onSubmit() {
   try {
     if (loginType.value === 'platform') {
       await auth.loginPlatform(form.username, form.password)
-      router.push('/system')
+      router.push(auth.mustChangePassword ? '/change-initial-password' : '/system')
     } else {
-      await auth.login(form.tenantCode, form.username, form.password)
+      await auth.login(form.username, form.password)
       router.push(route.query.redirect || '/knowledge')
     }
   } catch (e) {
@@ -50,3 +48,8 @@ async function onSubmit() {
   } finally { loading.value = false }
 }
 </script>
+
+<style scoped>
+.register-link { margin: 16px 0 0; text-align: center; color: #64748b; font-size: 14px; }
+.register-link a { color: #2563eb; font-weight: 600; text-decoration: none; }
+</style>
