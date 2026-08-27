@@ -1,24 +1,40 @@
 <template>
-  <div class="agent-list-page">
-    <div class="header-row">
-      <h3>智能体</h3>
-      <el-button type="primary" icon="el-icon-plus" @click="showCreate = true">新增智能体</el-button>
-    </div>
-    <div class="agent-list">
+  <main class="entity-page">
+    <header class="entity-page__header">
+      <div>
+        <span class="entity-page__eyebrow">智能协作</span>
+        <h1>智能体</h1>
+        <p>配置面向团队的专属助手，快速连接知识与任务。</p>
+      </div>
+      <el-button data-testid="create-agent" type="primary" @click="showCreate = true">创建智能体</el-button>
+    </header>
+
+    <section v-if="agentList.length" class="entity-grid" aria-label="智能体列表">
       <el-card
         v-for="agent in agentList"
         :key="agent.id"
-        class="agent-card"
+        class="entity-card"
         shadow="hover"
         @click="goToDetail(agent.id)"
       >
-        <div class="card-title-row">
-          <span class="agent-title">{{ agent.name }}</span>
+        <div class="entity-card__content">
+          <span class="entity-card__kind">智能体</span>
+          <h2 class="entity-card__title">{{ agent.name }}</h2>
+          <p class="entity-card__description">{{ agent.description || '暂未添加描述' }}</p>
         </div>
-        <div class="agent-desc">{{ agent.description }}</div>
-        <el-button class="delete-agent-btn" type="danger" circle size="small" @click.stop="handleDelete(agent.id)"><el-icon><Delete /></el-icon></el-button>
+        <div class="entity-card__footer">
+          <span class="entity-card__hint">查看配置与对话能力</span>
+          <el-button :aria-label="`删除智能体 ${agent.name}`" class="entity-card__delete" type="danger" circle @click.stop="handleDelete(agent.id)"><el-icon><Delete /></el-icon></el-button>
+        </div>
       </el-card>
-    </div>
+    </section>
+
+    <section v-else class="empty-state entity-page__empty" aria-live="polite">
+      <h2>还没有智能体</h2>
+      <p>创建第一个智能体，为团队提供稳定的专属协作入口。</p>
+      <el-button type="primary" @click="showCreate = true">创建智能体</el-button>
+    </section>
+
     <!-- 新建智能体弹窗 -->
     <el-dialog v-model="showCreate" title="新增智能体" width="420px" :close-on-click-modal="false" class="create-dialog">
       <el-form :model="createForm" :rules="rules" ref="createFormRef" label-width="80px" status-icon>
@@ -40,7 +56,7 @@
         <el-button type="primary" @click="handleCreate" :loading="loading">创建</el-button>
       </template>
     </el-dialog>
-  </div>
+  </main>
 </template>
 
 <script>
@@ -152,88 +168,139 @@ export default {
 </script>
 
 <style scoped>
-.agent-list-page {
+.entity-page {
   width: 100%;
-  padding: 32px 0 48px 0;
+  padding: 12px 0 12px;
 }
-.header-row {
+
+.entity-page__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 26px;
+}
+
+.entity-page__eyebrow {
+  color: var(--sea-signal);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.entity-page h1 {
+  margin: 4px 0 0;
+  color: var(--sea-deep);
+  font-family: 'Noto Serif SC', serif;
+  font-size: clamp(28px, 3vw, 36px);
+  line-height: 1.2;
+}
+
+.entity-page__header p {
+  margin: 8px 0 0;
+  color: var(--sea-muted);
+}
+
+.entity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.entity-card {
+  min-height: 228px;
+  cursor: pointer;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 12px;
+  background: var(--sea-paper);
+  box-shadow: 0 8px 20px rgb(17 36 59 / 5%);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.entity-card:hover {
+  border-color: color-mix(in srgb, var(--sea-signal) 48%, var(--el-border-color-light));
+  box-shadow: 0 12px 26px rgb(17 36 59 / 9%);
+}
+
+.entity-card :deep(.el-card__body) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 226px;
+  padding: 22px;
+}
+
+.entity-card__content { min-width: 0; }
+
+.entity-card__kind {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: var(--el-border-radius-round);
+  background: color-mix(in srgb, var(--sea-signal) 12%, var(--sea-paper));
+  color: var(--sea-signal);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.entity-card__title {
+  margin: 12px 0 8px;
+  overflow: hidden;
+  color: var(--sea-deep);
+  font-size: 19px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-card__description {
+  display: -webkit-box;
+  min-height: 44px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--sea-muted);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.entity-card__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0px;
-}
-.header-row h3 {
-  margin-left: 32px;
-}
-.agent-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 24px;
+  gap: 16px;
   width: 100%;
-  padding: 0 32px;
-  box-sizing: border-box;
-}
-.agent-card {
-  border-radius: 18px;
-  cursor: pointer;
-  transition: box-shadow 0.2s, transform 0.2s;
-  border: none;
-  box-shadow: 0 2px 12px rgba(64,158,255,0.08);
-  padding: 20px 24px 18px 24px;
-  background: #fff;
-  position: relative;
-}
-.agent-card:hover {
-  box-shadow: 0 6px 24px rgba(64,158,255,0.18);
-  transform: translateY(-2px) scale(1.02);
-}
-.card-title-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-}
-.agent-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: #409eff;
-  margin-right: 8px;
-}
-.agent-desc {
-  color: #666;
-  font-size: 15px;
-  margin-bottom: 18px;
-  min-height: 36px;
-}
-.create-dialog >>> .el-dialog {
-  border-radius: 16px;
-}
-.create-dialog >>> .el-dialog__header {
-  font-size: 20px;
-  font-weight: 600;
-  color: #409eff;
-  border-bottom: 1px solid #f0f0f0;
-  padding-bottom: 8px;
-}
-.create-dialog >>> .el-dialog__body {
+  margin-top: auto;
   padding-top: 18px;
-  padding-bottom: 0;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
-.create-dialog >>> .el-form-item__label {
-  font-weight: 500;
+
+.entity-card__hint { color: var(--sea-muted); font-size: 13px; }
+
+.entity-card__delete {
+  flex: 0 0 auto;
+  color: var(--sea-danger);
 }
-.delete-agent-btn {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  background: #fff0f0;
-  border: none;
-  color: #f56c6c;
-  box-shadow: none;
-  transition: background 0.2s, color 0.2s;
-  z-index: 2;
+
+.entity-page__empty {
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist));
 }
-.delete-agent-btn:hover {
-  background: #ffeded;
-  color: #d9001b;
+
+.entity-page__empty h2 { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 21px; }
+.entity-page__empty p { margin: 8px 0 16px; }
+
+@media (max-width: 640px) {
+  .entity-page { padding-top: 8px; }
+  .entity-page__header { align-items: flex-start; flex-direction: column; }
+  .entity-page__header > .el-button { width: 100%; }
+  .entity-grid { grid-template-columns: 1fr; }
 }
 </style>

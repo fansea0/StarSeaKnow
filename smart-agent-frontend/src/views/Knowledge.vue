@@ -1,28 +1,43 @@
 <template>
-  <div class="knowledge-list-page">
-    <div class="header-row">
-      <h3>知识库</h3>
-      <el-button type="primary" icon="el-icon-plus" @click="showCreate = true">创建知识库</el-button>
-    </div>
-    <div class="knowledge-list">
+  <main class="entity-page">
+    <header class="entity-page__header">
+      <div>
+        <span class="entity-page__eyebrow">知识管理</span>
+        <h1>知识库</h1>
+        <p>沉淀资料，让智能体更可靠地回答问题。</p>
+      </div>
+      <el-button data-testid="create-knowledge" type="primary" @click="showCreate = true">创建知识库</el-button>
+    </header>
+
+    <section v-if="knowledgeList.length" class="entity-grid" aria-label="知识库列表">
       <el-card
         v-for="kb in knowledgeList"
         :key="kb.id"
-        class="knowledge-card"
+        class="entity-card"
         shadow="hover"
         @click="goToDetail(kb.id)"
       >
-        <div class="card-title-row">
-          <span class="kb-title">{{ kb.name }}</span>
+        <div class="entity-card__content">
+          <span class="entity-card__kind">知识库</span>
+          <h2 class="entity-card__title">{{ kb.name }}</h2>
+          <p class="entity-card__description">{{ kb.desc || '暂未添加描述' }}</p>
         </div>
-        <div class="kb-desc">{{ kb.desc }}</div>
-        <div class="kb-meta-row">
-          <span class="meta-item">📄 文档：{{ kb.docCount }}</span>
-          <span class="meta-item">🤖 智能体：{{ kb.agentCount }}</span>
-          <el-button class="delete-kb-btn" type="danger" circle size="small" @click.stop="handleDelete(kb.id)"><el-icon><Delete /></el-icon></el-button>
+        <div class="entity-card__footer">
+          <dl class="entity-card__stats" aria-label="知识库统计">
+            <div><dt>文档</dt><dd>{{ kb.docCount || 0 }}</dd></div>
+            <div><dt>智能体</dt><dd>{{ kb.agentCount || 0 }}</dd></div>
+          </dl>
+          <el-button :aria-label="`删除知识库 ${kb.name}`" class="entity-card__delete" type="danger" circle @click.stop="handleDelete(kb.id)"><el-icon><Delete /></el-icon></el-button>
         </div>
       </el-card>
-    </div>
+    </section>
+
+    <section v-else class="empty-state entity-page__empty" aria-live="polite">
+      <h2>还没有知识库</h2>
+      <p>从第一个知识库开始，集中管理智能体需要的资料。</p>
+      <el-button type="primary" @click="showCreate = true">创建知识库</el-button>
+    </section>
+
     <!-- 新建知识库弹窗 -->
     <el-dialog v-model="showCreate" title="创建知识库" width="420px" :close-on-click-modal="false" class="create-dialog">
       <el-form :model="createForm" :rules="rules" ref="createFormRef" label-width="72px" status-icon>
@@ -38,7 +53,7 @@
         <el-button type="primary" @click="handleCreate">创建</el-button>
       </template>
     </el-dialog>
-  </div>
+  </main>
 </template>
 
 <script>
@@ -143,95 +158,147 @@ export default {
 </script>
 
 <style scoped>
-.knowledge-list-page {
+.entity-page {
   width: 100%;
-  padding: 32px 0 48px 0;
+  padding: 12px 0 12px;
 }
-.header-row {
+
+.entity-page__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 26px;
+}
+
+.entity-page__eyebrow {
+  color: var(--sea-signal);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.entity-page h1 {
+  margin: 4px 0 0;
+  color: var(--sea-deep);
+  font-family: 'Noto Serif SC', serif;
+  font-size: clamp(28px, 3vw, 36px);
+  line-height: 1.2;
+}
+
+.entity-page__header p {
+  margin: 8px 0 0;
+  color: var(--sea-muted);
+}
+
+.entity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.entity-card {
+  min-height: 228px;
+  cursor: pointer;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 12px;
+  background: var(--sea-paper);
+  box-shadow: 0 8px 20px rgb(17 36 59 / 5%);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.entity-card:hover {
+  border-color: color-mix(in srgb, var(--sea-signal) 48%, var(--el-border-color-light));
+  box-shadow: 0 12px 26px rgb(17 36 59 / 9%);
+}
+
+.entity-card :deep(.el-card__body) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 226px;
+  padding: 22px;
+}
+
+.entity-card__content { min-width: 0; }
+
+.entity-card__kind {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: var(--el-border-radius-round);
+  background: color-mix(in srgb, var(--sea-signal) 12%, var(--sea-paper));
+  color: var(--sea-signal);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.entity-card__title {
+  margin: 12px 0 8px;
+  overflow: hidden;
+  color: var(--sea-deep);
+  font-size: 19px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity-card__description {
+  display: -webkit-box;
+  min-height: 44px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--sea-muted);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.entity-card__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0px;
-}
-.header-row h3 {
-  margin-left: 32px;
-}
-.knowledge-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 24px;
+  gap: 16px;
   width: 100%;
-  padding: 0 32px;
-  box-sizing: border-box;
-}
-.knowledge-card {
-  border-radius: 18px;
-  cursor: pointer;
-  transition: box-shadow 0.2s, transform 0.2s;
-  border: none;
-  box-shadow: 0 2px 12px rgba(64,158,255,0.08);
-  padding: 20px 24px 18px 24px;
-  background: #fff;
-}
-.knowledge-card:hover {
-  box-shadow: 0 6px 24px rgba(64,158,255,0.18);
-  transform: translateY(-2px) scale(1.02);
-}
-.card-title-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-}
-.kb-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: #409eff;
-  margin-right: 8px;
-}
-.kb-desc {
-  color: #666;
-  font-size: 15px;
-  margin-bottom: 18px;
-  min-height: 36px;
-}
-.kb-meta-row {
-  display: flex;
-  gap: 18px;
-  color: #888;
-  font-size: 14px;
-}
-.meta-item {
-  display: flex;
-  align-items: center;
-}
-.create-dialog >>> .el-dialog {
-  border-radius: 16px;
-}
-.create-dialog >>> .el-dialog__header {
-  font-size: 20px;
-  font-weight: 600;
-  color: #409eff;
-  border-bottom: 1px solid #f0f0f0;
-  padding-bottom: 8px;
-}
-.create-dialog >>> .el-dialog__body {
+  margin-top: auto;
   padding-top: 18px;
-  padding-bottom: 0;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
-.create-dialog >>> .el-form-item__label {
-  font-weight: 500;
+
+.entity-card__stats {
+  display: flex;
+  gap: 20px;
+  margin: 0;
 }
-.delete-kb-btn {
-  margin-left: 8px;
-  vertical-align: middle;
-  background: #fff0f0;
-  border: none;
-  color: #f56c6c;
-  box-shadow: none;
-  transition: background 0.2s, color 0.2s;
+
+.entity-card__stats div { min-width: 42px; }
+.entity-card__stats dt { color: var(--sea-muted); font-size: 12px; }
+.entity-card__stats dd { margin: 2px 0 0; color: var(--sea-ink); font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 500; }
+
+.entity-card__delete {
+  flex: 0 0 auto;
+  color: var(--sea-danger);
 }
-.delete-kb-btn:hover {
-  background: #ffeded;
-  color: #d9001b;
+
+.entity-page__empty {
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist));
+}
+
+.entity-page__empty h2 { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 21px; }
+.entity-page__empty p { margin: 8px 0 16px; }
+
+@media (max-width: 640px) {
+  .entity-page { padding-top: 8px; }
+  .entity-page__header { align-items: flex-start; flex-direction: column; }
+  .entity-page__header > .el-button { width: 100%; }
+  .entity-grid { grid-template-columns: 1fr; }
 }
 </style>
