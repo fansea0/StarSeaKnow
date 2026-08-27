@@ -77,6 +77,7 @@
 
 <script>
 import axios from 'axios'
+import { apiUrl } from '../api/http'
 import { Check, Close, Minus } from '@element-plus/icons-vue'
 export default {
   name: 'KnowledgeDetail',
@@ -115,11 +116,11 @@ export default {
   methods: {
     setKnowledgeId() {
       this.knowledgeId = parseInt(this.$route.params.id)
-      this.uploadUrl = `http://localhost:8080/file/uploadToKnow/${this.knowledgeId}`
+      this.uploadUrl = apiUrl(`/file/uploadToKnow/${this.knowledgeId}`)
     },
     async fetchKnowledgeInfo() {
       try {
-        const res = await axios.get(`http://localhost:8080/knowledge/${this.knowledgeId}`)
+        const res = await axios.get(apiUrl(`/knowledge/${this.knowledgeId}`))
         if (res.data && res.data.code === 200 && res.data.data) {
           this.kbInfo.name = res.data.data.name
           this.kbInfo.desc = res.data.data.description
@@ -130,7 +131,7 @@ export default {
     },
     async fetchDocList() {
       try {
-        const res = await axios.get('http://localhost:8080/knowledge/file/list', { params: { knowledgeId: parseInt(this.knowledgeId) } })
+        const res = await axios.get(apiUrl('/knowledge/file/list'), { params: { knowledgeId: parseInt(this.knowledgeId) } })
         if (res.data && res.data.code === 200) {
           this.docList = res.data.data || []
         } else {
@@ -154,7 +155,7 @@ export default {
     async embedFile(row) {
       this.embedLoadingId = row.id
       try {
-        const res = await axios.post('http://localhost:8080/knowledge/file', null, { params: { fileId: row.id, knowledgeId: this.knowledgeId } })
+        const res = await axios.post(apiUrl('/knowledge/file'), null, { params: { fileId: row.id, knowledgeId: this.knowledgeId } })
         if (res.data && res.data.code === 200) {
           this.$message.success('文本嵌入成功')
           this.fetchDocList()
@@ -170,7 +171,7 @@ export default {
     async deleteFile(row) {
       this.deleteLoadingId = row.id
       try {
-        const res = await axios.delete(`http://localhost:8080/file/delete/${row.id}`)
+        const res = await axios.delete(apiUrl(`/file/delete/${row.id}`))
         if (res.data && res.data.code === 200) {
           this.$message.success('删除成功')
           this.fetchDocList()
@@ -186,7 +187,7 @@ export default {
     async changeFileStatus(row) {
       this.statusLoadingId = row.id
       try {
-        const res = await axios.put(`http://localhost:8080/file/updateStatus/${row.id}`, null, {
+        const res = await axios.put(apiUrl(`/file/updateStatus/${row.id}`), null, {
           params: { status: row.status }
         })
         if (res.data && res.data.code === 200) {
@@ -206,7 +207,7 @@ export default {
     async saveKnowledge() {
       this.saveLoading = true
       try {
-        const res = await axios.put(`http://localhost:8080/knowledge/update/${this.knowledgeId}`, {
+        const res = await axios.put(apiUrl(`/knowledge/update/${this.knowledgeId}`), {
           name: this.kbInfo.name,
           description: this.kbInfo.desc
         })
@@ -258,4 +259,4 @@ export default {
 .upload-btn {
   margin-left: 16px;
 }
-</style> 
+</style>

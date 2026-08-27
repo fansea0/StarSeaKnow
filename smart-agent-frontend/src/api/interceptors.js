@@ -1,3 +1,4 @@
+import axios from 'axios'
 import { http } from './http'
 import { useAuthStore } from '../stores/auth'
 import router from '../router'
@@ -6,13 +7,18 @@ import { ElMessage } from 'element-plus'
 let refreshing = null  // 单例,避免 40101 风暴
 
 export function setupInterceptors() {
-  http.interceptors.request.use(cfg => {
+  setupClientInterceptors(http)
+  setupClientInterceptors(axios)
+}
+
+function setupClientInterceptors(client) {
+  client.interceptors.request.use(cfg => {
     const auth = useAuthStore()
     if (auth.accessToken) cfg.headers.Authorization = `Bearer ${auth.accessToken}`
     return cfg
   })
 
-  http.interceptors.response.use(r => r, async err => {
+  client.interceptors.response.use(r => r, async err => {
     const auth = useAuthStore()
     const { config, response } = err
     if (!response) return Promise.reject(err)
@@ -24,7 +30,7 @@ export function setupInterceptors() {
       try {
         await refreshing
         config.headers.Authorization = `Bearer ${auth.accessToken}`
-        return http(config)
+        return client(config)
       } catch (e) {
         auth.clear()
         router.push('/login')

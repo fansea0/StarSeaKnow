@@ -26,6 +26,7 @@
 <script>
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
+import { apiUrl } from '../api/http'
 
 export default {
   name: 'MdConverter',
@@ -47,7 +48,7 @@ export default {
       }
 
       try {
-        const response = await axios.post('http://localhost:8080/tool/convmd', 
+        const response = await axios.post(apiUrl('/tool/convmd'),
           this.mdContent,
           { 
             params: { fileName: this.fileName },
@@ -122,4 +123,4 @@ export default {
 .converter-footer {
   padding: 16px 0;
 }
-</style> 
+</style>

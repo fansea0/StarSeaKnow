@@ -85,6 +85,7 @@
 
 <script>
 import axios from 'axios'
+import { apiUrl } from '../api/http'
 import { marked } from 'marked'
 import { Delete } from '@element-plus/icons-vue'
 export default {
@@ -116,7 +117,7 @@ export default {
   },
   methods: {
     async fetchAgentInfo() {
-      const res = await axios.get(`http://localhost:8080/agent/${this.agentId}`)
+      const res = await axios.get(apiUrl(`/agent/${this.agentId}`))
       if (res.data && res.data.code === 200 && res.data.data) {
         this.agentInfo = res.data.data
         this.parsePrologueQuestions()
@@ -124,13 +125,13 @@ export default {
       }
     },
     async fetchKnowledgeList() {
-      const res = await axios.get('http://localhost:8080/agent/knowledge/list', { params: { agentId: this.agentId } })
+      const res = await axios.get(apiUrl('/agent/knowledge/list'), { params: { agentId: this.agentId } })
       if (res.data && res.data.code === 200) {
         this.knowledgeList = Array.isArray(res.data.data) ? res.data.data : [res.data.data]
       }
     },
     async fetchAllKnowledge() {
-      const res = await axios.get('http://localhost:8080/knowledge/list/vo')
+      const res = await axios.get(apiUrl('/knowledge/list/vo'))
       if (res.data && res.data.code === 200) {
         this.allKnowledgeList = res.data.data || []
       }
@@ -138,7 +139,7 @@ export default {
     async addKnowledge() {
       if (!this.selectedKnowledgeIds || this.selectedKnowledgeIds.length === 0) return
       for (const kid of this.selectedKnowledgeIds) {
-        await axios.get('http://localhost:8080/agent/agentToKnowledge', { params: { agentId: this.agentId, knowledgeId: kid } })
+        await axios.get(apiUrl('/agent/agentToKnowledge'), { params: { agentId: this.agentId, knowledgeId: kid } })
       }
       this.$message.success('关联成功')
       this.showAddKnowledge = false
@@ -148,7 +149,7 @@ export default {
     async removeKnowledge(kbId) {
       // 调用后端解绑接口
       try {
-        const res = await axios.delete(`http://localhost:8080/agent/delete/knowledge/${kbId}`, {
+        const res = await axios.delete(apiUrl(`/agent/delete/knowledge/${kbId}`), {
           params: { agentId: this.agentId }
         })
         if (res.data && res.data.code === 200) {
@@ -199,7 +200,7 @@ export default {
       this.chatHistory.push({ role: 'user', content: msg })
       this.inputMsg = ''
       this.streamingMsg = ''
-      const url = `http://localhost:8080/ai/agent/chat?chatId=${this.chatId}&agentId=${this.agentId}`
+      const url = apiUrl(`/ai/agent/chat?chatId=${this.chatId}&agentId=${this.agentId}`)
       const controller = new AbortController()
       const response = await fetch(url, {
         method: 'POST',
@@ -233,7 +234,7 @@ export default {
     },
     async saveAgent() {
       try {
-        const res = await axios.put(`http://localhost:8080/agent/update/${this.agentId}`, this.agentInfo)
+        const res = await axios.put(apiUrl(`/agent/update/${this.agentId}`), this.agentInfo)
         if (res.data && res.data.code === 200) {
           this.$message.success('保存成功')
         } else {
@@ -487,4 +488,4 @@ export default {
   font-weight: 700;
   color: #409eff;
 }
-</style> 
+</style>
