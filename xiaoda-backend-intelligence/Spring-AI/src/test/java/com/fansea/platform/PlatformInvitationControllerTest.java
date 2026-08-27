@@ -12,6 +12,7 @@ import com.fansea.ai.auth.RefreshTokenService;
 import com.fansea.ai.auth.TenantMemberController;
 import com.fansea.ai.auth.TenantRegistrationService;
 import com.fansea.ai.config.GlobalExceptionHandler;
+import com.fansea.ai.config.WebMvcConfig;
 import com.fansea.ai.domain.PlatformAdmin;
 import com.fansea.ai.domain.PlatformInvitation;
 import com.fansea.ai.domain.Tenant;
@@ -39,6 +40,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -46,7 +48,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest({PlatformInvitationController.class, PlatformTenantController.class, PlatformAuthController.class,
         AuthController.class, TenantMemberController.class})
 @Import({AuthAspect.class, GlobalExceptionHandler.class, PlatformInvitationController.class,
-        PlatformTenantController.class, PlatformAuthController.class, AuthController.class, TenantMemberController.class})
+        PlatformTenantController.class, PlatformAuthController.class, AuthController.class, TenantMemberController.class,
+        WebMvcConfig.class})
 class PlatformInvitationControllerTest {
 
     @SpringBootConfiguration
@@ -176,6 +179,29 @@ class PlatformInvitationControllerTest {
         mockMvc.perform(get("/tenant/members"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
+    }
+
+    @Test
+    void platformTokenCannotAccessBusinessRequireLoginEndpoint_butBusinessUserCan() throws Exception {
+        mockMvc.perform(get("/tenant/members"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(40301));
+
+        AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 2L, 1L, "tenant_member", "test-jti"));
+        when(users.selectList(any())).thenReturn(List.of());
+        mockMvc.perform(get("/tenant/members"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+    }
+
+    @Test
+    void patchPreflight_isAllowedForConfiguredFrontendOrigin() throws Exception {
+        mockMvc.perform(options("/platform/tenants/9/remark")
+                        .header("Origin", "http://localhost:5174")
+                        .header("Access-Control-Request-Method", "PATCH"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Access-Control-Allow-Methods", org.hamcrest.Matchers.containsString("PATCH")));
     }
 
     @Test

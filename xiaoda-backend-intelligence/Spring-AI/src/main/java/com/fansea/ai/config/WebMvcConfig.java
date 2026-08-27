@@ -25,7 +25,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "http://localhost:5174",
                         "http://127.0.0.1:5174"
                 ).toArray(new String[0]))
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .exposedHeaders("Authorization")
                 .allowCredentials(true)
