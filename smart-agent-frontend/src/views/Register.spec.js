@@ -21,7 +21,7 @@ const stubs = {
   'el-form-item': { template: '<label><slot /></label>' },
   'el-input': { template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />', props: ['modelValue'] },
   'el-button': { template: '<button :type="nativeType" @click="$emit(\'click\')"><slot /></button>', props: ['nativeType'] },
-  'router-link': { template: '<a><slot /></a>' },
+  'router-link': { template: '<a :href="to"><slot /></a>', props: ['to'] },
 }
 
 describe('invitation registration', () => {
@@ -56,5 +56,12 @@ describe('invitation registration', () => {
     await wrapper.vm.onSubmit()
 
     expect(post).not.toHaveBeenCalled()
+  })
+
+  it('keeps the authentication card and accessible login link', () => {
+    const wrapper = mount(Register, { global: { plugins: [createPinia()], stubs } })
+
+    expect(wrapper.find('.auth-card').exists()).toBe(true)
+    expect(wrapper.get('.login-link a').attributes('href')).toBe('/login')
   })
 })
