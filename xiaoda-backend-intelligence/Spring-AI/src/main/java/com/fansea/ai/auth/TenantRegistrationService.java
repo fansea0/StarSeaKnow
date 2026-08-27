@@ -7,6 +7,7 @@ import com.fansea.ai.domain.Tenant;
 import com.fansea.ai.mapper.AppUserMapper;
 import com.fansea.ai.mapper.PlatformInvitationMapper;
 import com.fansea.ai.mapper.TenantMapper;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -58,7 +59,11 @@ public class TenantRegistrationService {
         user.setDisplayName(request.username());
         user.setRole("tenant_admin");
         user.setStatus(1);
-        users.insert(user);
+        try {
+            users.insert(user);
+        } catch (DuplicateKeyException e) {
+            throw new AuthException(AuthErrorCode.USERNAME_CONFLICT, "username exists");
+        }
 
         if (invitations.consumeIfAvailable(invitation.getId(), OffsetDateTime.now(), tenant.getId(), user.getId()) != 1) {
             throw new AuthException(AuthErrorCode.INVITATION_UNAVAILABLE, "invitation unavailable");

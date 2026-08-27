@@ -2,6 +2,7 @@ package com.fansea.ai.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fansea.ai.auth.AuthErrorCode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -89,6 +90,25 @@ class InvitationOnboardingIntegrationTest {
 
         assertThat(login.status()).isEqualTo(200);
         assertThat(login.body().at("/data/user/username").asText()).isEqualTo(username);
+    }
+
+    @Test
+    void duplicateUsernameRegistrationReturnsConflictWithoutConsumingSecondInvitation() throws Exception {
+        String username = "onboarding-duplicate-admin";
+        assertThat(post("/auth/register", request(activeInvitation(), username, "Strong!123", "Strong!123")).status())
+                .isEqualTo(200);
+        String secondInvitation = activeInvitation();
+        int tenantsBefore = jdbc.queryForObject("SELECT count(*) FROM tenant", Integer.class);
+        int usersBefore = jdbc.queryForObject("SELECT count(*) FROM app_user", Integer.class);
+
+        Response duplicate = post("/auth/register", request(secondInvitation, username, "Strong!123", "Strong!123"));
+
+        assertThat(duplicate.status()).isEqualTo(409);
+        assertThat(duplicate.body().at("/code").asInt()).isEqualTo(AuthErrorCode.USERNAME_CONFLICT.code());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM tenant", Integer.class)).isEqualTo(tenantsBefore);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM app_user", Integer.class)).isEqualTo(usersBefore);
+        assertThat(jdbc.queryForObject("SELECT status FROM platform_invitation WHERE code = ?", String.class, secondInvitation))
+                .isEqualTo("ACTIVE");
     }
 
     private Map<String, String> request(String inviteCode, String username, String password, String confirmPassword) {

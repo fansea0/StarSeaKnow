@@ -12,6 +12,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class JwtAuthFilterTest {
@@ -41,5 +43,25 @@ class JwtAuthFilterTest {
         AuthException exception = (AuthException) request.getAttribute("authException");
         assertNull(contextSeenByChain.get());
         assertEquals(AuthErrorCode.CROSS_TENANT.code(), exception.getCode());
+    }
+
+    @Test
+    void registrationRoute_isPublicButLegacyAcceptInviteRouteIsNot() throws Exception {
+        TenantMapper tenants = mock(TenantMapper.class);
+        JwtAuthFilter filter = new JwtAuthFilter(
+                new JwtService("test-secret-that-is-at-least-thirty-two-bytes", 60_000), tenants);
+
+        MockHttpServletRequest register = new MockHttpServletRequest("POST", "/auth/register");
+        register.addHeader("Authorization", "Bearer malformed");
+        filter.doFilter(register, new MockHttpServletResponse(), (req, resp) -> { });
+
+        MockHttpServletRequest legacy = new MockHttpServletRequest("POST", "/auth/accept-invite");
+        legacy.addHeader("Authorization", "Bearer malformed");
+        filter.doFilter(legacy, new MockHttpServletResponse(), (req, resp) -> { });
+
+        assertNull(register.getAttribute("authException"));
+        assertEquals(AuthErrorCode.MISSING_TOKEN.code(),
+                ((AuthException) legacy.getAttribute("authException")).getCode());
+        verify(tenants, never()).selectById(org.mockito.ArgumentMatchers.anyLong());
     }
 }

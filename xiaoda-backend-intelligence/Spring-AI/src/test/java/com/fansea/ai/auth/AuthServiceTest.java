@@ -75,4 +75,37 @@ class AuthServiceTest {
                 () -> svc.login("alice", "pw", "ip", "ua"));
         assertEquals(40100, ex.getCode());
     }
+
+    @Test
+    void login_disabledUser_throws40100() {
+        AppUser user = new AppUser();
+        user.setStatus(0);
+        AppUserMapper users = mock(AppUserMapper.class);
+        when(users.selectByUsername("alice")).thenReturn(user);
+
+        AuthService service = new AuthService(mock(TenantMapper.class), users, mock(PasswordEncoder.class),
+                mock(JwtService.class), mock(RefreshTokenService.class), mock(AuthAuditLogger.class));
+
+        assertEquals(40100, assertThrows(AuthException.class,
+                () -> service.login("alice", "pw", "ip", "ua")).getCode());
+    }
+
+    @Test
+    void login_disabledTenant_throws40100() {
+        AppUser user = new AppUser();
+        user.setTenantId(7L);
+        user.setStatus(1);
+        Tenant tenant = new Tenant();
+        tenant.setStatus(0);
+        AppUserMapper users = mock(AppUserMapper.class);
+        TenantMapper tenants = mock(TenantMapper.class);
+        when(users.selectByUsername("alice")).thenReturn(user);
+        when(tenants.selectById(7L)).thenReturn(tenant);
+
+        AuthService service = new AuthService(tenants, users, mock(PasswordEncoder.class), mock(JwtService.class),
+                mock(RefreshTokenService.class), mock(AuthAuditLogger.class));
+
+        assertEquals(40100, assertThrows(AuthException.class,
+                () -> service.login("alice", "pw", "ip", "ua")).getCode());
+    }
 }
