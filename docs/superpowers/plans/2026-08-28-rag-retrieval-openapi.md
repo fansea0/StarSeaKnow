@@ -81,6 +81,16 @@
 - Modify: `xiaoda-backend-intelligence/Spring-AI/pom.xml`
 - Modify: `xiaoda-backend-intelligence/Spring-AI/src/main/resources/application.yml`
 
+### Tenant-admin frontend
+
+- Create: `smart-agent-frontend/src/views/TenantApiCredentials.vue`
+- Create: `smart-agent-frontend/src/views/TenantApiCredentialDetail.vue`
+- Create: `smart-agent-frontend/src/views/TenantApiDocs.vue`
+- Create focused frontend tests for the credential workflow and tenant navigation
+- Modify: `smart-agent-frontend/src/App.vue`
+- Modify: `smart-agent-frontend/src/router/index.js`
+- Modify only as needed: `smart-agent-frontend/src/api/http.js`
+
 ---
 
 ### Task 1: Add extensible credential schema and persistence models
@@ -1054,6 +1064,88 @@ git commit -m "test: verify external rag retrieval flow"
 
 ---
 
+### Task 10: Build tenant API credential management UI and reshape tenant secondary navigation
+
+**Files:**
+- Create: `smart-agent-frontend/src/views/TenantApiCredentials.vue`
+- Create: `smart-agent-frontend/src/views/TenantApiCredentialDetail.vue`
+- Create: `smart-agent-frontend/src/views/TenantApiDocs.vue`
+- Create: `smart-agent-frontend/src/views/TenantApiCredentials.spec.js`
+- Create: `smart-agent-frontend/src/views/TenantApiCredentialDetail.spec.js`
+- Modify: `smart-agent-frontend/src/App.vue`
+- Modify: `smart-agent-frontend/src/App.spec.js`
+- Modify: `smart-agent-frontend/src/router/index.js`
+- Modify only if required by the verified API contract: `smart-agent-frontend/src/api/http.js`
+
+**Interfaces:**
+- Consumes: Task 5 tenant-admin endpoints under `/tenant/api-credentials` and Task 8 external integration contract.
+- Produces: tenant-admin list/create/detail/edit-scope/rotate/revoke UI, one-time Key disclosure, and an in-product calling guide.
+- Produces: a stable tenant secondary navigation grouping `成员管理`, `租户设置`, `API 凭证`, and `调用文档` without exposing admin routes to tenant members.
+
+- [ ] **Step 1: Add failing route, navigation, and workflow tests**
+
+Cover observable behavior rather than component internals:
+
+- Tenant administrators see a single primary `租户管理` entry; tenant pages render a secondary navigation with `成员管理`, `租户设置`, `API 凭证`, and `调用文档`.
+- Tenant members do not see or enter the API credential routes.
+- Credential list requests `GET /tenant/api-credentials`, safely renders prefix/last-four/status/type, and never expects a full Key.
+- Creation submits only the management contract fields and displays the returned `apiKey` once in a non-dismissible result state until the administrator explicitly confirms it was saved.
+- Detail supports metadata changes, complete replacement of the RAG knowledge scope, rotation, and revoke confirmation.
+- Rotation replaces the one-time Key result without placing it in route state, persistent storage, logs, or a reusable store.
+- Calling guide states that external requests send only `query` and `retrieval_setting`, never `knowledge_id` or `metadata_condition`, and that HTTP is limited to trusted-network test credentials.
+
+- [ ] **Step 2: Run focused frontend tests and verify they fail for missing routes/views**
+
+```bash
+cd smart-agent-frontend
+npm test -- src/App.spec.js src/views/TenantApiCredentials.spec.js src/views/TenantApiCredentialDetail.spec.js
+```
+
+Expected: FAIL because the tenant secondary navigation and credential views do not exist.
+
+- [ ] **Step 3: Reshape tenant navigation and add protected routes**
+
+Replace the two separate primary sidebar entries (`成员`, `租户设置`) with one `租户管理` primary entry for `tenant_admin`. On every `/tenant/**` route, render a compact secondary navigation below the workspace tide line. Its active state follows the current route and remains usable on narrow screens through horizontal scrolling rather than wrapping into an ambiguous grid.
+
+Add routes:
+
+```text
+/tenant/members
+/tenant/profile
+/tenant/api-credentials
+/tenant/api-credentials/:credentialId
+/tenant/api-docs
+```
+
+Every route keeps `meta.requiresAdmin=true`. `/tenant` redirects to `/tenant/members`.
+
+- [ ] **Step 4: Implement the approved credential management prototype**
+
+Follow the approved prototype's information architecture and the existing ocean workspace tokens. Keep the list, detail, create, scope editor, rotation result, and calling guide as real product states. The complete Key may exist only in component memory for the active one-time disclosure dialog; clear it when the administrator confirms saving it or leaves the view. Add `Cache-Control: no-store` handling only on the server response; do not add local persistence.
+
+Credential type is shown as an immutable business capability (`RAG_RETRIEVAL`, displayed as `RAG 检索`). The current UI creates only this type, while the layout leaves room for future capability-specific views. Scope selection uses Knowledge UUIDs from the current tenant and never introduces `knowledge_id` into the external Retrieval request example.
+
+- [ ] **Step 5: Run focused tests, full frontend regression, and production build**
+
+```bash
+npm test -- src/App.spec.js src/views/TenantApiCredentials.spec.js src/views/TenantApiCredentialDetail.spec.js
+npm test
+npm run build
+```
+
+Expected: all commands succeed, the built UI contains no embedded API Key, and existing business/platform routes remain usable.
+
+- [ ] **Step 6: Commit the tenant-admin frontend slice**
+
+```bash
+git add smart-agent-frontend/src/App.vue smart-agent-frontend/src/App.spec.js \
+  smart-agent-frontend/src/router/index.js smart-agent-frontend/src/views/TenantApiCredential*.vue \
+  smart-agent-frontend/src/views/TenantApiCredential*.spec.js smart-agent-frontend/src/views/TenantApiDocs.vue
+git commit -m "feat: manage rag api credentials in tenant workspace"
+```
+
+---
+
 ## Final Verification Gate
 
 Before reporting completion, run from `xiaoda-backend-intelligence/Spring-AI`:
@@ -1065,6 +1157,7 @@ mvn clean test
 Then run from the repository root:
 
 ```bash
+cd smart-agent-frontend && npm test && npm run build && cd ..
 git diff --check
 git status --short
 git log --oneline -10
