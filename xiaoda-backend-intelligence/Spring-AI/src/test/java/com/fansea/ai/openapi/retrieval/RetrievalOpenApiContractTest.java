@@ -8,6 +8,8 @@ import org.yaml.snakeyaml.Yaml;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -22,7 +24,16 @@ class RetrievalOpenApiContractTest {
     private static final Path OPENAPI = Path.of("../../docs/openapi/retrieval-api.yaml");
     private static final Path GUIDE = Path.of("../../docs/openapi/retrieval-api.md");
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Pattern FENCED_CODE_BLOCK = Pattern.compile("```[^\\r\\n]*\\R(.*?)\\R```", Pattern.DOTALL);
+    private static final Pattern FENCED_CODE_BLOCK = Pattern.compile("(?ms)^```([^\\r\\n]*)\\R(.*?)^```\\s*$", Pattern.MULTILINE);
+    private static final Pattern OVERLAP_PERIOD_CLAIM = Pattern.compile(
+            "(?i)\\b(?:provides|supports|configures)\\s+(?:an?\\s+)?overlap period\\b");
+    private static final Pattern CONFIGURED_OVERLAP_PERIOD_CLAIM = Pattern.compile(
+            "(?i)\\bconfigured overlap period\\b");
+    private static final Pattern RATE_LIMIT_WINDOW_CLAIM = Pattern.compile(
+            "(?i)\\b(?:headers?|x-ratelimit-[a-z-]+)\\s+(?:describe|show|report|are)\\s+(?:the\\s+)?"
+                    + "(?:current|fixed)\\s+(?:rate-limit\\s+)?window\\b");
+    private static final Pattern UNNEGATED_RATE_LIMIT_WINDOW = Pattern.compile(
+            "(?i)(?<!not )(?:current|fixed) rate-limit window");
 
     @Test
     void publishedContractDescribesTheStrictRetrievalApi() throws IOException {
@@ -45,6 +56,14 @@ class RetrievalOpenApiContractTest {
                 "RetrievalRecord", "properties", "metadata");
         assertReference(root, "#/components/responses/RateLimited", "paths", "/openapi/v1/retrieval",
                 "post", "responses", "429");
+        assertErrorResponseReference(root, "400", "BadRequest");
+        assertErrorResponseReference(root, "401", "Unauthorized");
+        assertErrorResponseReference(root, "403", "Forbidden");
+        assertErrorResponseReference(root, "413", "RequestTooLarge");
+        assertErrorResponseReference(root, "415", "UnsupportedMediaType");
+        assertErrorResponseReference(root, "500", "InternalError");
+        assertErrorResponseReference(root, "503", "RetrievalUnavailable");
+        assertErrorResponseReference(root, "504", "RetrievalTimeout");
         assertThat(schemaProperties(root, "RetrievalRequest"))
                 .containsExactlyInAnyOrder("query", "retrieval_setting");
         assertThat(path(root, "components", "schemas", "RetrievalRequest", "additionalProperties"))
@@ -101,6 +120,12 @@ class RetrievalOpenApiContractTest {
         assertHeaderReference(root, "X-RateLimit-Reset", "RateLimitReset", "components", "responses", "RateLimited",
                 "headers");
         assertHeaderReference(root, "Retry-After", "RetryAfter", "components", "responses", "RateLimited", "headers");
+        assertReference(root, "#/components/schemas/ErrorResponse", "components", "responses", "RateLimited",
+                "content", "application/json", "schema");
+        assertHeaderReference(root, "X-Request-ID", "RequestId", "components", "responses", "ErrorResponse",
+                "headers");
+        assertReference(root, "#/components/schemas/ErrorResponse", "components", "responses", "ErrorResponse",
+                "content", "application/json", "schema");
         assertThat(String.valueOf(path(root, "components", "headers", "RateLimitLimit", "description")))
                 .contains("per-minute refill rate");
         assertThat(String.valueOf(path(root, "components", "headers", "RateLimitRemaining", "description")))
@@ -111,8 +136,8 @@ class RetrievalOpenApiContractTest {
                 .contains("Invalid, expired, and revoked credentials use authentication_failed");
         assertThat(String.valueOf(path(root, "components", "responses", "Forbidden", "description")))
                 .contains("Disabled credentials return 403");
-        assertNoUnsupportedRequestField(root, "knowledge_id");
-        assertNoUnsupportedRequestField(root, "metadata_condition");
+        assertNoForbiddenPostRequestField(root, "knowledge_id");
+        assertNoForbiddenPostRequestField(root, "metadata_condition");
         assertRequestExample(root);
         assertSuccessExample(root);
 
@@ -122,9 +147,9 @@ class RetrievalOpenApiContractTest {
         assertThat(guide).contains("immediately revoked", "No overlap is guaranteed", "atomically replace",
                 "token bucket", "per-minute refill rate", "available whole tokens", "burst capacity",
                 "refills to burst capacity", "Retry-After");
-        assertNoObsoleteProse(guide);
-        assertNoObsoleteProse(Files.readString(OPENAPI));
-        assertMarkdownRequestBlocksAreStrict(guide);
+        assertNoObsoleteClaims(guide);
+        assertNoObsoleteClaims(Files.readString(OPENAPI));
+        assertFencedExamplesAreStrict(guide);
     }
 
     @SuppressWarnings("unchecked")
@@ -166,6 +191,12 @@ class RetrievalOpenApiContractTest {
         assertReference(root, "#/components/headers/" + target, headerPath);
     }
 
+    private static void assertErrorResponseReference(Map<String, Object> root, String status, String component) {
+        assertReference(root, "#/components/responses/" + component, "paths", "/openapi/v1/retrieval", "post",
+                "responses", status);
+        assertReference(root, "#/components/responses/ErrorResponse", "components", "responses", component);
+    }
+
     @SuppressWarnings("unchecked")
     private static void assertNullable(Map<String, Object> root, String field, String scalarType) {
         Object type = path(root, "components", "schemas", "RetrievalMetadata", "properties", field, "type");
@@ -173,14 +204,12 @@ class RetrievalOpenApiContractTest {
         assertThat((List<String>) type).containsExactlyInAnyOrder(scalarType, "null");
     }
 
-    private static void assertNoUnsupportedRequestField(Map<String, Object> root, String field) {
-        assertThat(schemaProperties(root, "RetrievalRequest")).doesNotContain(field);
-        assertThat(containsKey(path(root, "components", "schemas", "RetrievalRequest"), field)).isFalse();
-        assertThat(containsKey(path(root, "components", "schemas", "RetrievalSetting"), field)).isFalse();
-        assertThat(path(root, "paths", "/openapi/v1/retrieval", "post", "requestBody", "content",
-                "application/json", "examples")).isInstanceOf(Map.class);
-        assertThat(containsKey(path(root, "paths", "/openapi/v1/retrieval", "post", "requestBody", "content",
-                "application/json", "examples"), field)).isFalse();
+    private static void assertNoForbiddenPostRequestField(Map<String, Object> root, String field) {
+        Object post = path(root, "paths", "/openapi/v1/retrieval", "post");
+        assertThat(post).isInstanceOf(Map.class);
+        Set<String> visitedReferences = new HashSet<>();
+        scanExecutableRequestNode(root, path(map(post), "parameters"), field, visitedReferences, null);
+        scanExecutableRequestNode(root, path(map(post), "requestBody"), field, visitedReferences, null);
     }
 
     private static void assertRequestExample(Map<String, Object> root) {
@@ -213,31 +242,54 @@ class RetrievalOpenApiContractTest {
         assertNoForbiddenField(example);
     }
 
-    private static void assertNoObsoleteProse(String document) {
-        assertThat(document).doesNotContain("overlap period", "overlap guarantee", "current rate-limit window",
-                "current window", "fixed window", "fixed-window");
+    private static void assertNoObsoleteClaims(String document) {
+        assertThat(OVERLAP_PERIOD_CLAIM.matcher(document).find()).isFalse();
+        assertThat(CONFIGURED_OVERLAP_PERIOD_CLAIM.matcher(document).find()).isFalse();
+        assertThat(RATE_LIMIT_WINDOW_CLAIM.matcher(document).find()).isFalse();
+        assertThat(UNNEGATED_RATE_LIMIT_WINDOW.matcher(document).find()).isFalse();
     }
 
-    private static void assertMarkdownRequestBlocksAreStrict(String guide) throws IOException {
-        Matcher matcher = FENCED_CODE_BLOCK.matcher(guide);
-        int requestBlockCount = 0;
-        while (matcher.find()) {
-            String block = matcher.group(1);
-            if (!block.contains("query")) {
+    private static void assertFencedExamplesAreStrict(String guide) throws IOException {
+        List<FencedCodeBlock> blocks = fencedCodeBlocks(guide);
+        assertThat(blocks).isNotEmpty();
+        for (FencedCodeBlock block : blocks) {
+            assertThat(block.content()).doesNotContain("knowledge_id", "metadata_condition");
+        }
+
+        int requestExamples = 0;
+        int responseExamples = 0;
+        int errorExamples = 0;
+        for (FencedCodeBlock block : blocks) {
+            if (!"json".equalsIgnoreCase(block.language())) {
                 continue;
             }
-            requestBlockCount++;
-            assertThat(block).doesNotContain("knowledge_id", "metadata_condition");
-            if (block.stripLeading().startsWith("{")) {
-                JsonNode request = JSON.readTree(block);
-                assertThat(request.isObject()).isTrue();
-                assertThat(jsonObjectFields(request)).containsExactlyInAnyOrder("query", "retrieval_setting");
-                assertThat(request.path("query").asText()).isEqualTo("退款需要哪些材料？");
-                assertThat(jsonObjectFields(request.path("retrieval_setting")))
+            JsonNode payload = JSON.readTree(block.content());
+            if (payload.has("query")) {
+                assertThat(jsonObjectFields(payload)).containsExactlyInAnyOrder("query", "retrieval_setting");
+                assertThat(payload.path("query").asText()).isEqualTo("退款需要哪些材料？");
+                assertThat(jsonObjectFields(payload.path("retrieval_setting")))
                         .containsExactlyInAnyOrder("top_k", "score_threshold");
+                requestExamples++;
+            } else if (payload.has("records")) {
+                assertThat(jsonObjectFields(payload)).containsExactly("records");
+                assertThat(payload.path("records").isArray()).isTrue();
+                assertThat(payload.path("records").size()).isEqualTo(1);
+                JsonNode record = payload.path("records").get(0);
+                assertThat(jsonObjectFields(record)).containsExactlyInAnyOrder("content", "score", "title", "metadata");
+                assertThat(jsonObjectFields(record.path("metadata"))).containsExactlyInAnyOrder(
+                        "document_id", "chunk_id", "file_type", "page_number", "chunk_index");
+                responseExamples++;
+            } else if (payload.has("request_id")) {
+                assertThat(jsonObjectFields(payload)).containsExactlyInAnyOrder("request_id", "error");
+                assertThat(jsonObjectFields(payload.path("error"))).containsExactlyInAnyOrder("code", "message", "param");
+                errorExamples++;
+            } else {
+                throw new AssertionError("Unexpected JSON fenced example");
             }
         }
-        assertThat(requestBlockCount).isGreaterThanOrEqualTo(5);
+        assertThat(requestExamples).isEqualTo(1);
+        assertThat(responseExamples).isEqualTo(1);
+        assertThat(errorExamples).isEqualTo(1);
     }
 
     @SuppressWarnings("unchecked")
@@ -255,6 +307,79 @@ class RetrievalOpenApiContractTest {
     private static void assertNoForbiddenField(Object value) {
         assertThat(containsKey(value, "knowledge_id")).isFalse();
         assertThat(containsKey(value, "metadata_condition")).isFalse();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void scanExecutableRequestNode(Map<String, Object> root, Object node, String field,
+                                                  Set<String> visitedReferences, String parentKey) {
+        if (node instanceof Map<?, ?> nodeMap) {
+            for (Map.Entry<String, Object> entry : ((Map<String, Object>) nodeMap).entrySet()) {
+                String key = entry.getKey();
+                Object value = entry.getValue();
+                if (isNarrativeKey(key)) {
+                    continue;
+                }
+                assertThat(key).isNotEqualTo(field);
+                if ("$ref".equals(key) && value instanceof String reference) {
+                    assertThat(reference).doesNotContain("/" + field);
+                    if (visitedReferences.add(reference)) {
+                        scanExecutableRequestNode(root, resolveLocalReference(root, reference), field,
+                                visitedReferences, "$ref");
+                    }
+                } else if ("example".equals(key) && value instanceof String example) {
+                    assertThat(example).doesNotContain("\"" + field + "\":", "'" + field + "':");
+                } else {
+                    scanExecutableRequestNode(root, value, field, visitedReferences, key);
+                }
+            }
+        } else if (node instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof String string) {
+                    assertThat(string).isNotEqualTo(field);
+                }
+                scanExecutableRequestNode(root, item, field, visitedReferences, parentKey);
+            }
+        } else if (node instanceof String string) {
+            if ("$ref".equals(parentKey)) {
+                assertThat(string).doesNotContain("/" + field);
+            }
+            if ("name".equals(parentKey)) {
+                assertThat(string).isNotEqualTo(field);
+            }
+            if ("example".equals(parentKey) || "value".equals(parentKey)) {
+                assertThat(string).doesNotContain("\"" + field + "\":", "'" + field + "':");
+            }
+        }
+    }
+
+    private static boolean isNarrativeKey(String key) {
+        return "description".equals(key) || "summary".equals(key) || "title".equals(key);
+    }
+
+    private static Object resolveLocalReference(Map<String, Object> root, String reference) {
+        if (!reference.startsWith("#/")) {
+            return null;
+        }
+        Object current = root;
+        for (String segment : reference.substring(2).split("/")) {
+            if (!(current instanceof Map<?, ?> map)) {
+                return null;
+            }
+            current = map.get(segment.replace("~1", "/").replace("~0", "~"));
+        }
+        return current;
+    }
+
+    private static List<FencedCodeBlock> fencedCodeBlocks(String guide) {
+        List<FencedCodeBlock> blocks = new ArrayList<>();
+        Matcher matcher = FENCED_CODE_BLOCK.matcher(guide);
+        while (matcher.find()) {
+            blocks.add(new FencedCodeBlock(matcher.group(1).trim(), matcher.group(2)));
+        }
+        return blocks;
+    }
+
+    private record FencedCodeBlock(String language, String content) {
     }
 
     private static Set<String> jsonObjectFields(JsonNode node) {
