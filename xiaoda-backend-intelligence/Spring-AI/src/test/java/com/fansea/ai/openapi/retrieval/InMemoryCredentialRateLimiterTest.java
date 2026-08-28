@@ -6,6 +6,14 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -93,6 +101,103 @@ class InMemoryCredentialRateLimiterTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> limiter.acquire(45L, 60, 10, 0))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void activeLeaseCannotExpireIntoFreshConcurrencyBucket() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-28T00:00:00Z"));
+        InMemoryCredentialRateLimiter limiter = new InMemoryCredentialRateLimiter(clock);
+        CredentialRateLimiter.RateLimitLease active = limiter.acquire(46L, 60, 10, 1);
+
+        clock.advance(Duration.ofMinutes(11));
+
+        assertThatThrownBy(() -> limiter.acquire(46L, 60, 10, 1))
+                .isInstanceOf(CredentialRateLimiter.RateLimitExceededException.class);
+        active.close();
+        limiter.acquire(46L, 60, 10, 1).close();
+    }
+
+    @Test
+    void failsClosedWhenConfiguredBucketCapacityIsAllActive() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-28T00:00:00Z"));
+        InMemoryCredentialRateLimiter limiter = new InMemoryCredentialRateLimiter(clock, 2);
+        CredentialRateLimiter.RateLimitLease first = limiter.acquire(47L, 60, 10, 1);
+        CredentialRateLimiter.RateLimitLease second = limiter.acquire(48L, 60, 10, 1);
+
+        assertThatThrownBy(() -> limiter.acquire(49L, 60, 10, 1))
+                .isInstanceOf(CredentialRateLimiter.RateLimitExceededException.class);
+        assertThatThrownBy(() -> limiter.acquire(47L, 60, 10, 1))
+                .isInstanceOf(CredentialRateLimiter.RateLimitExceededException.class);
+
+        first.close();
+        limiter.acquire(49L, 60, 10, 1).close();
+        assertThatThrownBy(() -> limiter.acquire(48L, 60, 10, 1))
+                .isInstanceOf(CredentialRateLimiter.RateLimitExceededException.class);
+        second.close();
+    }
+
+    @Test
+    void concurrentAcquisitionAllowsOnlyConfiguredSameCredentialConcurrency() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-28T00:00:00Z"));
+        InMemoryCredentialRateLimiter limiter = new InMemoryCredentialRateLimiter(clock, 16);
+        int callers = 8;
+        ExecutorService executor = Executors.newFixedThreadPool(callers);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch attempted = new CountDownLatch(callers);
+        CountDownLatch releaseWinner = new CountDownLatch(1);
+        AtomicInteger acquired = new AtomicInteger();
+        AtomicInteger rejected = new AtomicInteger();
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int caller = 0; caller < callers; caller++) {
+                futures.add(executor.submit(() -> {
+                    start.await();
+                    try (CredentialRateLimiter.RateLimitLease ignored =
+                                 limiter.acquire(50L, 600, 100, 1)) {
+                        acquired.incrementAndGet();
+                        attempted.countDown();
+                        releaseWinner.await();
+                    } catch (CredentialRateLimiter.RateLimitExceededException exception) {
+                        rejected.incrementAndGet();
+                        attempted.countDown();
+                    }
+                    return null;
+                }));
+            }
+
+            start.countDown();
+            assertThat(attempted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(acquired).hasValue(1);
+            assertThat(rejected).hasValue(callers - 1);
+            releaseWinner.countDown();
+            for (Future<?> future : futures) {
+                future.get(5, TimeUnit.SECONDS);
+            }
+        } finally {
+            releaseWinner.countDown();
+            executor.shutdownNow();
+        }
+
+        limiter.acquire(50L, 600, 100, 1).close();
+    }
+
+    @Test
+    void resetEpochSecondCeilsAbsoluteFractionalResetInstant() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-28T00:00:00.900Z"));
+        InMemoryCredentialRateLimiter limiter = new InMemoryCredentialRateLimiter(clock);
+
+        try (CredentialRateLimiter.RateLimitLease first = limiter.acquire(51L, 60, 10, 1)) {
+            assertThat(first.resetEpochSecond())
+                    .isEqualTo(Instant.parse("2026-08-28T00:00:02Z").getEpochSecond());
+        }
+        for (int request = 1; request < 10; request++) {
+            limiter.acquire(51L, 60, 10, 1).close();
+        }
+
+        assertThatThrownBy(() -> limiter.acquire(51L, 60, 10, 1))
+                .isInstanceOfSatisfying(CredentialRateLimiter.RateLimitExceededException.class, exception ->
+                        assertThat(exception.resetEpochSecond())
+                                .isEqualTo(Instant.parse("2026-08-28T00:00:11Z").getEpochSecond()));
     }
 
     private static final class MutableClock extends Clock {

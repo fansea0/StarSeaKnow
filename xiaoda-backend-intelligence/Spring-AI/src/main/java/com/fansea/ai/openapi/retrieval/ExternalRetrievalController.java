@@ -18,6 +18,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -65,7 +66,7 @@ public class ExternalRetrievalController {
         this.meterRegistries = meterRegistries;
     }
 
-    @PostMapping("/retrieval")
+    @PostMapping(value = "/retrieval", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<RetrievalResponse> retrieve(@RequestBody(required = false) byte[] body,
                                                        HttpServletRequest request,
                                                        HttpServletResponse response) {
@@ -97,8 +98,6 @@ public class ExternalRetrievalController {
             try (lease) {
                 chunks = ragService.retrieve(new RetrievalQuery(parsed.query(), scope.knowledgeIds(),
                         parsed.topK(), parsed.scoreThreshold()));
-            } catch (ExternalApiException exception) {
-                throw exception;
             } catch (RuntimeException exception) {
                 throw mapRetrievalFailure(exception);
             }
@@ -120,6 +119,12 @@ public class ExternalRetrievalController {
             throw new ExternalApiException(HttpStatus.INTERNAL_SERVER_ERROR, "internal_error",
                     "Internal server error.");
         }
+    }
+
+    @PostMapping("/retrieval")
+    public void rejectUnsupportedMediaType() {
+        throw new ExternalApiException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "invalid_request",
+                "Content-Type must be application/json.", "Content-Type");
     }
 
     private AuthContext requireExternalContext() {

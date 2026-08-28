@@ -7,6 +7,7 @@ import com.fansea.ai.mapper.PlatformAdminMapper;
 import com.fansea.ai.openapi.credential.ApiCredentialResolver;
 import com.fansea.ai.openapi.credential.ApiKeyCodec;
 import com.fansea.ai.openapi.credential.CredentialScopeSnapshot;
+import com.fansea.ai.openapi.credential.CredentialAuthenticationException;
 import com.fansea.ai.openapi.credential.CredentialType;
 import com.fansea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
 import com.fansea.ai.openapi.error.ExternalApiException;
@@ -274,6 +275,26 @@ class ExternalApiKeyFilterTest {
 
         assertThat(controlResponse.getHeaders().getFirst("X-Request-ID")).isNotEqualTo("request\nkey");
         assertThat(controlResponse.getBody().request_id()).matches("[A-Za-z0-9._-]{1,64}");
+    }
+
+    @Test
+    void externalAdviceMapsDisabledTo403ButKeepsInvalidAndRevokedAuthenticationAt401() {
+        ExternalApiExceptionHandler handler = new ExternalApiExceptionHandler();
+        MockHttpServletRequest request = request("/openapi/v1/retrieval", "127.0.0.1");
+
+        ResponseEntity<ExternalApiExceptionHandler.ErrorEnvelope> disabled = handler.credential(
+                new CredentialAuthenticationException("credential_disabled"), request);
+        ResponseEntity<ExternalApiExceptionHandler.ErrorEnvelope> invalid = handler.credential(
+                new CredentialAuthenticationException("authentication_failed"), request);
+        ResponseEntity<ExternalApiExceptionHandler.ErrorEnvelope> revoked = handler.credential(
+                new CredentialAuthenticationException("credential_revoked"), request);
+
+        assertThat(disabled.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(disabled.getBody().error().code()).isEqualTo("credential_disabled");
+        assertThat(invalid.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(invalid.getBody().error().code()).isEqualTo("authentication_failed");
+        assertThat(revoked.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(revoked.getBody().error().code()).isEqualTo("authentication_failed");
     }
 
     private ExternalApiKeyFilter filter(ApiKeyCodec codec, ApiCredentialResolver resolver,

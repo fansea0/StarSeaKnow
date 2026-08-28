@@ -27,7 +27,7 @@ public class ExternalApiExceptionHandler {
     public ResponseEntity<ErrorEnvelope> credential(CredentialAuthenticationException exception,
                                                      HttpServletRequest request) {
         return switch (exception.code()) {
-            case "credential_disabled" -> response(HttpStatus.UNAUTHORIZED, "credential_disabled",
+            case "credential_disabled" -> response(HttpStatus.FORBIDDEN, "credential_disabled",
                     "Credential is unavailable.", null, request);
             case "credential_type_not_supported" -> response(HttpStatus.UNAUTHORIZED, "credential_type_not_supported",
                     "Credential type is not supported.", null, request);

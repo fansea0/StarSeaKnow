@@ -5,6 +5,7 @@ import com.fansea.ai.openapi.credential.ApiCredentialResolver;
 import com.fansea.ai.openapi.credential.CredentialType;
 import com.fansea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
 import com.fansea.ai.openapi.error.ExternalApiExceptionHandler;
+import com.fansea.ai.openapi.error.ExternalApiException;
 import com.fansea.ai.service.RagService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,10 +17,12 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -139,6 +142,73 @@ class ExternalRetrievalControllerTest {
     }
 
     @Test
+    void rejectsMalformedUtf8Bytes() throws Exception {
+        byte[] prefix = "{\"query\":\"".getBytes(StandardCharsets.UTF_8);
+        byte[] suffix = "\"}".getBytes(StandardCharsets.UTF_8);
+        byte[] body = new byte[prefix.length + 2 + suffix.length];
+        System.arraycopy(prefix, 0, body, 0, prefix.length);
+        body[prefix.length] = (byte) 0xC3;
+        body[prefix.length + 1] = 0x28;
+        System.arraycopy(suffix, 0, body, prefix.length + 2, suffix.length);
+
+        assertInvalidWireJson(body);
+    }
+
+    @Test
+    void rejectsUtf16JsonRegardlessOfByteOrder() throws Exception {
+        String json = "{\"query\":\"refund\"}";
+
+        assertInvalidWireJson(json.getBytes(StandardCharsets.UTF_16BE));
+        assertInvalidWireJson(json.getBytes(StandardCharsets.UTF_16LE));
+    }
+
+    @Test
+    void rejectsUtf32JsonRegardlessOfByteOrder() throws Exception {
+        String json = "{\"query\":\"refund\"}";
+
+        assertInvalidWireJson(json.getBytes(Charset.forName("UTF-32BE")));
+        assertInvalidWireJson(json.getBytes(Charset.forName("UTF-32LE")));
+    }
+
+    @Test
+    void rejectsSecondJsonDocumentAfterRequestObject() throws Exception {
+        assertInvalidWireJson("{\"query\":\"first\"} {\"query\":\"second\"}"
+                .getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void rejectsTrailingJsonTokenAfterRequestObject() throws Exception {
+        assertInvalidWireJson("{\"query\":\"first\"} true".getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void rejectsDuplicateJsonKeys() throws Exception {
+        assertInvalidWireJson("{\"query\":\"first\",\"query\":\"second\"}"
+                .getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void rejectsTextPlainWithStableExternalEnvelope() throws Exception {
+        assertUnsupportedMediaType(MediaType.TEXT_PLAIN);
+    }
+
+    @Test
+    void rejectsOctetStreamWithStableExternalEnvelope() throws Exception {
+        assertUnsupportedMediaType(MediaType.APPLICATION_OCTET_STREAM);
+    }
+
+    @Test
+    void rejectsMissingContentTypeWithStableExternalEnvelope() throws Exception {
+        mockMvc.perform(post(PATH).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.error.code").value("invalid_request"))
+                .andExpect(jsonPath("$.error.param").value("Content-Type"))
+                .andExpect(header().exists("X-Request-ID"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("HttpMediaType"))));
+        verify(ragService, never()).retrieve(any());
+    }
+
+    @Test
     void rejectsBodyLargerThanThirtyTwoKiBBeforeJsonParsing() throws Exception {
         byte[] body = ("{\"query\":\"" + "x".repeat(33 * 1024) + "\"}").getBytes(StandardCharsets.UTF_8);
 
@@ -154,6 +224,25 @@ class ExternalRetrievalControllerTest {
     void rejectsBlankAndOverTwoHundredFiftyCharacterQueries() throws Exception {
         assertInvalidRequest("{\"query\":\"   \"}", "query");
         assertInvalidRequest("{\"query\":\"" + "q".repeat(251) + "\"}", "query");
+    }
+
+    @Test
+    void rejectsIdeographicSpaceAndNonBreakingSpaceOnlyQueries() throws Exception {
+        assertInvalidRequest("{\"query\":\"\\u3000\\u3000\"}", "query");
+        assertInvalidRequest("{\"query\":\"\\u00a0\\u00a0\"}", "query");
+    }
+
+    @Test
+    void trimsUnicodeBoundarySpacesWithoutChangingCjkQuery() throws Exception {
+        when(ragService.retrieve(any())).thenReturn(List.of());
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"query\":\"\\u3000退款材料\\u00a0\"}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<RetrievalQuery> query = ArgumentCaptor.forClass(RetrievalQuery.class);
+        verify(ragService).retrieve(query.capture());
+        assertThat(query.getValue().query()).isEqualTo("退款材料");
     }
 
     @Test
@@ -247,6 +336,18 @@ class ExternalRetrievalControllerTest {
     }
 
     @Test
+    void sanitizesAuthShapedExternalExceptionThrownByRetrievalService() throws Exception {
+        when(ragService.retrieve(any())).thenThrow(new ExternalApiException(
+                HttpStatus.UNAUTHORIZED, "authentication_failed", "downstream secret details"));
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error.code").value("internal_error"))
+                .andExpect(jsonPath("$.error.message").value("Internal server error."))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("downstream secret"))));
+    }
+
+    @Test
     void mapsDependencyFailureAndTimeoutWithoutLeakingInternals() throws Exception {
         when(ragService.retrieve(any())).thenThrow(new DataAccessResourceFailureException("database host secret"));
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
@@ -303,6 +404,25 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.code").value("invalid_request"))
                 .andExpect(jsonPath("$.error.param").value(param))
                 .andExpect(header().exists("X-Request-ID"));
+        verify(ragService, never()).retrieve(any());
+    }
+
+    private void assertInvalidWireJson(byte[] body) throws Exception {
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("invalid_request"))
+                .andExpect(header().exists("X-Request-ID"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Json"))));
+        verify(ragService, never()).retrieve(any());
+    }
+
+    private void assertUnsupportedMediaType(MediaType mediaType) throws Exception {
+        mockMvc.perform(post(PATH).contentType(mediaType).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.error.code").value("invalid_request"))
+                .andExpect(jsonPath("$.error.param").value("Content-Type"))
+                .andExpect(header().exists("X-Request-ID"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("HttpMediaType"))));
         verify(ragService, never()).retrieve(any());
     }
 
