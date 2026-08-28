@@ -66,13 +66,14 @@ public class ExternalRetrievalController {
         this.meterRegistries = meterRegistries;
     }
 
-    @PostMapping(value = "/retrieval", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @PostMapping("/retrieval")
     public ResponseEntity<RetrievalResponse> retrieve(@RequestBody(required = false) byte[] body,
                                                        HttpServletRequest request,
                                                        HttpServletResponse response) {
         long startedNanos = System.nanoTime();
         String credentialType = "none";
         try {
+            requireJsonContentType(request);
             AuthContext context = requireExternalContext();
             credentialType = context.getCredentialType();
             RagKnowledgeScopeSnapshot scope = requireRagScope(context);
@@ -121,12 +122,6 @@ public class ExternalRetrievalController {
         }
     }
 
-    @PostMapping("/retrieval")
-    public void rejectUnsupportedMediaType() {
-        throw new ExternalApiException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "invalid_request",
-                "Content-Type must be application/json.", "Content-Type");
-    }
-
     private AuthContext requireExternalContext() {
         AuthContext context = AuthContext.current();
         if (context == null || context.getKind() != AuthContext.Kind.EXTERNAL_API
@@ -148,6 +143,20 @@ public class ExternalRetrievalController {
                     "Credential has no knowledge scope.");
         }
         return scope;
+    }
+
+    private void requireJsonContentType(HttpServletRequest request) {
+        String contentType = request.getContentType();
+        try {
+            if (contentType != null
+                    && MediaType.APPLICATION_JSON.isCompatibleWith(MediaType.parseMediaType(contentType))) {
+                return;
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Invalid media types use the same stable external contract as unsupported media types.
+        }
+        throw new ExternalApiException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "invalid_request",
+                "Content-Type must be application/json.", "Content-Type");
     }
 
     private RetrievalResponse boundedResponse(List<RetrievedChunk> chunks) {

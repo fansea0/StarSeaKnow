@@ -209,6 +209,33 @@ class ExternalRetrievalControllerTest {
     }
 
     @Test
+    void rejectsEmptyApplicationJsonBodyWithoutAmbiguousRouting() throws Exception {
+        mockMvc.perform(post(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("X-Request-ID", "req-empty-json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("invalid_request"))
+                .andExpect(header().string("X-Request-ID", "req-empty-json"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Ambiguous"))));
+        verify(ragService, never()).retrieve(any());
+    }
+
+    @Test
+    void rejectsEmptyBodyWithoutContentTypeWithoutAmbiguousRouting() throws Exception {
+        assertUnsupportedEmptyRequest(null, "req-empty-missing");
+    }
+
+    @Test
+    void rejectsEmptyTextPlainBodyWithoutAmbiguousRouting() throws Exception {
+        assertUnsupportedEmptyRequest(MediaType.TEXT_PLAIN, "req-empty-text");
+    }
+
+    @Test
+    void rejectsEmptyOctetStreamBodyWithoutAmbiguousRouting() throws Exception {
+        assertUnsupportedEmptyRequest(MediaType.APPLICATION_OCTET_STREAM, "req-empty-octet");
+    }
+
+    @Test
     void rejectsBodyLargerThanThirtyTwoKiBBeforeJsonParsing() throws Exception {
         byte[] body = ("{\"query\":\"" + "x".repeat(33 * 1024) + "\"}").getBytes(StandardCharsets.UTF_8);
 
@@ -423,6 +450,20 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.param").value("Content-Type"))
                 .andExpect(header().exists("X-Request-ID"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("HttpMediaType"))));
+        verify(ragService, never()).retrieve(any());
+    }
+
+    private void assertUnsupportedEmptyRequest(MediaType mediaType, String requestId) throws Exception {
+        var request = post(PATH).header("X-Request-ID", requestId);
+        if (mediaType != null) {
+            request.contentType(mediaType);
+        }
+        mockMvc.perform(request)
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.error.code").value("invalid_request"))
+                .andExpect(jsonPath("$.error.param").value("Content-Type"))
+                .andExpect(header().string("X-Request-ID", requestId))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Ambiguous"))));
         verify(ragService, never()).retrieve(any());
     }
 
