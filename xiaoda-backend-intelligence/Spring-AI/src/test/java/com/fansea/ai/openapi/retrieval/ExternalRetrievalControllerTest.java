@@ -10,12 +10,15 @@ import com.fansea.ai.service.RagService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.context.annotation.Import;
@@ -206,6 +209,31 @@ class ExternalRetrievalControllerTest {
                 .andExpect(header().exists("X-Request-ID"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("HttpMediaType"))));
         verify(ragService, never()).retrieve(any());
+    }
+
+    @ParameterizedTest(name = "rejects nonempty Content-Type {0}")
+    @ValueSource(strings = {"*/*", "application/*", "application/*+json", "not a media type"})
+    void rejectsWildcardAndMalformedContentTypesWithNonemptyBody(String contentType) throws Exception {
+        assertUnsupportedRawContentType(contentType, "{\"query\":\"refund\"}", "req-raw-nonempty");
+    }
+
+    @ParameterizedTest(name = "rejects empty Content-Type {0}")
+    @ValueSource(strings = {"*/*", "application/*", "application/*+json", "not a media type"})
+    void rejectsWildcardAndMalformedContentTypesWithEmptyBody(String contentType) throws Exception {
+        assertUnsupportedRawContentType(contentType, "", "req-raw-empty");
+    }
+
+    @Test
+    void acceptsCaseInsensitiveApplicationJsonWithCharsetParameter() throws Exception {
+        when(ragService.retrieve(any())).thenReturn(List.of());
+
+        mockMvc.perform(post(PATH)
+                        .header(HttpHeaders.CONTENT_TYPE, "Application/JSON; Charset=UTF-8")
+                        .content("{\"query\":\"refund\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().string("{\"records\":[]}"));
+
+        verify(ragService).retrieve(any());
     }
 
     @Test
@@ -464,6 +492,20 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.param").value("Content-Type"))
                 .andExpect(header().string("X-Request-ID", requestId))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Ambiguous"))));
+        verify(ragService, never()).retrieve(any());
+    }
+
+    private void assertUnsupportedRawContentType(String contentType, String body, String requestId) throws Exception {
+        mockMvc.perform(post(PATH)
+                        .header(HttpHeaders.CONTENT_TYPE, contentType)
+                        .header("X-Request-ID", requestId)
+                        .content(body))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.request_id").value(requestId))
+                .andExpect(jsonPath("$.error.code").value("invalid_request"))
+                .andExpect(jsonPath("$.error.param").value("Content-Type"))
+                .andExpect(header().string("X-Request-ID", requestId))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("MediaType"))));
         verify(ragService, never()).retrieve(any());
     }
 

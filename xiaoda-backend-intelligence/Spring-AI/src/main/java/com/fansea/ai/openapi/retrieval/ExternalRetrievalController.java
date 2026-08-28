@@ -21,10 +21,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -67,8 +67,7 @@ public class ExternalRetrievalController {
     }
 
     @PostMapping("/retrieval")
-    public ResponseEntity<RetrievalResponse> retrieve(@RequestBody(required = false) byte[] body,
-                                                       HttpServletRequest request,
+    public ResponseEntity<RetrievalResponse> retrieve(HttpServletRequest request,
                                                        HttpServletResponse response) {
         long startedNanos = System.nanoTime();
         String credentialType = "none";
@@ -77,7 +76,7 @@ public class ExternalRetrievalController {
             AuthContext context = requireExternalContext();
             credentialType = context.getCredentialType();
             RagKnowledgeScopeSnapshot scope = requireRagScope(context);
-            RetrievalRequestParser.ParsedRetrievalRequest parsed = parser.parse(body);
+            RetrievalRequestParser.ParsedRetrievalRequest parsed = parser.parse(readBody(request));
 
             int requestsPerMinute = positiveOrDefault(context.getRequestsPerMinute(),
                     DEFAULT_REQUESTS_PER_MINUTE);
@@ -146,10 +145,12 @@ public class ExternalRetrievalController {
     }
 
     private void requireJsonContentType(HttpServletRequest request) {
-        String contentType = request.getContentType();
+        String contentType = request.getHeader(HttpHeaders.CONTENT_TYPE);
         try {
-            if (contentType != null
-                    && MediaType.APPLICATION_JSON.isCompatibleWith(MediaType.parseMediaType(contentType))) {
+            MediaType mediaType = contentType == null ? null : MediaType.parseMediaType(contentType);
+            if (mediaType != null
+                    && "application".equalsIgnoreCase(mediaType.getType())
+                    && "json".equalsIgnoreCase(mediaType.getSubtype())) {
                 return;
             }
         } catch (IllegalArgumentException ignored) {
@@ -157,6 +158,15 @@ public class ExternalRetrievalController {
         }
         throw new ExternalApiException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "invalid_request",
                 "Content-Type must be application/json.", "Content-Type");
+    }
+
+    private byte[] readBody(HttpServletRequest request) {
+        try {
+            return request.getInputStream().readNBytes(RetrievalRequestParser.MAX_BODY_BYTES + 1);
+        } catch (IOException exception) {
+            throw new ExternalApiException(HttpStatus.BAD_REQUEST, "invalid_request",
+                    "Request body could not be read.");
+        }
     }
 
     private RetrievalResponse boundedResponse(List<RetrievedChunk> chunks) {
