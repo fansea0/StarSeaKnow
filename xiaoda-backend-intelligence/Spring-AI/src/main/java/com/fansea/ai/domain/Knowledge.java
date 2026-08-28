@@ -8,6 +8,7 @@ import lombok.Data;
 
 import java.io.Serializable;
 import java.util.Date;
+import java.util.UUID;
 
 /**
  * 
@@ -19,6 +20,8 @@ public class Knowledge implements Serializable {
 
     @TableId(type = IdType.AUTO)
     private Long id;
+
+    private UUID publicId;
 
     private String name;
 

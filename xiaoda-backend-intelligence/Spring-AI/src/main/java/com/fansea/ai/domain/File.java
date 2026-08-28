@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import java.io.Serializable;
 import java.util.Date;
+import java.util.UUID;
 
 /**
  * 
@@ -18,6 +19,7 @@ public class File implements Serializable {
 
     @TableId(type = IdType.AUTO)
     private Long id;
+    private UUID publicId;
     @TableField("file_name")
     private String fileName;
     @TableField("size")
