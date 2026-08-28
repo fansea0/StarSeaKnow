@@ -150,8 +150,8 @@ Successful responses include:
 | `X-RateLimit-Reset` | Estimated Unix epoch second when the token bucket refills to burst capacity. |
 | `Cache-Control: no-store` | The response must not be stored by shared caches or browsers. |
 
-These are token-bucket headers, not fixed-window counters. `Retry-After` on a
-429 response is the wait before retrying after that rate-limit rejection.
+These headers report token-bucket state. `Retry-After` on a 429 response is the
+wait before retrying after that rate-limit rejection.
 
 ## Errors and retries
 
@@ -188,7 +188,7 @@ successful responses are marked `Cache-Control: no-store`.
 ## Key rotation
 
 Key rotation issues a new plaintext key once; the old key is immediately revoked
-in the same transaction. There is no overlap guarantee. Plan a coordinated
+in the same transaction. No overlap is guaranteed. Plan a coordinated
 cutover: every caller must be ready to atomically replace and use the newly
 returned one-time key when rotation is performed. Store the new value in the
 server-side secret manager before use. If the one-time value is lost, rotate
