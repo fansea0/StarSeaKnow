@@ -1,0 +1,332 @@
+package com.fansea.ai.openapi.retrieval;
+
+import com.fansea.ai.auth.AuthContext;
+import com.fansea.ai.openapi.credential.ApiCredentialResolver;
+import com.fansea.ai.openapi.credential.CredentialType;
+import com.fansea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
+import com.fansea.ai.openapi.error.ExternalApiExceptionHandler;
+import com.fansea.ai.service.RagService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.http.MediaType;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.web.servlet.MockMvc;
+
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.TimeoutException;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@WebMvcTest(ExternalRetrievalController.class)
+@Import({ExternalRetrievalController.class, RetrievalRequestParser.class, ExternalApiExceptionHandler.class})
+class ExternalRetrievalControllerTest {
+
+    private static final String PATH = "/openapi/v1/retrieval";
+    private static final UUID DOCUMENT_ID = UUID.fromString("65c28997-ad56-4812-8a50-e00e804b45cc");
+    private static final UUID CHUNK_ID = UUID.fromString("a3c05b1e-c40b-4eb6-8a81-26f9874f6f7b");
+
+    @SpringBootConfiguration
+    static class TestApplication {
+    }
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockBean
+    private RagService ragService;
+
+    @MockBean
+    private CredentialRateLimiter rateLimiter;
+
+    @BeforeEach
+    void setUp() {
+        AuthContext.set(external(CredentialType.RAG_RETRIEVAL, Set.of(11L, 12L)));
+        when(rateLimiter.acquire(41L, 60, 10, 5)).thenReturn(lease(60, 9, 1_787_890_000L));
+    }
+
+    @AfterEach
+    void tearDown() {
+        AuthContext.clear();
+    }
+
+    @Test
+    void returnsStableRecordsHeadersAndCompleteSourceMetadata() throws Exception {
+        when(ragService.retrieve(any())).thenReturn(List.of(new RetrievedChunk(
+                "退款申请需要订单号。", 0.92, "售后服务说明.pdf", DOCUMENT_ID, CHUNK_ID, "pdf", 3, 12)));
+
+        mockMvc.perform(post(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("X-Request-ID", "req-safe-01")
+                        .content("""
+                                {"query":"退款材料","retrieval_setting":{"top_k":5,"score_threshold":0.5}}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.records[0].content").value("退款申请需要订单号。"))
+                .andExpect(jsonPath("$.records[0].score").value(0.92))
+                .andExpect(jsonPath("$.records[0].title").value("售后服务说明.pdf"))
+                .andExpect(jsonPath("$.records[0].metadata.document_id").value(DOCUMENT_ID.toString()))
+                .andExpect(jsonPath("$.records[0].metadata.chunk_id").value(CHUNK_ID.toString()))
+                .andExpect(jsonPath("$.records[0].metadata.file_type").value("pdf"))
+                .andExpect(jsonPath("$.records[0].metadata.page_number").value(3))
+                .andExpect(jsonPath("$.records[0].metadata.chunk_index").value(12))
+                .andExpect(header().string("Cache-Control", containsString("no-store")))
+                .andExpect(header().string("X-Request-ID", "req-safe-01"))
+                .andExpect(header().string("X-RateLimit-Limit", "60"))
+                .andExpect(header().string("X-RateLimit-Remaining", "9"))
+                .andExpect(header().string("X-RateLimit-Reset", "1787890000"));
+
+        ArgumentCaptor<RetrievalQuery> query = ArgumentCaptor.forClass(RetrievalQuery.class);
+        verify(ragService).retrieve(query.capture());
+        assertThat(query.getValue()).isEqualTo(new RetrievalQuery("退款材料", Set.of(11L, 12L), 5, 0.5));
+    }
+
+    @Test
+    void appliesDocumentedDefaults() throws Exception {
+        when(ragService.retrieve(any())).thenReturn(List.of());
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<RetrievalQuery> query = ArgumentCaptor.forClass(RetrievalQuery.class);
+        verify(ragService).retrieve(query.capture());
+        assertThat(query.getValue().topK()).isEqualTo(5);
+        assertThat(query.getValue().scoreThreshold()).isZero();
+    }
+
+    @Test
+    void rejectsKnowledgeIdField() throws Exception {
+        assertInvalidRequest("{\"query\":\"refund\",\"knowledge_id\":11}", "knowledge_id");
+    }
+
+    @Test
+    void rejectsMetadataConditionField() throws Exception {
+        assertInvalidRequest("{\"query\":\"refund\",\"metadata_condition\":{}}", "metadata_condition");
+    }
+
+    @Test
+    void rejectsArbitraryUnknownField() throws Exception {
+        assertInvalidRequest("{\"query\":\"refund\",\"debug\":true}", "debug");
+    }
+
+    @Test
+    void rejectsUnknownRetrievalSettingField() throws Exception {
+        assertInvalidRequest("{\"query\":\"refund\",\"retrieval_setting\":{\"top_k\":5,\"filter\":{}}}",
+                "retrieval_setting.filter");
+    }
+
+    @Test
+    void rejectsBodyLargerThanThirtyTwoKiBBeforeJsonParsing() throws Exception {
+        byte[] body = ("{\"query\":\"" + "x".repeat(33 * 1024) + "\"}").getBytes(StandardCharsets.UTF_8);
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.error.code").value("request_too_large"))
+                .andExpect(header().exists("X-Request-ID"));
+
+        verifyNoInteractions(ragService);
+    }
+
+    @Test
+    void rejectsBlankAndOverTwoHundredFiftyCharacterQueries() throws Exception {
+        assertInvalidRequest("{\"query\":\"   \"}", "query");
+        assertInvalidRequest("{\"query\":\"" + "q".repeat(251) + "\"}", "query");
+    }
+
+    @Test
+    void rejectsTopKOutsideOneThroughTwenty() throws Exception {
+        assertInvalidRequest("{\"query\":\"refund\",\"retrieval_setting\":{\"top_k\":0}}",
+                "retrieval_setting.top_k");
+        assertInvalidRequest("{\"query\":\"refund\",\"retrieval_setting\":{\"top_k\":21}}",
+                "retrieval_setting.top_k");
+    }
+
+    @Test
+    void rejectsScoreThresholdOutsideZeroThroughOne() throws Exception {
+        assertInvalidRequest("{\"query\":\"refund\",\"retrieval_setting\":{\"score_threshold\":-0.01}}",
+                "retrieval_setting.score_threshold");
+        assertInvalidRequest("{\"query\":\"refund\",\"retrieval_setting\":{\"score_threshold\":1.01}}",
+                "retrieval_setting.score_threshold");
+    }
+
+    @Test
+    void rejectsEmptyScopeBeforeRetrieval() throws Exception {
+        AuthContext.set(external(CredentialType.RAG_RETRIEVAL, Set.of()));
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("credential_has_no_knowledge_scope"))
+                .andExpect(header().exists("X-Request-ID"));
+
+        verifyNoInteractions(ragService, rateLimiter);
+    }
+
+    @Test
+    void rejectsAgentCredentialTypeBeforeRetrieval() throws Exception {
+        AuthContext.set(external(CredentialType.AGENT_INVOKE, Set.of(11L)));
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("credential_type_not_allowed"));
+
+        verifyNoInteractions(ragService, rateLimiter);
+    }
+
+    @Test
+    void rejectsJwtAuthContext() throws Exception {
+        AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 9L, 7L, "tenant_admin", "jti"));
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("authentication_failed"));
+
+        verifyNoInteractions(ragService, rateLimiter);
+    }
+
+    @Test
+    void returnsExactEmptyRecordsResponse() throws Exception {
+        when(ragService.retrieve(any())).thenReturn(List.of());
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"records\":[]}", true))
+                .andExpect(content().string("{\"records\":[]}"));
+    }
+
+    @Test
+    void returnsStableRateLimitEnvelopeAndRetryHeader() throws Exception {
+        when(rateLimiter.acquire(41L, 60, 10, 5)).thenThrow(
+                new CredentialRateLimiter.RateLimitExceededException(60, 0, 1_787_890_001L, 2));
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "2"))
+                .andExpect(header().exists("X-Request-ID"))
+                .andExpect(jsonPath("$.error.code").value("rate_limit_exceeded"))
+                .andExpect(jsonPath("$.error.message").value("Rate limit exceeded."));
+
+        verifyNoInteractions(ragService);
+    }
+
+    @Test
+    void closesRateLimitLeaseWhenRetrievalFails() throws Exception {
+        TrackingLease lease = new TrackingLease();
+        when(rateLimiter.acquire(41L, 60, 10, 5)).thenReturn(lease);
+        when(ragService.retrieve(any())).thenThrow(new IllegalStateException("sensitive database details"));
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error.code").value("internal_error"))
+                .andExpect(jsonPath("$.error.message").value("Internal server error."))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("sensitive"))));
+
+        assertThat(lease.closed).isTrue();
+    }
+
+    @Test
+    void mapsDependencyFailureAndTimeoutWithoutLeakingInternals() throws Exception {
+        when(ragService.retrieve(any())).thenThrow(new DataAccessResourceFailureException("database host secret"));
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error.code").value("retrieval_unavailable"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("database host"))));
+
+        reset(ragService);
+        when(ragService.retrieve(any())).thenThrow(new IllegalStateException(new TimeoutException("slow query")));
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isGatewayTimeout())
+                .andExpect(jsonPath("$.error.code").value("retrieval_timeout"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("slow query"))));
+    }
+
+    @Test
+    void truncatesChunkContentAndDropsLowestScoresToBoundResponse() throws Exception {
+        List<RetrievedChunk> chunks = new ArrayList<>();
+        for (int index = 0; index < 20; index++) {
+            chunks.add(new RetrievedChunk("界".repeat(3_000), 1.0 - index * 0.01, "source-" + index,
+                    UUID.randomUUID(), UUID.randomUUID(), "txt", null, index));
+        }
+        when(ragService.retrieve(any())).thenReturn(chunks);
+
+        byte[] response = mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"query\":\"refund\",\"retrieval_setting\":{\"top_k\":20}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.records[0].score").value(1.0))
+                .andReturn().getResponse().getContentAsByteArray();
+
+        assertThat(response.length).isLessThanOrEqualTo(128 * 1024);
+        String responseJson = new String(response, StandardCharsets.UTF_8);
+        assertThat(responseJson).contains("source-0").doesNotContain("source-19");
+    }
+
+    @Test
+    void normalizesScoresBeforeSortingPublicRecordsDescending() throws Exception {
+        when(ragService.retrieve(any())).thenReturn(List.of(
+                new RetrievedChunk("invalid", Double.NaN, "invalid-source", DOCUMENT_ID, CHUNK_ID,
+                        "txt", null, 0),
+                new RetrievedChunk("valid", 0.8, "valid-source", DOCUMENT_ID, CHUNK_ID,
+                        "txt", null, 1)));
+
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.records[0].content").value("valid"))
+                .andExpect(jsonPath("$.records[0].score").value(0.8))
+                .andExpect(jsonPath("$.records[1].score").value(0.0));
+    }
+
+    private void assertInvalidRequest(String body, String param) throws Exception {
+        mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("invalid_request"))
+                .andExpect(jsonPath("$.error.param").value(param))
+                .andExpect(header().exists("X-Request-ID"));
+        verify(ragService, never()).retrieve(any());
+    }
+
+    private static AuthContext external(CredentialType type, Set<Long> knowledgeIds) {
+        ApiCredentialResolver.ResolvedCredential credential = new ApiCredentialResolver.ResolvedCredential(
+                41L, 7L, type, "test", "active", OffsetDateTime.now().plusDays(1), List.of(),
+                60, 10, 5, 3L, new RagKnowledgeScopeSnapshot(knowledgeIds));
+        return AuthContext.external(credential);
+    }
+
+    private static CredentialRateLimiter.RateLimitLease lease(int limit, int remaining, long resetEpochSecond) {
+        return new CredentialRateLimiter.RateLimitLease() {
+            @Override public int limit() { return limit; }
+            @Override public int remaining() { return remaining; }
+            @Override public long resetEpochSecond() { return resetEpochSecond; }
+            @Override public void close() { }
+        };
+    }
+
+    private static final class TrackingLease implements CredentialRateLimiter.RateLimitLease {
+        private boolean closed;
+        @Override public int limit() { return 60; }
+        @Override public int remaining() { return 9; }
+        @Override public long resetEpochSecond() { return 1_787_890_000L; }
+        @Override public void close() { closed = true; }
+    }
+}
