@@ -110,22 +110,24 @@ components:
       schema:
         type: string
     RateLimitLimit:
-      description: Credential request limit for the current rate-limit window.
+      description: Configured per-minute refill rate for the credential token bucket.
       schema:
         type: integer
         minimum: 1
     RateLimitRemaining:
-      description: Requests remaining in the current rate-limit window.
+      description: |
+        Currently available whole tokens in the credential token bucket. The value is
+        bounded by burst capacity, which can be lower than or different from the refill rate.
       schema:
         type: integer
         minimum: 0
     RateLimitReset:
-      description: Unix epoch second when the current rate-limit window resets.
+      description: Estimated Unix epoch second when the token bucket refills to burst capacity.
       schema:
         type: integer
         format: int64
     RetryAfter:
-      description: Seconds to wait before retrying a rate-limited request.
+      description: Seconds to wait before retrying after a rate-limit rejection.
       schema:
         type: integer
         minimum: 1

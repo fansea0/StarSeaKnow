@@ -145,10 +145,13 @@ Successful responses include:
 | Header | Meaning |
 |---|---|
 | `X-Request-ID` | Request correlation ID. |
-| `X-RateLimit-Limit` | Credential limit for the current window. |
-| `X-RateLimit-Remaining` | Requests remaining in the current window. |
-| `X-RateLimit-Reset` | Window reset as a Unix epoch second. |
+| `X-RateLimit-Limit` | Configured per-minute refill rate of the credential token bucket. |
+| `X-RateLimit-Remaining` | Currently available whole tokens, bounded by burst capacity; this can be lower than or different from the refill rate. |
+| `X-RateLimit-Reset` | Estimated Unix epoch second when the token bucket refills to burst capacity. |
 | `Cache-Control: no-store` | The response must not be stored by shared caches or browsers. |
+
+These are token-bucket headers, not fixed-window counters. `Retry-After` on a
+429 response is the wait before retrying after that rate-limit rejection.
 
 ## Errors and retries
 
@@ -184,8 +187,9 @@ successful responses are marked `Cache-Control: no-store`.
 
 ## Key rotation
 
-Key rotation issues a new plaintext key once and revokes or expires the previous
-key according to the tenant administrator's configured overlap period. Store the
-new value in the server-side secret manager before deploying it. Update consumers
-one at a time, verify each consumer uses the new key, then allow the old key to
-be revoked. If the one-time value is lost, rotate again; it cannot be retrieved.
+Key rotation issues a new plaintext key once; the old key is immediately revoked
+in the same transaction. There is no overlap guarantee. Plan a coordinated
+cutover: every caller must be ready to atomically replace and use the newly
+returned one-time key when rotation is performed. Store the new value in the
+server-side secret manager before use. If the one-time value is lost, rotate
+again; it cannot be retrieved.
