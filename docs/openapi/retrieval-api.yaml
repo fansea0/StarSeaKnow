@@ -1,0 +1,316 @@
+openapi: 3.1.0
+info:
+  title: RAG Retrieval API
+  version: v1
+  description: |
+    Server-to-server retrieval over the complete knowledge scope authorized for the
+    bearer credential. The caller cannot select or narrow that scope.
+servers:
+  - url: http://127.0.0.1:8090
+    description: Trusted-network test server only; use test credentials only.
+  - url: https://api.example.com
+    description: Production example; public and live production traffic requires HTTPS.
+security:
+  - RagApiKey: []
+paths:
+  /openapi/v1/retrieval:
+    post:
+      operationId: retrieve
+      summary: Retrieve relevant chunks from the credential's authorized knowledge scope
+      description: |
+        Only application/json is accepted. The UTF-8 request body is limited to 32 KiB.
+        The caller cannot supply a knowledge-base selector or metadata filter; unknown
+        fields are rejected with invalid_request.
+      security:
+        - RagApiKey: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetrievalRequest'
+            examples:
+              refund-materials:
+                value:
+                  query: 退款需要哪些材料？
+                  retrieval_setting:
+                    top_k: 5
+                    score_threshold: 0.5
+      responses:
+        '200':
+          description: Retrieval completed. Records are sorted by descending normalized score.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrievalResponse'
+              examples:
+                matched-record:
+                  value:
+                    records:
+                      - content: 退款申请需要提交订单号、付款凭证以及退款原因。
+                        score: 0.92
+                        title: 售后服务说明.pdf
+                        metadata:
+                          document_id: 65c28997-ad56-4812-8a50-e00e804b45cc
+                          chunk_id: a3c05b1e-c40b-4eb6-8a81-26f9874f6f7b
+                          file_type: pdf
+                          page_number: 3
+                          chunk_index: 12
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/RetrievalUnavailable'
+        '504':
+          $ref: '#/components/responses/RetrievalTimeout'
+components:
+  securitySchemes:
+    RagApiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: RAG-API-Key
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: |
+        Optional caller correlation ID. A safe value is echoed; otherwise the server
+        generates one. Do not put credentials or sensitive data in this header.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,64}$'
+  headers:
+    RequestId:
+      description: Server correlation ID. Returned on every response.
+      schema:
+        type: string
+    RateLimitLimit:
+      description: Credential request limit for the current rate-limit window.
+      schema:
+        type: integer
+        minimum: 1
+    RateLimitRemaining:
+      description: Requests remaining in the current rate-limit window.
+      schema:
+        type: integer
+        minimum: 0
+    RateLimitReset:
+      description: Unix epoch second when the current rate-limit window resets.
+      schema:
+        type: integer
+        format: int64
+    RetryAfter:
+      description: Seconds to wait before retrying a rate-limited request.
+      schema:
+        type: integer
+        minimum: 1
+    NoStore:
+      description: Response must not be stored by browsers, proxies, or shared caches.
+      schema:
+        type: string
+        const: no-store
+  responses:
+    BadRequest:
+      description: |
+        invalid_authorization_header, https_required, or invalid_request. Invalid JSON,
+        duplicate fields, unsupported fields, and invalid parameter values use invalid_request.
+      $ref: '#/components/responses/ErrorResponse'
+    Unauthorized:
+      description: |
+        missing_authorization_header, authentication_failed, or credential_type_not_supported.
+        Invalid, expired, and revoked credentials use authentication_failed.
+      $ref: '#/components/responses/ErrorResponse'
+    Forbidden:
+      description: |
+        credential_disabled, credential_type_not_allowed, ip_not_allowed, or
+        credential_has_no_knowledge_scope. Disabled credentials return 403.
+      $ref: '#/components/responses/ErrorResponse'
+    RequestTooLarge:
+      description: request_too_large; the request body exceeds 32 KiB.
+      $ref: '#/components/responses/ErrorResponse'
+    UnsupportedMediaType:
+      description: invalid_request; Content-Type must be application/json.
+      $ref: '#/components/responses/ErrorResponse'
+    RateLimited:
+      description: rate_limit_exceeded; request, burst, or concurrency limit exceeded.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: internal_error; the server does not expose implementation details.
+      $ref: '#/components/responses/ErrorResponse'
+    RetrievalUnavailable:
+      description: retrieval_unavailable; a retrieval dependency is temporarily unavailable.
+      $ref: '#/components/responses/ErrorResponse'
+    RetrievalTimeout:
+      description: retrieval_timeout; retrieval timed out.
+      $ref: '#/components/responses/ErrorResponse'
+    ErrorResponse:
+      description: Stable external error envelope.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    RetrievalRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: Required search text. Leading and trailing Unicode whitespace is trimmed.
+        retrieval_setting:
+          $ref: '#/components/schemas/RetrievalSetting'
+    RetrievalSetting:
+      type: object
+      additionalProperties: false
+      properties:
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+          description: Maximum number of globally ranked records to return.
+        score_threshold:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0
+          description: Minimum normalized relevance score.
+    RetrievalResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - records
+      description: |
+        Empty results are returned as records: []. Each content value is capped at 8 KiB;
+        the serialized response is capped at 128 KiB by removing lowest-scoring records.
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetrievalRecord'
+    RetrievalRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - content
+        - score
+        - title
+        - metadata
+      properties:
+        content:
+          type: string
+          description: Retrieved chunk text, capped at 8 KiB of UTF-8 data.
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Normalized relevance score; records are returned in descending order.
+        title:
+          type: string
+          description: Source title; an empty string is returned when no title is available.
+        metadata:
+          $ref: '#/components/schemas/RetrievalMetadata'
+    RetrievalMetadata:
+      type: object
+      additionalProperties: false
+      required:
+        - document_id
+        - chunk_id
+        - file_type
+        - page_number
+        - chunk_index
+      properties:
+        document_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        chunk_id:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        file_type:
+          type:
+            - string
+            - 'null'
+        page_number:
+          type:
+            - integer
+            - 'null'
+        chunk_index:
+          type:
+            - integer
+            - 'null'
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - error
+      properties:
+        request_id:
+          type: string
+          description: Matches the X-Request-ID response header.
+        error:
+          type: object
+          additionalProperties: false
+          required:
+            - code
+            - message
+            - param
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            param:
+              type:
+                - string
+                - 'null'
