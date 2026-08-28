@@ -48,9 +48,9 @@ class FlywayMigrationIntegrationTest {
                 .baselineVersion("1")
                 .load();
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + schema + ".flyway_schema_history WHERE success", Integer.class))
-                .isEqualTo(4);
+                .isEqualTo(5);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + schema + ".platform_invitation", Integer.class))
                 .isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'agent' AND column_name IN ('model_url', 'model_api_key', 'model_id')", Integer.class, schema))
