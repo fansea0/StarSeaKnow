@@ -44,23 +44,49 @@ public class ExternalApiKeyFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
+        AuthContext.clear();
         try {
-            String rawKey = requiredBearerKey(request);
-            ApiKeyCodec.ParsedKey parsedKey = codec.parse(rawKey);
-            ApiCredentialResolver.ResolvedCredential credential = resolver.resolve(parsedKey);
-            enforceTransportAndIpPolicy(request, credential);
-            AuthContext.set(AuthContext.external(credential));
-            try {
-                chain.doFilter(request, response);
-            } finally {
-                AuthContext.clear();
+            AuthContext authenticated = authenticate(request, response);
+            if (authenticated == null) {
+                return;
             }
-        } catch (ExternalApiException | CredentialAuthenticationException exception) {
+            AuthContext.set(authenticated);
+            chain.doFilter(request, response);
+        } finally {
+            AuthContext.clear();
+        }
+    }
+
+    private AuthContext authenticate(HttpServletRequest request, HttpServletResponse response) throws ServletException {
+        String rawKey;
+        try {
+            rawKey = requiredBearerKey(request);
+        } catch (ExternalApiException exception) {
             handleFailure(request, response, exception);
+            return null;
+        }
+        ApiKeyCodec.ParsedKey parsedKey;
+        try {
+            parsedKey = codec.parse(rawKey);
         } catch (IllegalArgumentException exception) {
             handleFailure(request, response, new ExternalApiException(HttpStatus.UNAUTHORIZED,
                     "authentication_failed", "Authentication failed."));
+            return null;
         }
+        ApiCredentialResolver.ResolvedCredential credential;
+        try {
+            credential = resolver.resolve(parsedKey);
+        } catch (CredentialAuthenticationException exception) {
+            handleFailure(request, response, exception);
+            return null;
+        }
+        try {
+            enforceTransportAndIpPolicy(request, credential);
+        } catch (ExternalApiException exception) {
+            handleFailure(request, response, exception);
+            return null;
+        }
+        return AuthContext.external(credential);
     }
 
     private String requiredBearerKey(HttpServletRequest request) {

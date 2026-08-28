@@ -20,15 +20,16 @@ public class AuthContext {
     private final Integer requestsPerMinute;
     private final Integer burstCapacity;
     private final Integer maxConcurrency;
+    private final Long authorizationVersion;
 
     public AuthContext(Kind kind, long userId, Long tenantId, String role, String jti) {
-        this(kind, userId, tenantId, role, jti, null, null, null, null, null, null, null);
+        this(kind, userId, tenantId, role, jti, null, null, null, null, null, null, null, null);
     }
 
     private AuthContext(Kind kind, long userId, Long tenantId, String role, String jti,
                         Long credentialId, String credentialType, String credentialEnvironment,
                         CredentialScopeSnapshot credentialScope, Integer requestsPerMinute,
-                        Integer burstCapacity, Integer maxConcurrency) {
+                        Integer burstCapacity, Integer maxConcurrency, Long authorizationVersion) {
         this.kind = kind; this.userId = userId; this.tenantId = tenantId;
         this.role = role; this.jti = jti;
         this.credentialId = credentialId;
@@ -38,13 +39,14 @@ public class AuthContext {
         this.requestsPerMinute = requestsPerMinute;
         this.burstCapacity = burstCapacity;
         this.maxConcurrency = maxConcurrency;
+        this.authorizationVersion = authorizationVersion;
     }
 
     public static AuthContext external(ApiCredentialResolver.ResolvedCredential credential) {
         return new AuthContext(Kind.EXTERNAL_API, credential.credentialId(), credential.tenantId(),
                 "external_api", null, credential.credentialId(), credential.credentialType().name(),
                 credential.environment(), credential.scope(), credential.requestsPerMinute(),
-                credential.burstCapacity(), credential.maxConcurrency());
+                credential.burstCapacity(), credential.maxConcurrency(), credential.authorizationVersion());
     }
 
     public static AuthContext current() { return HOLDER.get(); }
@@ -63,4 +65,5 @@ public class AuthContext {
     public Integer getRequestsPerMinute() { return requestsPerMinute; }
     public Integer getBurstCapacity() { return burstCapacity; }
     public Integer getMaxConcurrency() { return maxConcurrency; }
+    public Long getAuthorizationVersion() { return authorizationVersion; }
 }

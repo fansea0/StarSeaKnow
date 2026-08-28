@@ -10,9 +10,13 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 @RestControllerAdvice(basePackages = "com.fansea.ai.openapi")
 public class ExternalApiExceptionHandler {
+
+    private static final Pattern SAFE_REQUEST_ID = Pattern.compile("[A-Za-z0-9._-]{1,64}");
+    private static final Pattern API_KEY_SHAPE = Pattern.compile("[a-z]+_[a-z0-9-]+_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+");
 
     @ExceptionHandler(ExternalApiException.class)
     public ResponseEntity<ErrorEnvelope> external(ExternalApiException exception, HttpServletRequest request) {
@@ -41,7 +45,8 @@ public class ExternalApiExceptionHandler {
 
     private String requestId(HttpServletRequest request) {
         String supplied = request.getHeader("X-Request-ID");
-        return StringUtils.hasText(supplied) && supplied.length() <= 128 ? supplied : UUID.randomUUID().toString();
+        return StringUtils.hasText(supplied) && SAFE_REQUEST_ID.matcher(supplied).matches()
+                && !API_KEY_SHAPE.matcher(supplied).matches() ? supplied : UUID.randomUUID().toString();
     }
 
     public record ErrorEnvelope(String request_id, ErrorBody error) {

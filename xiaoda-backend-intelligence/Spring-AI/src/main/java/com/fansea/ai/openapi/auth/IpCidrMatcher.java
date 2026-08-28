@@ -1,13 +1,9 @@
 package com.fansea.ai.openapi.auth;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.regex.Pattern;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class IpCidrMatcher {
-
-    private static final Pattern IPV4_LITERAL = Pattern.compile("\\d{1,3}(?:\\.\\d{1,3}){3}");
-    private static final Pattern IPV6_LITERAL = Pattern.compile("[0-9a-fA-F:.]+");
 
     private IpCidrMatcher() {
     }
@@ -53,13 +49,126 @@ public final class IpCidrMatcher {
     }
 
     private static byte[] literalAddress(String value) {
-        if (value == null || !(IPV4_LITERAL.matcher(value).matches() || IPV6_LITERAL.matcher(value).matches())) {
+        if (value == null || value.isEmpty()) {
             return null;
         }
-        try {
-            return InetAddress.getByName(value).getAddress();
-        } catch (UnknownHostException exception) {
+        return value.indexOf(':') >= 0 ? parseIpv6(value) : parseIpv4(value);
+    }
+
+    private static byte[] parseIpv4(String value) {
+        String[] octets = value.split("\\.", -1);
+        if (octets.length != 4) {
             return null;
         }
+        byte[] address = new byte[4];
+        for (int index = 0; index < octets.length; index++) {
+            String octet = octets[index];
+            if (octet.isEmpty() || octet.length() > 3) {
+                return null;
+            }
+            int number = 0;
+            for (int character = 0; character < octet.length(); character++) {
+                char valueCharacter = octet.charAt(character);
+                if (valueCharacter < '0' || valueCharacter > '9') {
+                    return null;
+                }
+                number = number * 10 + valueCharacter - '0';
+            }
+            if (number > 255) {
+                return null;
+            }
+            address[index] = (byte) number;
+        }
+        return address;
+    }
+
+    private static byte[] parseIpv6(String value) {
+        int compression = value.indexOf("::");
+        if (compression != value.lastIndexOf("::")) {
+            return null;
+        }
+        boolean compressed = compression >= 0;
+        String left = compressed ? value.substring(0, compression) : value;
+        String right = compressed ? value.substring(compression + 2) : "";
+        if (compressed && left.indexOf('.') >= 0) {
+            return null;
+        }
+        List<Integer> leftGroups = parseIpv6Groups(left);
+        List<Integer> rightGroups = compressed ? parseIpv6Groups(right) : List.of();
+        if (leftGroups == null || rightGroups == null) {
+            return null;
+        }
+        int groupCount = leftGroups.size() + rightGroups.size();
+        if ((compressed && groupCount >= 8) || (!compressed && groupCount != 8)) {
+            return null;
+        }
+        byte[] address = new byte[16];
+        int output = 0;
+        for (int group : leftGroups) {
+            output = writeGroup(address, output, group);
+        }
+        output += (8 - groupCount) * 2;
+        for (int group : rightGroups) {
+            output = writeGroup(address, output, group);
+        }
+        return address;
+    }
+
+    private static List<Integer> parseIpv6Groups(String side) {
+        if (side.isEmpty()) {
+            return new ArrayList<>();
+        }
+        String[] groups = side.split(":", -1);
+        List<Integer> parsed = new ArrayList<>();
+        for (int groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+            String group = groups[groupIndex];
+            if (group.isEmpty()) {
+                return null;
+            }
+            if (group.indexOf('.') >= 0) {
+                if (groupIndex != groups.length - 1) {
+                    return null;
+                }
+                byte[] ipv4 = parseIpv4(group);
+                if (ipv4 == null) {
+                    return null;
+                }
+                parsed.add(((ipv4[0] & 0xFF) << 8) | (ipv4[1] & 0xFF));
+                parsed.add(((ipv4[2] & 0xFF) << 8) | (ipv4[3] & 0xFF));
+                continue;
+            }
+            if (group.length() > 4) {
+                return null;
+            }
+            int number = 0;
+            for (int character = 0; character < group.length(); character++) {
+                int digit = asciiHexDigit(group.charAt(character));
+                if (digit < 0) {
+                    return null;
+                }
+                number = (number << 4) | digit;
+            }
+            parsed.add(number);
+        }
+        return parsed;
+    }
+
+    private static int asciiHexDigit(char value) {
+        if (value >= '0' && value <= '9') {
+            return value - '0';
+        }
+        if (value >= 'a' && value <= 'f') {
+            return value - 'a' + 10;
+        }
+        if (value >= 'A' && value <= 'F') {
+            return value - 'A' + 10;
+        }
+        return -1;
+    }
+
+    private static int writeGroup(byte[] address, int output, int group) {
+        address[output++] = (byte) (group >>> 8);
+        address[output++] = (byte) group;
+        return output;
     }
 }

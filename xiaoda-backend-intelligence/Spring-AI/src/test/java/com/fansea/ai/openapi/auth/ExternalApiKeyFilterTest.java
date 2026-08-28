@@ -10,10 +10,12 @@ import com.fansea.ai.openapi.credential.CredentialScopeSnapshot;
 import com.fansea.ai.openapi.credential.CredentialType;
 import com.fansea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
 import com.fansea.ai.openapi.error.ExternalApiException;
+import com.fansea.ai.openapi.error.ExternalApiExceptionHandler;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.servlet.HandlerExceptionResolver;
@@ -52,6 +54,7 @@ class ExternalApiKeyFilterTest {
         filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {
             assertThat(AuthContext.current().getKind()).isEqualTo(AuthContext.Kind.EXTERNAL_API);
             assertThat(AuthContext.current().getCredentialType()).isEqualTo("RAG_RETRIEVAL");
+            assertThat(AuthContext.current().getAuthorizationVersion()).isEqualTo(1L);
         });
 
         assertThat(AuthContext.current()).isNull();
@@ -72,6 +75,35 @@ class ExternalApiKeyFilterTest {
         assertThat(response.getStatus()).isEqualTo(401);
         assertThat(response.getContentAsString()).contains("missing_authorization_header");
         verify(resolver, never()).resolve(any());
+    }
+
+    @Test
+    void authenticationFailureClearsAnyPreexistingContext() throws Exception {
+        AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 9L, 3L, "tenant_admin", "old-jti"));
+        ExternalApiKeyFilter filter = filter(mock(ApiKeyCodec.class), mock(ApiCredentialResolver.class),
+                new ExternalApiTransportProperties());
+
+        filter.doFilter(request("/openapi/v1/retrieval", "127.0.0.1"), new MockHttpServletResponse(),
+                (req, res) -> { throw new AssertionError("chain must not run"); });
+
+        assertThat(AuthContext.current()).isNull();
+    }
+
+    @Test
+    void downstreamIllegalArgumentExceptionPropagatesInsteadOfBecomingAuthenticationFailure() {
+        ApiKeyCodec codec = mock(ApiKeyCodec.class);
+        ApiCredentialResolver resolver = mock(ApiCredentialResolver.class);
+        when(codec.parse(RAW_KEY)).thenReturn(parsedKey());
+        when(resolver.resolve(any())).thenReturn(credential("test", List.of()));
+        ExternalApiKeyFilter filter = filter(codec, resolver, new ExternalApiTransportProperties());
+        MockHttpServletRequest request = request("/openapi/v1/retrieval", "127.0.0.1");
+        request.addHeader("Authorization", "Bearer " + RAW_KEY);
+
+        assertThatThrownBy(() -> filter.doFilter(request, new MockHttpServletResponse(),
+                (req, res) -> { throw new IllegalArgumentException("downstream failure"); }))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("downstream failure");
+        assertThat(AuthContext.current()).isNull();
     }
 
     @Test
@@ -147,6 +179,17 @@ class ExternalApiKeyFilterTest {
     }
 
     @Test
+    void cidrMatcherRejectsHostnamesAndMalformedLiteralsWithoutTreatingThemAsAddresses() {
+        assertThat(IpCidrMatcher.isIpLiteral("cafe")).isFalse();
+        assertThat(IpCidrMatcher.isIpLiteral("deadbeef")).isFalse();
+        assertThat(IpCidrMatcher.isIpLiteral("999.0.0.1")).isFalse();
+        assertThat(IpCidrMatcher.isIpLiteral("2001:db8:::1")).isFalse();
+        assertThat(IpCidrMatcher.isIpLiteral("192.0.2.1::")).isFalse();
+        assertThat(IpCidrMatcher.isIpLiteral("２００１:db8::1")).isFalse();
+        assertThat(IpCidrMatcher.matches("cafe", "2001:db8::/32")).isFalse();
+    }
+
+    @Test
     void untrustedCallerCannotSpoofForwardedIpOrScheme() {
         ExternalApiTransportProperties properties = new ExternalApiTransportProperties();
         properties.setTrustedProxies(List.of("10.0.0.0/8"));
@@ -210,6 +253,27 @@ class ExternalApiKeyFilterTest {
 
         assertThat(response.getStatus()).isEqualTo(400);
         assertThat(response.getContentAsString()).contains("https_required");
+    }
+
+    @Test
+    void externalErrorHandlerDoesNotReflectApiKeyLikeOrControlCharacterRequestIds() {
+        ExternalApiExceptionHandler handler = new ExternalApiExceptionHandler();
+        MockHttpServletRequest apiKeyRequest = request("/openapi/v1/retrieval", "127.0.0.1");
+        apiKeyRequest.addHeader("X-Request-ID", RAW_KEY);
+
+        ResponseEntity<ExternalApiExceptionHandler.ErrorEnvelope> apiKeyResponse = handler.external(
+                new ExternalApiException(HttpStatus.BAD_REQUEST, "invalid_request", "Invalid request."), apiKeyRequest);
+
+        assertThat(apiKeyResponse.getHeaders().getFirst("X-Request-ID")).isNotEqualTo(RAW_KEY);
+        assertThat(apiKeyResponse.getBody().request_id()).isEqualTo(apiKeyResponse.getHeaders().getFirst("X-Request-ID"));
+        MockHttpServletRequest controlRequest = request("/openapi/v1/retrieval", "127.0.0.1");
+        controlRequest.addHeader("X-Request-ID", "request\nkey");
+
+        ResponseEntity<ExternalApiExceptionHandler.ErrorEnvelope> controlResponse = handler.external(
+                new ExternalApiException(HttpStatus.BAD_REQUEST, "invalid_request", "Invalid request."), controlRequest);
+
+        assertThat(controlResponse.getHeaders().getFirst("X-Request-ID")).isNotEqualTo("request\nkey");
+        assertThat(controlResponse.getBody().request_id()).matches("[A-Za-z0-9._-]{1,64}");
     }
 
     private ExternalApiKeyFilter filter(ApiKeyCodec codec, ApiCredentialResolver resolver,
