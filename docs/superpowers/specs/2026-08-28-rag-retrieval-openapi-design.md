@@ -21,7 +21,8 @@
 | 首期能力 | 只开放 Retrieval API |
 | 调用方 | 服务端到服务端，不允许浏览器保存 API Key |
 | 认证 | `Authorization: Bearer <api-key>` |
-| API Key 权限 | 绑定租户，并关联一组允许检索的知识库 |
+| API Key 业务类型 | `api_credential.credential_type` 区分能力；首期为 `RAG_RETRIEVAL`，未来可扩展 `AGENT_INVOKE` 等类型 |
+| RAG API Key 权限 | 绑定租户，并通过 RAG 专用关系表关联一组允许检索的知识库 |
 | 知识库选择 | 请求不传 `knowledge_id`；始终检索当前 Key 的完整授权范围 |
 | 请求参数 | 只支持 `query` 和 `retrieval_setting` |
 | Metadata Filter | 首期不支持 |
@@ -29,7 +30,7 @@
 | 密钥存储 | 公开 Key ID + 高熵 Secret；数据库只存 HMAC 摘要 |
 | Pepper | `application.yml` 引用环境变量，允许开发默认值，支持多版本 |
 | 缓存 | 通过抽象接口使用，首期 Caffeine，未来可扩展 Redis/多级缓存 |
-| 数据模型 | 保留 `api_credential` 与 `api_credential_knowledge` 两张核心表 |
+| 数据模型 | `api_credential` 是通用机器凭证主表；`api_credential_knowledge` 是仅供 RAG 使用的资源授权表 |
 | 请求审计表 | 不建设 `external_api_request_audit`；使用结构化安全日志和 Metrics |
 | 外部文档 | 单独提供人读调用文档和机器可读 OpenAPI 3.1 契约 |
 | 当前传输 | 可信内网 HTTP 仅用于测试 Key；生产 Key 预留 HTTPS 强制开关 |
@@ -49,6 +50,7 @@
 
 - LLM 答案生成、对话历史、Agent 工具执行。
 - OAuth2、HMAC 请求签名和 mTLS。
+- Agent 调用接口本身；首期只预留凭证类型和业务授权表的扩展边界。
 - 外部文档上传、分段管理或知识库写操作。
 - 客户端指定某个知识库或临时缩小知识库范围。
 - `metadata_condition` 或任意 pgvector filter expression。
@@ -89,8 +91,9 @@ Embedding Model → pgvector → 来源信息补全 → threshold → global Top
 principalId       = credentialId
 tenantId
 credentialId
+credentialType
 environment
-allowedKnowledgeIds
+scopeSnapshot
 allowedIpCidrs
 rateLimitPolicy
 authorizationVersion
@@ -101,7 +104,7 @@ authorizationVersion
 - `JwtAuthFilter` 跳过 `/openapi/v1/**`。
 - `ExternalApiKeyFilter` 只处理 `/openapi/v1/**`。
 - `@RequireLogin` 和内部管理 Controller 明确拒绝 `EXTERNAL_API`。
-- Retrieval Controller 明确只接受 `EXTERNAL_API`。
+- Retrieval Controller 明确只接受 `EXTERNAL_API`，并要求 `credentialType=RAG_RETRIEVAL`。
 - `TenantLineHandlerImpl` 继续从认证上下文获取 `tenantId`。
 - Filter 必须在 `finally` 中清理 ThreadLocal。
 
@@ -114,12 +117,13 @@ rag_test_k_7F3K9Q2M.xQ9v...43字符随机Secret
 rag_live_k_8P2H6ABC.aB7d...43字符随机Secret
 ```
 
-- `rag_test` / `rag_live` 表示环境。
+- Key 前缀同时表达凭证类型和环境：RAG 使用 `rag_test` / `rag_live`；未来 Agent 可使用 `agt_test` / `agt_live`。
 - `k_7F3K9Q2M` 是公开且唯一的 Key ID，用于索引和缓存定位。
 - Secret 使用密码学安全随机数生成 32 字节，再做 Base64URL 无填充编码。
 - 完整 Key 只在创建或轮换成功时返回一次。
 - 管理页面和后续查询只显示前缀与末四位。
 - 不依赖固定总长度；认证 Header 设置合理最大长度。
+- 前缀只用于识别、排错和泄露扫描，不能替代数据库中的 `credential_type` 授权；解析出的前缀必须与数据库类型和环境一致。
 
 ### 5.2 摘要与 Pepper
 
@@ -165,6 +169,18 @@ external-api:
 
 ## 6. 数据模型
 
+数据模型采用“通用凭证主表 + 各业务类型专用资源授权表”：
+
+```text
+api_credential
+  ├─ credential_type = RAG_RETRIEVAL
+  │    └─ api_credential_knowledge → knowledge
+  └─ credential_type = AGENT_INVOKE（未来）
+       └─ api_credential_agent → agent（未来）
+```
+
+`api_credential` 只承载所有机器凭证共有的身份、密钥、生命周期、网络限制和限流字段，不加入 Knowledge 或 Agent 等业务资源字段。每种业务类型使用独立授权表，避免 JSON 多态配置、无外键资源 ID 和不同场景字段相互污染。
+
 ### 6.1 `api_credential`
 
 | 字段 | 说明 |
@@ -172,6 +188,7 @@ external-api:
 | `id` | 内部主键 |
 | `public_id` | UUID，管理 API 使用 |
 | `tenant_id` | 所属租户 |
+| `credential_type` | 不可变业务类型；首期 `RAG_RETRIEVAL`，未来可增加 `AGENT_INVOKE` 等 |
 | `name` | 调用方名称 |
 | `description` | 用途说明 |
 | `key_id` | 唯一索引，可公开 |
@@ -194,17 +211,34 @@ external-api:
 | `last_used_at` | 聚合更新的最近使用时间 |
 | `last_used_ip` | 聚合更新的最近来源 IP |
 
+`credential_type` 使用 `VARCHAR(32)`，不使用 PostgreSQL ENUM。应用层使用受控类型注册表校验，数据库建立 `(tenant_id, credential_type, status)` 索引。类型创建后不可修改；需要变更业务场景时必须创建新 Credential，防止原 Key 在不知情的情况下获得另一类能力。
+
 ### 6.2 `api_credential_knowledge`
 
 ```text
 tenant_id
 credential_id
+credential_type
 knowledge_id
 created_at
 PRIMARY KEY (credential_id, knowledge_id)
 ```
 
-必须使用包含 `tenant_id` 的约束或等效数据库约束，确保无法创建跨租户授权关系。保留独立关系表而不使用 JSON/数组，原因是需要外键完整性、删除清理、反向查询、并发安全更新和精确缓存失效。
+该表只服务于 RAG，`credential_type` 固定为 `RAG_RETRIEVAL`：
+
+```sql
+CHECK (credential_type = 'RAG_RETRIEVAL')
+```
+
+`api_credential` 建立 `UNIQUE (id, tenant_id, credential_type)`，Knowledge 建立或复用 `UNIQUE (id, tenant_id)`；关系表通过 `(credential_id, tenant_id, credential_type)` 组合外键引用主表，并通过 `(knowledge_id, tenant_id)` 组合外键引用 Knowledge。这样数据库层面同时保证：
+
+- 不能把 Agent 或其他类型 Credential 关联到 Knowledge。
+- 不能创建跨租户知识库授权。
+- 删除 Credential/Knowledge 时可以可靠清理关联。
+
+`credential_type` 在关系表中是为了组合外键完整性而有意冗余。保留独立关系表而不使用 JSON/数组，原因是需要外键完整性、删除清理、反向查询、并发安全更新和精确缓存失效。
+
+未来增加 Agent 调用时，新建业务专用表 `api_credential_agent`，使用相同组合外键模式并固定 `credential_type='AGENT_INVOKE'`；不修改 `api_credential_knowledge` 的含义，也不复用它保存 Agent ID。
 
 ### 6.3 不建设请求审计表
 
@@ -240,6 +274,8 @@ interface ApiCredentialCache {
 ```
 
 `CachedCredentialResult` 必须区分未缓存、有效记录和负缓存命中。`CachedCredential` 包含认证与授权所需的不可变快照，但不包含原始 Secret。
+
+通用缓存快照必须包含 `credentialType` 和多态的 `CredentialScopeSnapshot`。首期定义 `RagKnowledgeScopeSnapshot`，内部保存授权知识库 ID 集合；未来 Agent 定义自己的 Scope Snapshot。资源授权通过按类型装配的 Scope Loader 加载：首期 `RagKnowledgeScopeLoader` 读取 `api_credential_knowledge`；未来 Agent 使用独立 Loader。缓存层不解释 Knowledge 或 Agent 的业务字段，只按类型标识和版本缓存不可变 Scope Snapshot；Redis 实现也按该类型标识序列化，避免把 RAG 字段固化到通用缓存接口。
 
 实现演进：
 
@@ -303,6 +339,7 @@ AND fileStatus = enabled
 ```
 
 - 空授权集合返回 `403 credential_has_no_knowledge_scope`，绝不能解释为租户全部知识库。
+- `credentialType` 不是 `RAG_RETRIEVAL` 时，在 Embedding 调用前返回 403。
 - 单 Credential 可关联的知识库数量设置可配置上限，默认 50。
 - pgvector 在全部授权知识库范围内执行一次查询，返回全局 Top K。
 - `score_threshold` 在分数归一化后应用。
@@ -368,6 +405,7 @@ Cache-Control: no-store
 | 400 | `invalid_request` | JSON、字段或参数非法 |
 | 401 | `authentication_failed` | Key 无效、过期或已吊销 |
 | 403 | `credential_disabled` | Credential 被禁用 |
+| 403 | `credential_type_not_allowed` | 当前凭证类型不能调用 Retrieval API |
 | 403 | `ip_not_allowed` | 来源 IP 不在白名单 |
 | 403 | `credential_has_no_knowledge_scope` | Key 未关联知识库 |
 | 413 | `request_too_large` | 请求体超过上限 |
@@ -410,18 +448,18 @@ request timeout 10 seconds
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| POST | `/tenant/api-credentials` | 创建 Credential、关联知识库并返回一次完整 Key |
+| POST | `/tenant/api-credentials` | 创建指定业务类型的 Credential，并返回一次完整 Key |
 | GET | `/tenant/api-credentials` | 分页查询 Credential |
 | GET | `/tenant/api-credentials/{credentialId}` | 查看状态、策略和知识库授权 |
 | PATCH | `/tenant/api-credentials/{credentialId}` | 修改名称、状态、过期、IP 和限流策略 |
-| PUT | `/tenant/api-credentials/{credentialId}/knowledge-bases` | 原子替换知识库授权集合 |
+| PUT | `/tenant/api-credentials/{credentialId}/knowledge-bases` | 仅对 `RAG_RETRIEVAL` Credential 原子替换知识库授权集合 |
 | POST | `/tenant/api-credentials/{credentialId}/rotate` | 创建新 Credential/Key，并复制策略和授权 |
 | POST | `/tenant/api-credentials/{credentialId}/revoke` | 吊销 Key |
 | GET | `/tenant/api-credentials/{credentialId}/usage` | 返回 Metrics 聚合的基础使用情况 |
 
-创建和轮换响应必须设置 `Cache-Control: no-store`。不存在恢复明文 Key 的接口；丢失后只能轮换。
+创建请求必须显式提供 `credential_type`；首期管理 API 只接受 `RAG_RETRIEVAL`。该字段创建后不可修改。创建和轮换响应必须设置 `Cache-Control: no-store`。不存在恢复明文 Key 的接口；丢失后只能轮换。
 
-轮换创建一条新的 `api_credential` 记录，通过 `rotated_from_id` 关联旧记录，并复制 `api_credential_knowledge`。允许设置短暂重叠期，旧 Key 到期后自动吊销。
+轮换创建一条新的 `api_credential` 记录，通过 `rotated_from_id` 关联旧记录，并原样复制 `credential_type`、通用策略和对应业务授权。RAG 类型复制 `api_credential_knowledge`；未来其他类型调用各自的 Scope Copier。允许设置短暂重叠期，旧 Key 到期后自动吊销。
 
 ## 12. HTTP 与 HTTPS 策略
 
@@ -527,6 +565,7 @@ fileType
 - 一次检索覆盖当前 Credential 的完整授权集合并返回全局 Top K。
 - 跨租户关联在服务层和数据库约束层均失败。
 - API Key 不能调用内部 JWT API，JWT 也不能调用 Retrieval OpenAPI。
+- 非 `RAG_RETRIEVAL` Credential 不能调用 Retrieval OpenAPI，也不能写入 `api_credential_knowledge`。
 - 未授权或非法请求不会调用 Embedding。
 
 ### 15.3 缓存与生命周期
@@ -549,7 +588,7 @@ fileType
 
 ## 16. 实施顺序
 
-1. 数据库迁移：`api_credential`、`api_credential_knowledge` 和必要的资源 UUID。
+1. 数据库迁移：通用 `api_credential`、RAG 专用 `api_credential_knowledge`、组合约束和必要的资源 UUID。
 2. Pepper 多版本配置、Key 生成、摘要校验和认证上下文。
 3. `ApiCredentialCache` 抽象及 Caffeine 实现。
 4. 租户管理员 Credential 创建、授权、轮换和吊销接口。
@@ -567,6 +606,7 @@ fileType
 - 外部 Agent 仅凭测试 API Key 可在可信内网完成检索。
 - 请求只包含 `query` 和 `retrieval_setting`，不能选择知识库。
 - 查询范围严格等于当前 Credential 的知识库授权集合。
+- 通用 Credential 通过不可变 `credential_type` 隔离业务能力，RAG 授权表不能接收其他类型凭证。
 - 数据库不保存可用 Key，默认 Pepper 无法签发 live Key。
 - 缓存实现可替换，业务认证逻辑不依赖 Caffeine。
 - 轮换、吊销、禁用、过期、IP 和限流生效。
