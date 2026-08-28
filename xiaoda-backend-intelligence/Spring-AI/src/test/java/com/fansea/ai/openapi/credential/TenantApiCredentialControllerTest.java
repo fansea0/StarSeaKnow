@@ -120,6 +120,36 @@ class TenantApiCredentialControllerTest {
     }
 
     @Test
+    void missingCreateBodyReturnsNonLeakyBadRequest() throws Exception {
+        mockMvc.perform(post("/tenant/api-credentials")
+                        .contentType("application/json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.msg").value("invalid credential management request"));
+
+        verify(service, never()).create(any(), any());
+    }
+
+    @Test
+    void malformedCreateJsonReturnsNonLeakyBadRequest() throws Exception {
+        mockMvc.perform(post("/tenant/api-credentials")
+                        .contentType("application/json")
+                        .content("{\"name\":"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.msg").value("invalid credential management request"));
+
+        verify(service, never()).create(any(), any());
+    }
+
+    @Test
+    void invalidCredentialUuidReturnsNonLeakyBadRequest() throws Exception {
+        mockMvc.perform(get("/tenant/api-credentials/not-a-uuid"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.msg").value("invalid credential management request"));
+
+        verify(service, never()).get(any(), any());
+    }
+
+    @Test
     void rotationReturnsNewSecretWithNoStore() throws Exception {
         when(service.rotate(any(), any())).thenReturn(new ApiCredentialService.RotatedCredential(view(), RAW_KEY));
 

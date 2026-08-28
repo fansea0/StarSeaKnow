@@ -1,10 +1,15 @@
 package com.fansea.ai.openapi.credential;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fansea.ai.auth.AuthContext;
 import com.fansea.ai.auth.AuthException;
 import com.fansea.ai.domain.Knowledge;
 import com.fansea.ai.mapper.KnowledgeMapper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -13,6 +18,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -26,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -49,7 +57,15 @@ class ApiCredentialServiceTest {
 
     @BeforeEach
     void setUp() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), "test"), Knowledge.class);
         service = serviceWithCodec(codec(Map.of("v1", PEPPER), "v1"));
+    }
+
+    @AfterEach
+    void clearTransactionSynchronization() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test
@@ -88,6 +104,30 @@ class ApiCredentialServiceTest {
                 .extracting(error -> ((AuthException) error).getCode())
                 .isEqualTo(40302);
 
+        verify(credentials, never()).insert(any());
+        verify(credentialKnowledge, never()).insert(any());
+    }
+
+    @Test
+    void rejectsCrossTenantKnowledgeWithExplicitTenantPredicateBeforeRelationInsert() {
+        Knowledge crossTenantRow = knowledge(91L, KNOWLEDGE_PUBLIC_ID);
+        when(knowledge.selectList(any())).thenAnswer(invocation -> {
+            AbstractWrapper<?, ?, ?> query = invocation.getArgument(0);
+            boolean tenantPredicate = query.getSqlSegment().contains("tenant_id")
+                    && query.getParamNameValuePairs().containsValue(22L);
+            return tenantPredicate ? List.of() : List.of(crossTenantRow);
+        });
+
+        assertThatThrownBy(() -> service.create(createCommand(Set.of(KNOWLEDGE_PUBLIC_ID)), tenantAdminContext()))
+                .isInstanceOf(AuthException.class)
+                .extracting(error -> ((AuthException) error).getCode())
+                .isEqualTo(40302);
+
+        ArgumentCaptor<Wrapper<Knowledge>> query = ArgumentCaptor.forClass(Wrapper.class);
+        verify(knowledge).selectList(query.capture());
+        assertThat(query.getValue().getSqlSegment()).contains("public_id", "tenant_id");
+        AbstractWrapper<?, ?, ?> capturedQuery = (AbstractWrapper<?, ?, ?>) query.getValue();
+        assertThat(capturedQuery.getParamNameValuePairs()).containsValues(KNOWLEDGE_PUBLIC_ID, 22L);
         verify(credentials, never()).insert(any());
         verify(credentialKnowledge, never()).insert(any());
     }
@@ -168,6 +208,22 @@ class ApiCredentialServiceTest {
     }
 
     @Test
+    void scopeReplacementEvictsImmediatelyAndAgainAfterCommit() {
+        ApiCredential existing = credential(41L, "old-key-id", 7L);
+        when(credentials.selectOne(any())).thenReturn(existing);
+        when(knowledge.selectList(any())).thenReturn(List.of(knowledge(92L, KNOWLEDGE_PUBLIC_ID)));
+        TransactionSynchronizationManager.initSynchronization();
+
+        service.replaceKnowledgeBases(CREDENTIAL_PUBLIC_ID, Set.of(KNOWLEDGE_PUBLIC_ID), tenantAdminContext());
+
+        verify(cache).evict("old-key-id");
+        List<TransactionSynchronization> synchronizations = TransactionSynchronizationManager.getSynchronizations();
+        assertThat(synchronizations).hasSize(1);
+        synchronizations.forEach(TransactionSynchronization::afterCommit);
+        verify(cache, times(2)).evict("old-key-id");
+    }
+
+    @Test
     void rotationCopiesTypePolicyAndScopeAndRevokesOldCredential() {
         ApiCredential old = credential(41L, "old-key-id", 7L);
         old.setAllowedIpCidrs(List.of("10.0.0.0/24"));
@@ -214,6 +270,31 @@ class ApiCredentialServiceTest {
     }
 
     @Test
+    void rotationEvictsOldAndNewKeysImmediatelyAndAgainAfterCommit() {
+        ApiCredential old = credential(41L, "old-key-id", 7L);
+        when(credentials.selectOne(any())).thenReturn(old);
+        when(credentialKnowledge.selectList(any())).thenReturn(List.of());
+        when(credentials.insert(any())).thenAnswer(invocation -> {
+            ((ApiCredential) invocation.getArgument(0)).setId(42L);
+            return 1;
+        });
+        TransactionSynchronizationManager.initSynchronization();
+
+        service.rotate(CREDENTIAL_PUBLIC_ID, tenantAdminContext());
+
+        ArgumentCaptor<ApiCredential> inserted = ArgumentCaptor.forClass(ApiCredential.class);
+        verify(credentials).insert(inserted.capture());
+        String newKeyId = inserted.getValue().getKeyId();
+        verify(cache).evict("old-key-id");
+        verify(cache).evict(newKeyId);
+        List<TransactionSynchronization> synchronizations = TransactionSynchronizationManager.getSynchronizations();
+        assertThat(synchronizations).hasSize(1);
+        synchronizations.forEach(TransactionSynchronization::afterCommit);
+        verify(cache, times(2)).evict("old-key-id");
+        verify(cache, times(2)).evict(newKeyId);
+    }
+
+    @Test
     void revokeIsIdempotentAndAlwaysEvictsTheKey() {
         ApiCredential alreadyRevoked = credential(41L, "old-key-id", 7L);
         alreadyRevoked.setStatus("revoked");
@@ -227,6 +308,22 @@ class ApiCredentialServiceTest {
         assertThat(result.revokedAt()).isEqualTo(Instant.parse("2029-01-01T00:00:00Z"));
         verify(credentials, never()).updateById(any());
         verify(cache).evict("old-key-id");
+    }
+
+    @Test
+    void revokeEvictsImmediatelyAndAgainAfterCommit() {
+        ApiCredential active = credential(41L, "old-key-id", 7L);
+        when(credentials.selectOne(any())).thenReturn(active);
+        when(credentialKnowledge.selectList(any())).thenReturn(List.of());
+        TransactionSynchronizationManager.initSynchronization();
+
+        service.revoke(CREDENTIAL_PUBLIC_ID, tenantAdminContext());
+
+        verify(cache).evict("old-key-id");
+        List<TransactionSynchronization> synchronizations = TransactionSynchronizationManager.getSynchronizations();
+        assertThat(synchronizations).hasSize(1);
+        synchronizations.forEach(TransactionSynchronization::afterCommit);
+        verify(cache, times(2)).evict("old-key-id");
     }
 
     private ApiCredentialService.CreateCredentialCommand createCommand(Set<UUID> scope) {

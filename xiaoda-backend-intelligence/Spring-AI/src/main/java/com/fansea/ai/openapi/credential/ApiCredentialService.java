@@ -1,6 +1,7 @@
 package com.fansea.ai.openapi.credential;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fansea.ai.auth.AuthContext;
 import com.fansea.ai.auth.AuthErrorCode;
 import com.fansea.ai.auth.AuthException;
@@ -11,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -79,7 +82,7 @@ public class ApiCredentialService {
         row.setCreatedAt(now);
         credentials.insert(row);
         insertScope(row, scope.values(), now);
-        cache.evict(row.getKeyId());
+        evictNowAndAfterCommit(row.getKeyId());
         lifecycleLog("created", actor.tenantId(), row.getPublicId());
         return new CreatedCredential(toView(row, scope.keySet()), issued.rawKey());
     }
@@ -142,7 +145,7 @@ public class ApiCredentialService {
             row.setExpiresAt(toOffsetDateTime(command.expiresAt()));
         }
         credentials.updateById(row);
-        cache.evict(row.getKeyId());
+        evictNowAndAfterCommit(row.getKeyId());
         lifecycleLog("updated", actor.tenantId(), row.getPublicId());
         return toView(row, loadKnowledgePublicIds(row.getId()));
     }
@@ -161,7 +164,7 @@ public class ApiCredentialService {
         insertScope(row, scope.values(), OffsetDateTime.now(ZoneOffset.UTC));
         row.setAuthorizationVersion(nextAuthorizationVersion(row.getAuthorizationVersion()));
         credentials.updateById(row);
-        cache.evict(row.getKeyId());
+        evictNowAndAfterCommit(row.getKeyId());
         lifecycleLog("scope_replaced", actor.tenantId(), row.getPublicId());
         return toView(row, scope.keySet());
     }
@@ -194,8 +197,7 @@ public class ApiCredentialService {
             newLink.setCreatedAt(now);
             credentialKnowledge.insert(newLink);
         }
-        cache.evict(old.getKeyId());
-        cache.evict(replacement.getKeyId());
+        evictNowAndAfterCommit(old.getKeyId(), replacement.getKeyId());
         lifecycleLog("rotated", actor.tenantId(), old.getPublicId());
         lifecycleLog("created_by_rotation", actor.tenantId(), replacement.getPublicId());
         return new RotatedCredential(toView(replacement, publicIdsForLinks(oldScope)), issued.rawKey());
@@ -211,7 +213,7 @@ public class ApiCredentialService {
             credentials.updateById(row);
             lifecycleLog("revoked", actor.tenantId(), row.getPublicId());
         }
-        cache.evict(row.getKeyId());
+        evictNowAndAfterCommit(row.getKeyId());
         return toView(row, loadKnowledgePublicIds(row.getId()));
     }
 
@@ -301,8 +303,9 @@ public class ApiCredentialService {
         if (requested.isEmpty()) {
             return Map.of();
         }
-        List<Knowledge> rows = knowledge.selectList(new LambdaQueryWrapper<Knowledge>()
-                .in(Knowledge::getPublicId, requested));
+        List<Knowledge> rows = knowledge.selectList(new QueryWrapper<Knowledge>()
+                .in("public_id", requested)
+                .eq("tenant_id", tenantId));
         Map<UUID, Knowledge> resolved = new LinkedHashMap<>();
         if (rows != null) {
             for (Knowledge row : rows) {
@@ -422,6 +425,24 @@ public class ApiCredentialService {
 
     private AuthException invalid(String message) {
         return new AuthException(AuthErrorCode.REGISTRATION_INVALID, message);
+    }
+
+    private void evictNowAndAfterCommit(String... keyIds) {
+        List<String> keys = java.util.Arrays.stream(keyIds)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        // A rollback may cause an extra database reload, but must never restore a possibly stale cache entry.
+        keys.forEach(cache::evict);
+        if (keys.isEmpty() || !TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                keys.forEach(cache::evict);
+            }
+        });
     }
 
     private void lifecycleLog(String action, long tenantId, UUID credentialPublicId) {

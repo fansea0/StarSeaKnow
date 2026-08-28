@@ -9,7 +9,9 @@ import com.fansea.ai.domain.dto.AjaxResult;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.Instant;
 import java.util.List;
@@ -94,6 +97,12 @@ public class TenantApiCredentialController {
     @PostMapping("/{credentialId}/revoke")
     public AjaxResult revoke(@PathVariable UUID credentialId) {
         return AjaxResult.success(service.revoke(credentialId, AuthContext.current()));
+    }
+
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<AjaxResult> invalidManagementRequest() {
+        return ResponseEntity.badRequest().body(AjaxResult.error(
+                AuthErrorCode.REGISTRATION_INVALID.code(), "invalid credential management request"));
     }
 
     private void validateCreateRequest(CreateCredentialRequest request) {
