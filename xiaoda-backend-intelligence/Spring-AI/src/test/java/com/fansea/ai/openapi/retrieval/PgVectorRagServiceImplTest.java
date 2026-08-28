@@ -23,6 +23,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -60,7 +61,7 @@ class PgVectorRagServiceImplTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
                 document("chunk-a", 0.91, 31L, CHUNK_A_ID, 3, 4),
                 document("chunk-b", 0.77, 32L, CHUNK_B_ID, 5, 6)));
-        when(fileService.listByIds(any())).thenReturn(List.of(
+        when(fileService.listEnabledByKnowledgeIds(eq(7L), any())).thenReturn(List.of(
                 file(31L, FILE_A_PUBLIC_ID, "refund-a.pdf", "pdf", 1),
                 file(32L, FILE_B_PUBLIC_ID, "refund-b.pdf", "pdf", 1)));
 
@@ -69,6 +70,7 @@ class PgVectorRagServiceImplTest {
 
         ArgumentCaptor<SearchRequest> request = ArgumentCaptor.forClass(SearchRequest.class);
         verify(vectorStore, times(1)).similaritySearch(request.capture());
+        verify(fileService, times(1)).listEnabledByKnowledgeIds(7L, Set.of(11L, 12L));
         assertThat(request.getValue().getQuery()).isEqualTo("退款材料");
         assertThat(request.getValue().getTopK()).isEqualTo(5);
         assertThat(request.getValue().getSimilarityThreshold()).isEqualTo(0.5);
@@ -85,23 +87,28 @@ class PgVectorRagServiceImplTest {
                 .hasMessageContaining("knowledge");
 
         verify(vectorStore, never()).similaritySearch(any(SearchRequest.class));
+        verify(fileService, never()).listEnabledByKnowledgeIds(any(), any());
         verify(fileService, never()).listByIds(any());
     }
 
     @Test
-    void excludesDisabledFilesUsingCurrentFileRows() {
+    void filtersDisabledFileIdsBeforeVectorTopKAndExcludesDefensiveStaleHit() {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
                 document("enabled", 0.9, 31L, CHUNK_A_ID, 1, 0),
                 document("disabled", 0.8, 32L, CHUNK_B_ID, 2, 1)));
-        when(fileService.listByIds(any())).thenReturn(List.of(
-                file(31L, FILE_A_PUBLIC_ID, "enabled.pdf", "pdf", 1),
-                file(32L, FILE_B_PUBLIC_ID, "disabled-secret.pdf", "pdf", 0)));
+        when(fileService.listEnabledByKnowledgeIds(eq(7L), any())).thenReturn(List.of(
+                file(31L, FILE_A_PUBLIC_ID, "enabled.pdf", "pdf", 1)));
 
         List<RetrievedChunk> result = service.retrieve(
                 new RetrievalQuery("refund", Set.of(11L), 5, 0.0));
 
         assertThat(result).extracting(RetrievedChunk::content).containsExactly("enabled");
         assertThat(result).extracting(RetrievedChunk::title).doesNotContain("disabled-secret.pdf");
+        ArgumentCaptor<SearchRequest> request = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(vectorStore).similaritySearch(request.capture());
+        assertThat(request.getValue().getFilterExpression().toString())
+                .contains("fileId", "31")
+                .doesNotContain("32");
     }
 
     @Test
@@ -109,7 +116,7 @@ class PgVectorRagServiceImplTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
                 document("above", 1.2, 31L, CHUNK_A_ID, 1, 0),
                 document("below", -0.2, 32L, CHUNK_B_ID, 2, 1)));
-        when(fileService.listByIds(any())).thenReturn(List.of(
+        when(fileService.listEnabledByKnowledgeIds(eq(7L), any())).thenReturn(List.of(
                 file(31L, FILE_A_PUBLIC_ID, "a.pdf", "pdf", 1),
                 file(32L, FILE_B_PUBLIC_ID, "b.pdf", "pdf", 1)));
 
@@ -127,7 +134,7 @@ class PgVectorRagServiceImplTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
                 document("no-score", null, 31L, CHUNK_A_ID, 1, 0),
                 document("scored", 0.6, 32L, CHUNK_B_ID, 2, 1)));
-        when(fileService.listByIds(any())).thenReturn(List.of(
+        when(fileService.listEnabledByKnowledgeIds(eq(7L), any())).thenReturn(List.of(
                 file(31L, FILE_A_PUBLIC_ID, "a.pdf", "pdf", 1),
                 file(32L, FILE_B_PUBLIC_ID, "b.pdf", "pdf", 1)));
 
@@ -143,19 +150,47 @@ class PgVectorRagServiceImplTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
                 document("chunk-a", 0.91, 31L, CHUNK_A_ID, 3, 4),
                 document("chunk-b", 0.77, 32L, CHUNK_B_ID, 5, 6)));
-        when(fileService.listByIds(any())).thenReturn(List.of(
+        when(fileService.listEnabledByKnowledgeIds(eq(7L), any())).thenReturn(List.of(
                 file(31L, FILE_A_PUBLIC_ID, "current-a.pdf", "pdf", 1),
                 file(32L, FILE_B_PUBLIC_ID, "current-b.docx", "docx", 1)));
 
         List<RetrievedChunk> result = service.retrieve(
                 new RetrievalQuery("refund", Set.of(11L), 5, 0.0));
 
-        verify(fileService, times(1)).listByIds(any());
+        verify(fileService, times(1)).listEnabledByKnowledgeIds(eq(7L), eq(Set.of(11L)));
+        verify(fileService, never()).listByIds(any());
         assertThat(result).containsExactly(
                 new RetrievedChunk("chunk-a", 0.91, "current-a.pdf", FILE_A_PUBLIC_ID,
                         CHUNK_A_ID, "pdf", 3, 4),
                 new RetrievedChunk("chunk-b", 0.77, "current-b.docx", FILE_B_PUBLIC_ID,
                         CHUNK_B_ID, "docx", 5, 6));
+    }
+
+    @Test
+    void dropsStaleVectorFileOutsideTenantAndAuthorizedKnowledgeWithoutUnscopedLookup() {
+        UUID staleChunkId = UUID.fromString("20000000-0000-0000-0000-000000000099");
+        when(fileService.listEnabledByKnowledgeIds(eq(7L), eq(Set.of(11L))))
+                .thenReturn(List.of(file(31L, FILE_A_PUBLIC_ID, "allowed.pdf", "pdf", 1)));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                document("foreign secret", 0.99, 99L, staleChunkId, 1, 0)));
+
+        List<RetrievedChunk> result = service.retrieve(
+                new RetrievalQuery("refund", Set.of(11L), 5, 0.0));
+
+        assertThat(result).isEmpty();
+        verify(fileService, never()).listByIds(any());
+    }
+
+    @Test
+    void skipsVectorSearchWhenAuthorizedScopeHasNoEnabledFiles() {
+        when(fileService.listEnabledByKnowledgeIds(eq(7L), eq(Set.of(11L))))
+                .thenReturn(List.of());
+
+        List<RetrievedChunk> result = service.retrieve(
+                new RetrievalQuery("refund", Set.of(11L), 5, 0.0));
+
+        assertThat(result).isEmpty();
+        verify(vectorStore, never()).similaritySearch(any(SearchRequest.class));
     }
 
     @Test

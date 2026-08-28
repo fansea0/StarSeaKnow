@@ -15,6 +15,8 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
+import java.util.List;
+import java.util.Set;
 import static com.fansea.ai.util.FileUtil.getFileTypeByExtension;
 
 /**
@@ -66,5 +68,10 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.fansea.ai.domai
         Long fileId = uploadDocument(file);
         knowledgeFileService.save(new KnowledgeFile(knowledgeId,fileId));
         return fileId;
+    }
+
+    @Override
+    public List<com.fansea.ai.domain.File> listEnabledByKnowledgeIds(Long tenantId, Set<Long> knowledgeIds) {
+        return baseMapper.selectEnabledByKnowledgeIds(tenantId, knowledgeIds);
     }
 }

@@ -71,11 +71,29 @@ public class PgVectorRagServiceImpl implements RagService {
             throw new IllegalArgumentException("knowledgeIds must not be empty");
         }
 
+        Long tenantId = currentTenantId();
+        Map<Long, File> enabledFiles = safeFiles(
+                fileService.listEnabledByKnowledgeIds(tenantId, query.knowledgeIds())).stream()
+                .filter(file -> file != null && file.getId() != null)
+                .filter(file -> Integer.valueOf(1).equals(file.getStatus()))
+                .filter(file -> file.getPublicId() != null)
+                .collect(Collectors.toMap(File::getId, Function.identity(), (first, ignored) -> first,
+                        LinkedHashMap::new));
+        if (enabledFiles.isEmpty()) {
+            return List.of();
+        }
+
         String knowledgeIds = query.knowledgeIds().stream()
                 .sorted()
                 .map(String::valueOf)
                 .collect(Collectors.joining(", "));
-        String filter = tenantFilterExpression() + " && knowledgeId in [" + knowledgeIds + "]";
+        String fileIds = enabledFiles.keySet().stream()
+                .sorted()
+                .map(String::valueOf)
+                .collect(Collectors.joining(", "));
+        String filter = tenantFilterExpression(tenantId)
+                + " && knowledgeId in [" + knowledgeIds + "]"
+                + " && fileId in [" + fileIds + "]";
         SearchRequest request = SearchRequest.builder()
                 .query(query.query())
                 .topK(query.topK())
@@ -90,22 +108,6 @@ public class PgVectorRagServiceImpl implements RagService {
         if (scoredDocuments.isEmpty()) {
             return List.of();
         }
-
-        List<Long> fileIds = scoredDocuments.stream()
-                .map(result -> metadataLong(result.document(), "fileId"))
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
-        if (fileIds.isEmpty()) {
-            return List.of();
-        }
-
-        Map<Long, File> enabledFiles = safeFiles(fileService.listByIds(fileIds)).stream()
-                .filter(file -> file != null && file.getId() != null)
-                .filter(file -> Integer.valueOf(1).equals(file.getStatus()))
-                .filter(file -> file.getPublicId() != null)
-                .collect(Collectors.toMap(File::getId, Function.identity(), (first, ignored) -> first,
-                        LinkedHashMap::new));
 
         return scoredDocuments.stream()
                 .map(result -> toRetrievedChunk(result, enabledFiles))
@@ -154,11 +156,19 @@ public class PgVectorRagServiceImpl implements RagService {
      * 防止跨租户数据泄漏。要求调用方处于已登录请求上下文(由 AuthContext 提供)。
      */
     private static String tenantFilterExpression() {
+        return tenantFilterExpression(currentTenantId());
+    }
+
+    private static String tenantFilterExpression(Long tenantId) {
+        return "tenantId == " + tenantId;
+    }
+
+    private static Long currentTenantId() {
         AuthContext ctx = AuthContext.current();
         if (ctx == null || ctx.getTenantId() == null) {
             throw new AuthException(AuthErrorCode.MISSING_TOKEN, "login required");
         }
-        return "tenantId == " + ctx.getTenantId();
+        return ctx.getTenantId();
     }
 
     private static String convertToFileInClause(List<Long> fileList) {

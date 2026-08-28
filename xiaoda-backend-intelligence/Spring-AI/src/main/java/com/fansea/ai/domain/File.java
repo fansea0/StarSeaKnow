@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
+import org.apache.ibatis.type.ObjectTypeHandler;
 import java.io.Serializable;
 import java.util.Date;
 import java.util.UUID;
@@ -13,12 +14,13 @@ import java.util.UUID;
  * 
  * @TableName file
  */
-@TableName(value ="file")
+@TableName(value ="file", autoResultMap = true)
 @Data
 public class File implements Serializable {
 
     @TableId(type = IdType.AUTO)
     private Long id;
+    @TableField(value = "public_id", typeHandler = ObjectTypeHandler.class)
     private UUID publicId;
     @TableField("file_name")
     private String fileName;
@@ -39,6 +41,9 @@ public class File implements Serializable {
 
     @TableField(exist = false)
     private static final long serialVersionUID = 1L;
+
+    public File() {
+    }
 
     public File(Long id, String fileName, Long size, Integer status, String type, String path, Integer embeddingStatus, Date createTime, Date updateTime) {
         this.id = id;

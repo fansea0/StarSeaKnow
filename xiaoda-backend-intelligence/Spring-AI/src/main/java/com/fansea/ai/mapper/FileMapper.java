@@ -4,6 +4,10 @@ package com.fansea.ai.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.fansea.ai.domain.File;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
+
+import java.util.List;
+import java.util.Set;
 
 
 /**
@@ -15,8 +19,10 @@ import org.apache.ibatis.annotations.Mapper;
 public interface FileMapper extends BaseMapper<File> {
     File selectByFileId(Long id);
 
-}
+    List<File> selectEnabledByKnowledgeIds(@Param("tenantId") Long tenantId,
+                                           @Param("knowledgeIds") Set<Long> knowledgeIds);
 
+}
 
 
 

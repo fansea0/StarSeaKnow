@@ -6,6 +6,8 @@
 
     <resultMap id="BaseResultMap" type="com.fansea.ai.domain.File">
             <id property="id" column="id" jdbcType="BIGINT"/>
+            <result property="publicId" column="public_id"
+                    typeHandler="org.apache.ibatis.type.ObjectTypeHandler"/>
             <result property="fileName" column="file_name" jdbcType="VARCHAR"/>
             <result property="size" column="size" jdbcType="BIGINT"/>
             <result property="status" column="status" jdbcType="SMALLINT"/>
@@ -17,12 +19,31 @@
     </resultMap>
 
     <sql id="Base_Column_List">
-        id,file_name,size,
+        id,public_id,file_name,size,
         status,type,path,
         embedding_status,create_time,update_time
     </sql>
 
     <select id="selectByFileId" resultType="com.fansea.ai.domain.File">
         select * from file where id = #{id}
+    </select>
+
+    <select id="selectEnabledByKnowledgeIds" resultMap="BaseResultMap">
+        SELECT DISTINCT f.id, f.public_id, f.file_name, f.size, f.status, f.type,
+                        f.path, f.embedding_status, f.create_time, f.update_time
+        FROM file f
+        JOIN knowledge_file kf
+          ON kf.file_id = f.id
+         AND kf.tenant_id = #{tenantId}
+        JOIN knowledge k
+          ON k.id = kf.knowledge_id
+         AND k.tenant_id = #{tenantId}
+        WHERE f.tenant_id = #{tenantId}
+          AND f.status = 1
+          AND kf.knowledge_id IN
+        <foreach collection="knowledgeIds" item="knowledgeId" open="(" separator="," close=")">
+            #{knowledgeId}
+        </foreach>
+        ORDER BY f.id
     </select>
 </mapper>
