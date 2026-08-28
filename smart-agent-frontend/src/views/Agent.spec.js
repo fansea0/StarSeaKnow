@@ -18,6 +18,8 @@ const stubs = {
   },
   'el-form-item': { props: ['label', 'prop'], template: '<div class="form-field" :data-prop="prop"><label>{{ label }}</label><slot /></div>' },
   'el-input': { template: '<input />' },
+  'el-select': { template: '<select><slot /></select>' },
+  'el-option': { template: '<option><slot /></option>' },
   'el-icon': { template: '<span><slot /></span>' },
 }
 
@@ -33,7 +35,7 @@ describe('agent list', () => {
     })
   })
 
-  it('renders active collaborators with their open-and-debug action', async () => {
+  it('renders the agent workspace with a banner, metrics, filters, and agent cards', async () => {
     const wrapper = shallowMount(Agent, {
       global: {
         stubs,
@@ -43,10 +45,12 @@ describe('agent list', () => {
 
     await flushPromises()
 
-    expect(wrapper.get('.agent-page__eyebrow').text()).toBe('配置协作者')
-    expect(wrapper.get('[data-testid="create-agent"]').text()).toBe('新增智能体')
-    expect(wrapper.get('.agent-profile__title').text()).toBe('产品顾问')
-    expect(wrapper.get('.agent-profile__open').text()).toContain('打开并调试')
+    expect(wrapper.get('.agent-hero__title').text()).toBe('配置你的专属智能体')
+    expect(wrapper.get('[data-testid="create-agent"]').text()).toBe('创建智能体')
+    expect(wrapper.get('[data-testid="agent-search"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="agent-status-filter"]').exists()).toBe(true)
+    expect(wrapper.get('.agent-card__title').text()).toBe('产品顾问')
+    expect(wrapper.get('.agent-card__status').text()).toContain('运行中')
   })
 
   it('renders a contrasting trash-can icon in every delete control', async () => {
@@ -59,7 +63,7 @@ describe('agent list', () => {
 
     await flushPromises()
 
-    expect(wrapper.get('[aria-label="删除智能体 产品顾问"] .agent-profile__delete-icon').exists()).toBe(true)
+    expect(wrapper.get('[aria-label="删除智能体 产品顾问"] .agent-card__delete-icon').exists()).toBe(true)
   })
 
   it('creates an agent from only its name and description', async () => {

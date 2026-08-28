@@ -5,6 +5,9 @@ CREATE TABLE agent (
     description VARCHAR(512),
     prologue VARCHAR(512),
     role_description VARCHAR(512),
+    model_url VARCHAR(512),
+    model_api_key VARCHAR(1024),
+    model_id VARCHAR(128),
     create_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

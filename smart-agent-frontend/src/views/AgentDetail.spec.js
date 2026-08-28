@@ -56,4 +56,32 @@ describe('agent detail debug workbench', () => {
     expect(wrapper.get('[data-testid="knowledge-links"]').classes()).toContain('knowledge-list')
     expect(wrapper.find('.kb-card').exists()).toBe(false)
   })
+
+  it('shows an independent model configuration form without exposing the saved API key', async () => {
+    const wrapper = shallowMount(AgentDetail, {
+      global: {
+        stubs,
+        mocks: { $route: { params: { id: '1' } }, $message: { error: vi.fn() } },
+      },
+    })
+
+    expect(wrapper.text()).toContain('模型配置')
+    await wrapper.setData({ showModelConfig: true })
+    expect(wrapper.find('[data-testid="model-url"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="model-id"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="model-api-key"]').attributes('type')).toBe('password')
+  })
+
+  it('keeps model configuration collapsed by default and renders it when opened', async () => {
+    const wrapper = shallowMount(AgentDetail, {
+      global: {
+        stubs,
+        mocks: { $route: { params: { id: '1' } }, $message: { error: vi.fn() } },
+      },
+    })
+
+    expect(wrapper.find('[data-testid="model-url"]').exists()).toBe(false)
+    await wrapper.setData({ showModelConfig: true })
+    expect(wrapper.find('[data-testid="model-url"]').exists()).toBe(true)
+  })
 })

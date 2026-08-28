@@ -5,6 +5,7 @@ import com.fansea.ai.auth.RequireLogin;
 import com.fansea.ai.domain.Agent;
 import com.fansea.ai.domain.AgentKnowledge;
 import com.fansea.ai.history.RepositoryHistory;
+import com.fansea.ai.model.AgentChatClientFactory;
 import com.fansea.ai.service.AgentKnowledgeService;
 import com.fansea.ai.service.AgentService;
 import com.fansea.ai.service.RagService;
@@ -40,6 +41,7 @@ public class AiChatController {
     private final RagService ragService;
     private final AgentService agentService;
     private final AgentKnowledgeService agentKnowledgeService;
+    private final AgentChatClientFactory agentChatClientFactory;
 
 
     // 指定字符编码否则无法正确展示
@@ -83,7 +85,7 @@ public class AiChatController {
         String content = documents.stream()
                 .map(Document::getText)
                 .collect(Collectors.joining("n"));
-        return chatClient.prompt()
+        return agentChatClientFactory.create(agent).prompt()
                 .system(agent.getRoleDescription())
                 .user(getChatPrompt2String(prompt, content))
                 .advisors(a -> a.param(CHAT_MEMORY_CONVERSATION_ID_KEY,chatId))

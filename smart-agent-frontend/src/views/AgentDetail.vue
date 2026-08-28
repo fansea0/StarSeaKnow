@@ -23,6 +23,27 @@
         <el-form-item label="角色描述">
           <el-input v-model="agentInfo.roleDescription" maxlength="512" type="textarea" rows="7" />
         </el-form-item>
+        <div class="model-config-toggle">
+          <div>
+            <span>模型配置</span>
+            <small>{{ agentInfo.modelApiKeyConfigured ? '已配置 API Key' : '尚未配置模型' }}</small>
+          </div>
+          <el-button data-testid="toggle-model-config" text type="primary" @click="showModelConfig = !showModelConfig">
+            {{ showModelConfig ? '收起' : '配置模型' }}
+          </el-button>
+        </div>
+        <section v-if="showModelConfig" class="model-config-panel">
+          <p>此配置仅用于当前智能体；保存的 API Key 不会回显。</p>
+          <el-form-item label="接口地址">
+            <el-input data-testid="model-url" v-model.trim="agentInfo.modelUrl" maxlength="512" placeholder="例如：https://api.openai.com/v1" />
+          </el-form-item>
+          <el-form-item label="API Key">
+            <el-input data-testid="model-api-key" v-model="agentInfo.modelApiKey" type="password" show-password autocomplete="new-password" :placeholder="agentInfo.modelApiKeyConfigured ? '已配置；留空则保持不变' : '请输入 API Key'" />
+          </el-form-item>
+          <el-form-item label="模型 ID">
+            <el-input data-testid="model-id" v-model.trim="agentInfo.modelId" maxlength="128" placeholder="例如：gpt-4o-mini" />
+          </el-form-item>
+        </section>
       </el-form>
       <div class="knowledge-header-row">
         <div>
@@ -70,7 +91,7 @@
             <div v-if="msg.role==='assistant'" class="msg-content">
               <img class="avatar-img" src="../assets/avatar.jpg" alt="助手头像" />
               <div class="msg-bubble">
-                <template v-if="idx === 0">
+                <template v-if="msg.isPrologue">
                   <div v-if="prologueGreeting" class="prologue-greeting" v-html="renderMarkdown(prologueGreeting)"></div>
                   <div v-if="prologueQuestions.length" class="prologue-questions">
                     <button v-for="(q, i) in prologueQuestions" :key="i" type="button" class="question-chip" @click="sendQuestion(q)">
@@ -85,14 +106,10 @@
               <div class="msg-bubble user">{{ msg.content }}</div>
             </div>
           </div>
-          <div v-if="streamingMsg" class="chat-msg assistant">
-            <img class="avatar-img" src="../assets/avatar.jpg" alt="助手头像" />
-            <div class="msg-bubble"><div v-html="renderMarkdown(streamingMsg)"></div></div>
-          </div>
         </div>
         <div data-testid="chat-composer" class="chat-input-row">
-          <el-input v-model="inputMsg" placeholder="输入消息，测试此智能体…" @keyup.enter="sendMsg" class="chat-input" />
-          <el-button data-testid="send-message" type="primary" icon="el-icon-s-promotion" @click="sendMsg">发送</el-button>
+          <el-input v-model="inputMsg" :disabled="isStreaming" placeholder="输入消息，测试此智能体…" @keyup.enter="sendMsg" class="chat-input" />
+          <el-button data-testid="send-message" :disabled="isStreaming" type="primary" icon="el-icon-s-promotion" @click="sendMsg">发送</el-button>
         </div>
       </div>
     </section>
@@ -102,6 +119,7 @@
 <script>
 import axios from 'axios'
 import { apiUrl } from '../api/http'
+import { authenticatedFetch } from '../api/authenticatedFetch'
 import { marked } from 'marked'
 import { Delete } from '@element-plus/icons-vue'
 export default {
@@ -111,16 +129,18 @@ export default {
     return {
       agentId: null,
       agentInfo: {
-        name: '', description: '', prologue: '', roleDescription: ''
+        name: '', description: '', prologue: '', roleDescription: '',
+        modelUrl: '', modelApiKey: '', modelId: '', modelApiKeyConfigured: false
       },
       knowledgeList: [],
       allKnowledgeList: [],
       showAddKnowledge: false,
+      showModelConfig: false,
       selectedKnowledgeIds: [],
       chatId: '',
       chatHistory: [],
       inputMsg: '',
-      streamingMsg: '',
+      isStreaming: false,
       prologueQuestions: [],
       prologueGreeting: ''
     }
@@ -135,7 +155,7 @@ export default {
     async fetchAgentInfo() {
       const res = await axios.get(apiUrl(`/agent/${this.agentId}`))
       if (res.data && res.data.code === 200 && res.data.data) {
-        this.agentInfo = res.data.data
+        this.agentInfo = { ...this.agentInfo, ...res.data.data, modelApiKey: '' }
         this.parsePrologueQuestions()
         this.initChat()
       }
@@ -207,42 +227,54 @@ export default {
       this.chatHistory = []
       // 第一条消息为开场白
       if (this.agentInfo.prologue) {
-        this.chatHistory.push({ role: 'assistant', content: this.agentInfo.prologue })
+        this.chatHistory.push({ role: 'assistant', content: this.agentInfo.prologue, isPrologue: true })
       }
     },
     async sendMsg() {
-      if (!this.inputMsg) return
+      if (!this.inputMsg || this.isStreaming) return
       const msg = this.inputMsg
       this.chatHistory.push({ role: 'user', content: msg })
       this.inputMsg = ''
-      this.streamingMsg = ''
+      const assistantMessage = { role: 'assistant', content: '' }
+      const assistantMessageIndex = this.chatHistory.push(assistantMessage) - 1
+      this.isStreaming = true
       const url = apiUrl(`/ai/agent/chat?chatId=${this.chatId}&agentId=${this.agentId}`)
       const controller = new AbortController()
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: msg }),
-        signal: controller.signal
-      })
-      if (!response.body) {
-        this.$message.error('无流式响应')
-        return
+      try {
+        const response = await authenticatedFetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: msg }),
+          signal: controller.signal
+        })
+        if (!response.ok) {
+          const error = await response.json().catch(() => null)
+          throw new Error(error?.msg || '对话请求失败')
+        }
+        if (!response.body) {
+          this.chatHistory.pop()
+          this.$message.error('无流式响应')
+          return
+        }
+        const reader = response.body.getReader()
+        let fullMsg = ''
+        const decoder = new TextDecoder('utf-8')
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          let chunk = decoder.decode(value, { stream: true })
+          chunk = chunk.replace(/\r?\n/g, '').trim()
+          if (!chunk) continue
+          if (chunk === '[DONE]') break
+          fullMsg += chunk
+          this.chatHistory[assistantMessageIndex].content = fullMsg
+        }
+      } catch (error) {
+        if (!assistantMessage.content) this.chatHistory.pop()
+        this.$message.error(error.message || '对话请求失败')
+      } finally {
+        this.isStreaming = false
       }
-      const reader = response.body.getReader()
-      let fullMsg = ''
-      const decoder = new TextDecoder('utf-8')
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        let chunk = decoder.decode(value, { stream: true })
-        chunk = chunk.replace(/\r?\n/g, '').trim()
-        if (!chunk) continue
-        if (chunk === '[DONE]') break
-        fullMsg += chunk
-        this.streamingMsg = fullMsg
-      }
-      this.chatHistory.push({ role: 'assistant', content: fullMsg })
-      this.streamingMsg = ''
     },
     sendQuestion(q) {
       this.inputMsg = q
@@ -250,8 +282,12 @@ export default {
     },
     async saveAgent() {
       try {
-        const res = await axios.put(apiUrl(`/agent/update/${this.agentId}`), this.agentInfo)
+        const { modelApiKeyConfigured, ...payload } = this.agentInfo
+        const res = await axios.put(apiUrl(`/agent/update/${this.agentId}`), payload)
         if (res.data && res.data.code === 200) {
+          this.agentInfo.modelApiKeyConfigured = this.agentInfo.modelApiKeyConfigured || Boolean(this.agentInfo.modelApiKey)
+          this.agentInfo.modelApiKey = ''
+          this.showModelConfig = false
           this.$message.success('保存成功')
         } else {
           this.$message.error(res.data.msg || '保存失败')
@@ -338,14 +374,46 @@ export default {
   line-height: 1.65;
   resize: vertical;
 }
+.model-config-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 34px 0 14px;
+  padding-top: 22px;
+  border-top: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+}
+.model-config-toggle > div {
+  display: grid;
+  gap: 3px;
+}
+.model-config-toggle span {
+  color: var(--sea-deep);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.model-config-toggle small,
+.model-config-panel > p {
+  color: var(--sea-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.model-config-panel {
+  margin: 0 0 4px;
+  padding: 2px 0 0;
+}
+.model-config-panel > p {
+  margin: 0 0 14px;
+}
 .knowledge-header-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin: 28px 0 12px;
-  padding-top: 22px;
-  border-top: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted));
+  margin: 30px 0 12px;
+  padding-top: 26px;
+  border-top: 1px solid var(--workbench-rule);
 }
 .knowledge-header-row > div {
   display: grid;

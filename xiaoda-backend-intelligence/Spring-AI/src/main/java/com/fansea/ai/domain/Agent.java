@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -23,6 +24,12 @@ public class Agent implements Serializable {
     private String description;
     private String prologue;
     private String roleDescription;
+    private String modelUrl;
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private String modelApiKey;
+    private String modelId;
+    @TableField(exist = false)
+    private boolean modelApiKeyConfigured;
     private Date createTime;
     private Date updateTime;
     @TableField(exist = false)
@@ -45,6 +52,9 @@ public class Agent implements Serializable {
             && (this.getDescription() == null ? other.getDescription() == null : this.getDescription().equals(other.getDescription()))
             && (this.getPrologue() == null ? other.getPrologue() == null : this.getPrologue().equals(other.getPrologue()))
             && (this.getRoleDescription() == null ? other.getRoleDescription() == null : this.getRoleDescription().equals(other.getRoleDescription()))
+            && (this.getModelUrl() == null ? other.getModelUrl() == null : this.getModelUrl().equals(other.getModelUrl()))
+            && (this.getModelApiKey() == null ? other.getModelApiKey() == null : this.getModelApiKey().equals(other.getModelApiKey()))
+            && (this.getModelId() == null ? other.getModelId() == null : this.getModelId().equals(other.getModelId()))
             && (this.getCreateTime() == null ? other.getCreateTime() == null : this.getCreateTime().equals(other.getCreateTime()))
             && (this.getUpdateTime() == null ? other.getUpdateTime() == null : this.getUpdateTime().equals(other.getUpdateTime()));
     }
@@ -58,6 +68,9 @@ public class Agent implements Serializable {
         result = prime * result + ((getDescription() == null) ? 0 : getDescription().hashCode());
         result = prime * result + ((getPrologue() == null) ? 0 : getPrologue().hashCode());
         result = prime * result + ((getRoleDescription() == null) ? 0 : getRoleDescription().hashCode());
+        result = prime * result + ((getModelUrl() == null) ? 0 : getModelUrl().hashCode());
+        result = prime * result + ((getModelApiKey() == null) ? 0 : getModelApiKey().hashCode());
+        result = prime * result + ((getModelId() == null) ? 0 : getModelId().hashCode());
         result = prime * result + ((getCreateTime() == null) ? 0 : getCreateTime().hashCode());
         result = prime * result + ((getUpdateTime() == null) ? 0 : getUpdateTime().hashCode());
         return result;
@@ -74,6 +87,9 @@ public class Agent implements Serializable {
         sb.append(", description=").append(description);
         sb.append(", prologue=").append(prologue);
         sb.append(", roleDescription=").append(roleDescription);
+        sb.append(", modelUrl=").append(modelUrl);
+        sb.append(", modelApiKeyConfigured=").append(modelApiKey != null && !modelApiKey.isBlank());
+        sb.append(", modelId=").append(modelId);
         sb.append(", createTime=").append(createTime);
         sb.append(", updateTime=").append(updateTime);
         sb.append(", serialVersionUID=").append(serialVersionUID);

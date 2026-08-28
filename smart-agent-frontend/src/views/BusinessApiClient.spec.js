@@ -21,6 +21,7 @@ vi.mock('../api/http', () => ({
   http: { get },
 }))
 vi.mock('axios', () => ({ default: { get: legacyGet, post, put } }))
+vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ accessToken: 'stream-token' }) }))
 
 const stubs = {
   'el-button': { template: '<button v-bind="$attrs" @click="$emit(\'click\')"><slot /></button>' },
@@ -107,8 +108,88 @@ describe('business list API client', () => {
 
     expect(fetch).toHaveBeenCalledWith('/api/ai/agent/chat?chatId=chat-42&agentId=7', expect.objectContaining({
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer stream-token',
+      },
       body: JSON.stringify({ prompt: '请总结上传文档' }),
     }))
+  })
+
+  it('does not start a second agent request while the first reply is still streaming', async () => {
+    let resolveFirstChunk
+    let readCount = 0
+    const firstResponse = {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: () => {
+            if (readCount++ === 0) {
+              return new Promise(resolve => { resolveFirstChunk = resolve })
+            }
+            return Promise.resolve({ done: true })
+          },
+        }),
+      },
+    }
+    fetch.mockResolvedValueOnce(firstResponse).mockResolvedValueOnce({ ok: true, body: { getReader: () => ({ read: async () => ({ done: true }) }) } })
+    const wrapper = mount(AgentDetail, {
+      global: {
+        stubs,
+        mocks: { $route: { params: { id: '7' } }, $message: message },
+      },
+    })
+    await flushPromises()
+    wrapper.vm.chatId = 'chat-42'
+    wrapper.vm.inputMsg = '第一条问题'
+
+    const firstRequest = wrapper.vm.sendMsg()
+    await flushPromises()
+    wrapper.vm.inputMsg = '第二条问题'
+    const secondRequest = wrapper.vm.sendMsg()
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    resolveFirstChunk({ value: new TextEncoder().encode('第一条回复'), done: false })
+    await firstRequest
+    await secondRequest
+  })
+
+  it('renders the first streamed assistant chunk before the response completes', async () => {
+    let resolveChunk
+    let resolveDone
+    let readCount = 0
+    fetch.mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: () => {
+            if (readCount++ === 0) return new Promise(resolve => { resolveChunk = resolve })
+            return new Promise(resolve => { resolveDone = resolve })
+          },
+        }),
+      },
+    })
+    const wrapper = mount(AgentDetail, {
+      global: {
+        stubs,
+        mocks: { $route: { params: { id: '7' } }, $message: message },
+      },
+    })
+    await flushPromises()
+    wrapper.vm.chatId = 'chat-42'
+    wrapper.vm.inputMsg = '第一条问题'
+
+    const request = wrapper.vm.sendMsg()
+    await flushPromises()
+    resolveChunk({ value: new TextEncoder().encode('正在显示的回复'), done: false })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在显示的回复')
+
+    resolveDone({ done: true })
+    await request
   })
 
   it('keeps the knowledge save request URL and payload when saving settings', async () => {

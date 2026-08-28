@@ -33,7 +33,7 @@ class FlywayMigrationIntegrationTest {
     }
 
     @Test
-    void freshSchemaRunsV1ThenV2ExactlyOnce() {
+    void freshSchemaRunsAllMigrationsAndAddsAgentModelConfiguration() {
         schema = "migration_it_" + UUID.randomUUID().toString().replace("-", "");
         jdbc.execute("CREATE SCHEMA " + schema);
 
@@ -46,11 +46,13 @@ class FlywayMigrationIntegrationTest {
                 .baselineVersion("1")
                 .load();
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + schema + ".flyway_schema_history WHERE success", Integer.class))
-                .isEqualTo(2);
+                .isEqualTo(3);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + schema + ".platform_invitation", Integer.class))
                 .isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'agent' AND column_name IN ('model_url', 'model_api_key', 'model_id')", Integer.class, schema))
+                .isEqualTo(3);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
 }

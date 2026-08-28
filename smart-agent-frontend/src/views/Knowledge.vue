@@ -1,207 +1,52 @@
 <template>
   <main class="knowledge-page">
     <header class="knowledge-page__header">
-      <div>
-        <span class="knowledge-page__eyebrow">整理资料</span>
-        <h1>知识库</h1>
-        <p>将团队文件整理为可检索的资料索引，持续为智能体提供依据。</p>
-      </div>
-      <el-button data-testid="create-knowledge" type="primary" @click="showCreate = true">创建知识库</el-button>
+      <div><h1>知识库</h1><p class="knowledge-page__subtitle">管理团队知识资产，构建高质量的检索数据源</p></div>
+      <el-button data-testid="create-knowledge" type="primary" @click="showCreate = true"><el-icon><Plus /></el-icon>创建知识库</el-button>
     </header>
-
-    <section v-if="knowledgeList.length" class="knowledge-list" aria-label="知识库列表">
-      <div class="knowledge-list__header" aria-hidden="true">
-        <span>知识库</span>
-        <span>文档数</span>
-        <span>已关联智能体</span>
-        <span>操作</span>
+    <section v-if="knowledgeList.length" class="knowledge-overview" aria-label="知识库概览">
+      <article class="overview-card"><span class="overview-card__icon overview-card__icon--blue"><el-icon><CollectionTag /></el-icon></span><div><span>知识库总数</span><strong>{{ knowledgeList.length }}</strong></div></article>
+      <article class="overview-card"><span class="overview-card__icon overview-card__icon--green"><el-icon><Document /></el-icon></span><div><span>文档总数</span><strong>{{ documentTotal }}</strong></div></article>
+    </section>
+    <section v-if="knowledgeList.length" class="knowledge-workspace" aria-label="知识库列表">
+      <nav class="knowledge-tabs" aria-label="知识库范围"><button class="knowledge-tab knowledge-tab--active" type="button">全部知识库</button></nav>
+      <div class="knowledge-toolbar">
+        <el-input v-model="searchQuery" data-testid="knowledge-search" clearable placeholder="搜索知识库名称或描述" aria-label="搜索知识库名称或描述"><template #prefix><el-icon><Search /></el-icon></template></el-input>
+        <el-select v-model="statusFilter" data-testid="status-filter" aria-label="按状态筛选"><el-option label="全部状态" value="all" /><el-option label="已发布" value="published" /></el-select>
+        <el-button class="knowledge-toolbar__filter" plain aria-label="更多筛选"><el-icon><Filter /></el-icon>更多筛选</el-button>
       </div>
-      <article
-        v-for="kb in knowledgeList"
-        :key="kb.id"
-        class="knowledge-row"
-        role="link"
-        tabindex="0"
-        :aria-label="`打开知识库 ${kb.name}`"
-        @click="goToDetail(kb.id)"
-        @keyup.enter="goToDetail(kb.id)"
-      >
-        <span class="knowledge-row__badge" aria-hidden="true">KB</span>
-        <div class="knowledge-row__content">
-          <h2 class="knowledge-row__title">{{ kb.name }}</h2>
-          <p class="knowledge-row__description">{{ kb.desc || '暂未添加描述' }}</p>
-        </div>
-        <div class="knowledge-row__meta" aria-label="知识库统计">
-          <span>{{ kb.docCount || 0 }} 篇文档</span>
-          <span>关联 {{ kb.agentCount || 0 }} 个智能体</span>
-        </div>
-        <div class="knowledge-row__actions">
-          <el-button class="knowledge-row__enter" text type="primary" @click.stop="goToDetail(kb.id)">进入知识库</el-button>
-          <el-button :aria-label="`删除知识库 ${kb.name}`" class="knowledge-row__delete" type="danger" circle @click.stop="handleDelete(kb.id)"><el-icon class="knowledge-row__delete-icon"><Delete /></el-icon></el-button>
-        </div>
-      </article>
+      <div class="knowledge-table-wrap"><table class="knowledge-table"><thead class="knowledge-table__header"><tr><th scope="col">知识库名称</th><th scope="col">文档数</th><th scope="col">关联智能体</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody>
+        <tr v-for="kb in filteredKnowledgeList" :key="kb.id" class="knowledge-table__row" tabindex="0" @click="goToDetail(kb.id)" @keyup.enter="goToDetail(kb.id)"><td><div class="knowledge-table__name-cell"><span class="knowledge-table__file-icon"><el-icon><FolderOpened /></el-icon></span><span><strong class="knowledge-table__title">{{ kb.name }}</strong><small>{{ kb.desc || '暂未添加描述' }}</small></span></div></td><td class="knowledge-table__document-count">{{ kb.docCount || 0 }}</td><td class="knowledge-table__agent-count">{{ kb.agentCount || 0 }}</td><td><span class="knowledge-table__status"><i></i>已发布</span></td><td><div class="knowledge-table__actions"><el-button text type="primary" @click.stop="goToDetail(kb.id)">进入</el-button><el-button :aria-label="`删除知识库 ${kb.name}`" class="knowledge-table__delete" text type="danger" @click.stop="handleDelete(kb.id)"><el-icon class="knowledge-table__delete-icon"><Delete /></el-icon></el-button></div></td></tr>
+        <tr v-if="!filteredKnowledgeList.length"><td class="knowledge-table__no-results" colspan="5">没有匹配的知识库</td></tr>
+      </tbody></table></div>
     </section>
-
-    <section v-else class="empty-state knowledge-page__empty" aria-live="polite">
-      <h2>还没有知识库</h2>
-      <p>从第一个知识库开始，集中管理智能体需要的资料。</p>
-      <el-button type="primary" @click="showCreate = true">创建知识库</el-button>
-    </section>
-
-    <!-- 新建知识库弹窗 -->
-    <el-dialog v-model="showCreate" title="创建知识库" width="420px" :close-on-click-modal="false" class="create-dialog">
-      <el-form :model="createForm" :rules="rules" ref="createFormRef" label-width="72px" status-icon>
-        <el-form-item label="名称" prop="name">
-          <el-input v-model="createForm.name" maxlength="32" show-word-limit placeholder="请输入知识库名称" />
-        </el-form-item>
-        <el-form-item label="描述" prop="desc">
-          <el-input v-model="createForm.desc" type="textarea" :rows="3" maxlength="100" show-word-limit placeholder="请输入描述" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showCreate = false">取消</el-button>
-        <el-button type="primary" @click="handleCreate">创建</el-button>
-      </template>
-    </el-dialog>
+    <section v-else class="empty-state knowledge-page__empty" aria-live="polite"><el-icon class="knowledge-page__empty-icon"><FolderOpened /></el-icon><h2>还没有知识库</h2><p>从第一个知识库开始，集中管理智能体需要的资料。</p><el-button type="primary" @click="showCreate = true"><el-icon><Plus /></el-icon>创建知识库</el-button></section>
+    <el-dialog v-model="showCreate" title="创建知识库" width="420px" :close-on-click-modal="false" class="create-dialog"><el-form ref="createFormRef" :model="createForm" :rules="rules" label-width="72px" status-icon><el-form-item label="名称" prop="name"><el-input v-model="createForm.name" maxlength="32" show-word-limit placeholder="请输入知识库名称" /></el-form-item><el-form-item label="描述" prop="desc"><el-input v-model="createForm.desc" type="textarea" :rows="3" maxlength="100" show-word-limit placeholder="请输入描述" /></el-form-item></el-form><template #footer><el-button @click="showCreate = false">取消</el-button><el-button type="primary" :loading="loading" @click="handleCreate">创建</el-button></template></el-dialog>
   </main>
 </template>
 
 <script>
-import { ref } from 'vue'
+import { CollectionTag, Delete, Document, Filter, FolderOpened, Plus, Search } from '@element-plus/icons-vue'
 import { http } from '../api/http'
-import { Delete } from '@element-plus/icons-vue'
 export default {
-  name: 'Knowledge',
-  components: { Delete },
-  data() {
-    return {
-      knowledgeList: [],
-      showCreate: false,
-      createForm: {
-        name: '',
-        desc: ''
-      },
-      rules: {
-        name: [
-          { required: true, message: '请输入知识库名称', trigger: 'blur' },
-          { min: 2, max: 32, message: '2-32个字符', trigger: 'blur' }
-        ],
-        desc: [
-          { max: 100, message: '最多100个字符', trigger: 'blur' }
-        ]
-      },
-      loading: false
-    }
-  },
-  mounted() {
-    this.fetchKnowledgeList()
-  },
+  name: 'Knowledge', components: { CollectionTag, Delete, Document, Filter, FolderOpened, Plus, Search },
+  data() { return { knowledgeList: [], searchQuery: '', statusFilter: 'all', showCreate: false, loading: false, createForm: { name: '', desc: '' }, rules: { name: [{ required: true, message: '请输入知识库名称', trigger: 'blur' }, { min: 2, max: 32, message: '2-32个字符', trigger: 'blur' }], desc: [{ max: 100, message: '最多100个字符', trigger: 'blur' }] } } },
+  computed: { documentTotal() { return this.knowledgeList.reduce((total, item) => total + (item.docCount || 0), 0) }, filteredKnowledgeList() { const query = this.searchQuery.trim().toLowerCase(); return this.knowledgeList.filter((item) => !query || `${item.name} ${item.desc || ''}`.toLowerCase().includes(query)) } },
+  mounted() { this.fetchKnowledgeList() },
   methods: {
-    async fetchKnowledgeList() {
-      try {
-        const res = await http.get('/knowledge/list/vo')
-        if (res.data && res.data.code === 200) {
-          this.knowledgeList = (res.data.data || []).map(item => ({
-            name: item.name,
-            desc: item.description,
-            docCount: item.fileCount,
-            agentCount: item.agentCount,
-            id: item.id
-          }))
-        } else {
-          this.$message.error(res.data.msg || '获取知识库失败')
-        }
-      } catch (e) {
-        this.$message.error('网络错误，获取知识库失败')
-      }
-    },
-    goToDetail(id) {
-      this.$router.push(`/knowledge/${id}`)
-    },
-    async handleCreate() {
-      this.$refs.createFormRef.validate(async (valid) => {
-        if (valid) {
-          this.loading = true
-          try {
-            const res = await http.post('/knowledge/add', {
-              name: this.createForm.name,
-              description: this.createForm.desc
-            })
-            if (res.data && res.data.code === 200) {
-              // 创建成功后刷新列表
-              await this.fetchKnowledgeList()
-              this.showCreate = false
-              this.createForm = { name: '', desc: '' }
-              this.$message.success('创建成功！')
-            } else {
-              this.$message.error(res.data.msg || '创建失败')
-            }
-          } catch (e) {
-            this.$message.error('网络错误，创建失败')
-          } finally {
-            this.loading = false
-          }
-        }
-      })
-    },
-    async handleDelete(id) {
-      this.$confirm('确定要删除该知识库吗？此操作不可恢复！', '提示', {
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }).then(async () => {
-        try {
-          const res = await http.delete(`/knowledge/delete/${id}`)
-          if (res.data && res.data.code === 200) {
-            this.$message.success('删除成功')
-            this.fetchKnowledgeList()
-          } else {
-            this.$message.error(res.data.msg || '删除失败')
-          }
-        } catch (e) {
-          this.$message.error('网络错误，删除失败')
-        }
-      }).catch(() => {})
-    }
-  }
+    async fetchKnowledgeList() { try { const res = await http.get('/knowledge/list/vo'); if (res.data?.code === 200) this.knowledgeList = (res.data.data || []).map((item) => ({ id: item.id, name: item.name, desc: item.description, docCount: item.fileCount, agentCount: item.agentCount })); else this.$message.error(res.data?.msg || '获取知识库失败') } catch (error) { this.$message.error('网络错误，获取知识库失败') } },
+    goToDetail(id) { this.$router.push(`/knowledge/${id}`) },
+    handleCreate() { this.$refs.createFormRef.validate(async (valid) => { if (!valid) return; this.loading = true; try { const res = await http.post('/knowledge/add', { name: this.createForm.name, description: this.createForm.desc }); if (res.data?.code === 200) { await this.fetchKnowledgeList(); this.showCreate = false; this.createForm = { name: '', desc: '' }; this.$message.success('创建成功！') } else this.$message.error(res.data?.msg || '创建失败') } catch (error) { this.$message.error('网络错误，创建失败') } finally { this.loading = false } }) },
+    async handleDelete(id) { this.$confirm('确定要删除该知识库吗？此操作不可恢复！', '提示', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }).then(async () => { try { const res = await http.delete(`/knowledge/delete/${id}`); if (res.data?.code === 200) { this.$message.success('删除成功'); this.fetchKnowledgeList() } else this.$message.error(res.data?.msg || '删除失败') } catch (error) { this.$message.error('网络错误，删除失败') } }).catch(() => {}) },
+  },
 }
 </script>
 
 <style scoped>
-.knowledge-page { width: 100%; padding: 12px 0; }
-.knowledge-page__header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 26px; }
-.knowledge-page__eyebrow { color: var(--sea-signal); font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: .08em; }
-.knowledge-page h1 { margin: 4px 0 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: clamp(28px, 3vw, 36px); line-height: 1.2; }
-.knowledge-page__header p { margin: 8px 0 0; color: var(--sea-muted); }
-
-.knowledge-list { width: 100%; }
-.knowledge-list__header { display: grid; grid-template-columns: minmax(0, 1fr) 92px 132px 120px; align-items: center; min-height: 36px; padding: 0 18px; color: var(--sea-muted); font-size: 12px; }
-.knowledge-list__header > span:not(:first-child) { text-align: right; }
-.knowledge-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 224px auto; align-items: center; column-gap: 16px; min-height: 84px; margin-bottom: 10px; padding: 14px 18px; cursor: pointer; border: 1px solid color-mix(in srgb, var(--sea-mist) 72%, var(--sea-muted)); border-radius: 7px; background: var(--sea-paper); transition: background 180ms ease, border-color 180ms ease; }
-.knowledge-row:hover, .knowledge-row:focus-visible { border-color: color-mix(in srgb, var(--sea-signal) 48%, var(--sea-muted)); background: color-mix(in srgb, var(--sea-signal) 4%, var(--sea-paper)); }
-.knowledge-row__badge { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid color-mix(in srgb, var(--sea-signal) 28%, var(--sea-paper)); border-radius: 6px; background: color-mix(in srgb, var(--sea-signal) 7%, var(--sea-paper)); color: var(--sea-signal); font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
-.knowledge-row__content { min-width: 0; }
-.knowledge-row__title { margin: 0 0 3px; overflow: hidden; color: var(--sea-deep); font-size: 15px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.knowledge-row__description { margin: 0; overflow: hidden; color: var(--sea-muted); font-size: 13px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
-.knowledge-row__meta { display: flex; justify-content: flex-end; gap: 18px; color: var(--sea-muted); font-size: 12px; white-space: nowrap; }
-.knowledge-row__actions { display: flex; align-items: center; gap: 8px; }
-.knowledge-row__enter { min-height: 32px; padding-inline: 9px; font-size: 13px; font-weight: 700; }
-.knowledge-row__delete { flex: 0 0 auto; border-color: var(--sea-danger); background: var(--sea-danger); color: var(--sea-paper); }
-.knowledge-row__delete:hover, .knowledge-row__delete:focus-visible { border-color: var(--el-color-danger-dark-2); background: var(--el-color-danger-dark-2); color: var(--sea-paper); }
-.knowledge-row__delete-icon { font-size: 16px; }
-
-.knowledge-page__empty { display: grid; place-items: center; min-height: 260px; border: 1px dashed var(--el-border-color); border-radius: 12px; background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist)); }
-.knowledge-page__empty h2 { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 21px; }
-.knowledge-page__empty p { margin: 8px 0 16px; }
-
-@media (max-width: 640px) {
-  .knowledge-page { padding-top: 8px; }
-  .knowledge-page__header { align-items: flex-start; flex-direction: column; }
-  .knowledge-page__header > .el-button { width: 100%; }
-  .knowledge-list__header { display: none; }
-  .knowledge-row { grid-template-columns: 38px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 8px; margin-bottom: 8px; padding: 14px 12px; }
-  .knowledge-row__meta { grid-column: 2 / -1; justify-content: flex-start; gap: 12px; }
-  .knowledge-row__actions { grid-column: 3; grid-row: 1; gap: 0; }
-  .knowledge-row__enter { display: none; }
-}
+.knowledge-page { width: 100%; padding: 12px 0; }.knowledge-page__header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }.knowledge-page h1 { margin: 0; color: var(--sea-deep); font-size: clamp(27px, 3vw, 34px); line-height: 1.2; }.knowledge-page__subtitle { margin: 8px 0 0; color: var(--sea-muted); font-size: 14px; }.knowledge-page__header .el-button { min-height: 40px; padding-inline: 18px; font-weight: 700; box-shadow: 0 8px 18px rgb(0 166 166 / 18%); }
+.knowledge-overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }.overview-card { display: flex; align-items: center; gap: 14px; min-height: 92px; padding: 16px 20px; border: 1px solid #e2ebf0; border-radius: 10px; background: var(--sea-paper); box-shadow: 0 8px 24px rgb(17 36 59 / 4%); }.overview-card__icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; font-size: 20px; }.overview-card__icon--blue { background: #e8f3ff; color: #2788eb; }.overview-card__icon--green { background: #e6faf1; color: #10ae77; }.overview-card div > span { display: block; color: var(--sea-muted); font-size: 13px; }.overview-card strong { display: block; margin-top: 4px; color: var(--sea-deep); font-size: 24px; line-height: 1; }
+.knowledge-workspace { overflow: hidden; border: 1px solid #dfe9ee; border-radius: 11px; background: var(--sea-paper); box-shadow: 0 10px 30px rgb(17 36 59 / 5%); }.knowledge-tabs { display: flex; padding: 0 20px; border-bottom: 1px solid #eaf0f3; }.knowledge-tab { padding: 16px 3px 13px; border: 0; border-bottom: 2px solid var(--sea-signal); background: transparent; color: var(--sea-signal); font: inherit; font-size: 14px; font-weight: 700; }.knowledge-toolbar { display: flex; align-items: center; gap: 12px; padding: 16px 20px; }.knowledge-toolbar .el-input { max-width: 330px; }.knowledge-toolbar .el-select { width: 140px; }.knowledge-toolbar__filter { min-height: 40px; }
+.knowledge-table-wrap { overflow-x: auto; }.knowledge-table { width: 100%; min-width: 700px; border-collapse: collapse; }.knowledge-table th { padding: 13px 20px; background: #f5f8fb; color: var(--sea-muted); font-size: 12px; font-weight: 600; text-align: left; }.knowledge-table td { padding: 15px 20px; border-top: 1px solid #edf2f5; color: #49617d; font-size: 13px; }.knowledge-table__row { cursor: pointer; transition: background 160ms ease; }.knowledge-table__row:hover, .knowledge-table__row:focus-visible { background: #f3fbfa; outline: none; }.knowledge-table__name-cell { display: flex; align-items: center; gap: 12px; min-width: 265px; }.knowledge-table__file-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: #e9f5ff; color: #2189ef; font-size: 20px; }.knowledge-table__title { display: block; color: var(--sea-deep); font-size: 14px; }.knowledge-table small { display: block; max-width: 300px; margin-top: 4px; overflow: hidden; color: var(--sea-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.knowledge-table__status { display: inline-flex; align-items: center; gap: 6px; color: #05a478; font-size: 12px; font-weight: 600; }.knowledge-table__status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }.knowledge-table__actions { display: flex; align-items: center; }.knowledge-table__actions .el-button { min-width: 34px; padding-inline: 7px; }.knowledge-table__delete-icon { font-size: 16px; }.knowledge-table__no-results { padding: 40px; color: var(--sea-muted); text-align: center; }
+.knowledge-page__empty { display: grid; place-items: center; min-height: 280px; border: 1px dashed #bdd0d8; border-radius: 12px; background: color-mix(in srgb, var(--sea-paper) 80%, var(--sea-mist)); }.knowledge-page__empty-icon { color: var(--sea-signal); font-size: 32px; }.knowledge-page__empty h2 { margin: 12px 0 0; color: var(--sea-deep); font-size: 20px; }.knowledge-page__empty p { margin: 8px 0 18px; color: var(--sea-muted); }
+@media (max-width: 640px) { .knowledge-page__header { align-items: stretch; flex-direction: column; }.knowledge-page__header .el-button { width: 100%; }.knowledge-overview { gap: 10px; }.overview-card { min-height: 76px; padding: 12px; }.overview-card__icon { width: 34px; height: 34px; font-size: 17px; }.overview-card strong { font-size: 20px; }.knowledge-toolbar { flex-wrap: wrap; padding: 12px; }.knowledge-toolbar .el-input { flex-basis: 100%; max-width: none; }.knowledge-toolbar .el-select, .knowledge-toolbar__filter { flex: 1; width: auto; }.knowledge-tabs { padding-inline: 12px; }.knowledge-table th, .knowledge-table td { padding-inline: 12px; } }
 </style>

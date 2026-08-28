@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * @Projectname: Spring-AI
@@ -57,6 +58,13 @@ public class AgentController {
     @RequireRole("tenant_admin")
     @PutMapping("/update/{id}")
     public AjaxResult updateAgent(@PathVariable Long id, @RequestBody Agent agent) {
+        Agent existing = agentService.getById(id);
+        if (existing == null) {
+            return AjaxResult.error("智能体不存在");
+        }
+        if (agent.getModelApiKey() == null || agent.getModelApiKey().isBlank()) {
+            agent.setModelApiKey(existing.getModelApiKey());
+        }
         agent.setId(id);
         agentService.updateById(agent);
         return AjaxResult.success();
@@ -83,13 +91,23 @@ public class AgentController {
     // 查询特定 Agent
     @GetMapping("/{id}")
     public AjaxResult getAgentById(@PathVariable Long id) {
-        return AjaxResult.success(agentService.getById(id));
+        Agent agent = agentService.getById(id);
+        markApiKeyConfigured(agent);
+        return AjaxResult.success(agent);
     }
 
     // 查询所有 Agent
     @GetMapping("/list")
     public AjaxResult getAllAgents() {
-        return AjaxResult.success(agentService.list());
+        List<Agent> agents = agentService.list();
+        agents.forEach(this::markApiKeyConfigured);
+        return AjaxResult.success(agents);
+    }
+
+    private void markApiKeyConfigured(Agent agent) {
+        if (agent != null) {
+            agent.setModelApiKeyConfigured(Objects.nonNull(agent.getModelApiKey()) && !agent.getModelApiKey().isBlank());
+        }
     }
 
 }
