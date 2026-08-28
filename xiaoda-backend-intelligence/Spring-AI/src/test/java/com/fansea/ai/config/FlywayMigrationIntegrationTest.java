@@ -79,6 +79,9 @@ class FlywayMigrationIntegrationTest {
                 + "'v1', 'test', 'active', 60, 60, 10, 'ag', '1234', ?) RETURNING id",
                 Long.class, tenantId, userId);
 
+        assertThatThrownBy(() -> jdbc.update("UPDATE " + schema
+                + ".api_credential SET credential_type = 'RAG_RETRIEVAL' WHERE id = ?", credentialId))
+                .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> jdbc.update("INSERT INTO " + schema
                 + ".api_credential_knowledge (tenant_id, credential_id, knowledge_id) VALUES (?, ?, ?)",
                 tenantId, credentialId, knowledgeId))
