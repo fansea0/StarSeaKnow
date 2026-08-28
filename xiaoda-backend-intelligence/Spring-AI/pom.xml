@@ -107,6 +107,10 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-cache</artifactId>
 		</dependency>
+		<dependency>
+			<groupId>com.github.ben-manes.caffeine</groupId>
+			<artifactId>caffeine</artifactId>
+		</dependency>
 		<!-- AOP support for @Aspect (e.g. AuthAspect) - required so Spring auto-proxies @Aspect beans -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
