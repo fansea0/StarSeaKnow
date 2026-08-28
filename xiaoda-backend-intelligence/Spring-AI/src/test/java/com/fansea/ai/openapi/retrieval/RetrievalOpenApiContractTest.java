@@ -24,16 +24,23 @@ class RetrievalOpenApiContractTest {
     private static final Path OPENAPI = Path.of("../../docs/openapi/retrieval-api.yaml");
     private static final Path GUIDE = Path.of("../../docs/openapi/retrieval-api.md");
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Pattern FENCED_CODE_BLOCK = Pattern.compile("(?ms)^```([^\\r\\n]*)\\R(.*?)^```\\s*$", Pattern.MULTILINE);
-    private static final Pattern OVERLAP_PERIOD_CLAIM = Pattern.compile(
-            "(?i)\\b(?:provides|supports|configures)\\s+(?:an?\\s+)?overlap period\\b");
-    private static final Pattern CONFIGURED_OVERLAP_PERIOD_CLAIM = Pattern.compile(
-            "(?i)\\bconfigured overlap period\\b");
+    private static final Pattern INVALID_JSON_POINTER_ESCAPE = Pattern.compile("~(?![01])");
+    private static final Pattern ROTATION_OVERLAP_CLAIM = Pattern.compile(
+            "(?i)\\b(?:key\\s+)?rotation\\b[^.!?]{0,120}?"
+                    + "\\b(?<claim>guarantee(?:s|d)?|provid(?:e|es|ed)|support(?:s|ed)?|configur(?:e|es|ed))\\b"
+                    + "[^.!?]{0,60}?\\b(?:an?\\s+)?overlap\\s+period\\b");
+    private static final Pattern CONFIGURED_OVERLAP_CLAIM = Pattern.compile(
+            "(?i)\\b(?<claim>configured)\\s+overlap\\s+period\\b");
+    private static final Pattern OVERLAP_GUARANTEE_CLAIM = Pattern.compile(
+            "(?i)\\b(?<claim>overlap\\s+guarantee)\\b");
     private static final Pattern RATE_LIMIT_WINDOW_CLAIM = Pattern.compile(
-            "(?i)\\b(?:headers?|x-ratelimit-[a-z-]+)\\s+(?:describe|show|report|are)\\s+(?:the\\s+)?"
-                    + "(?:current|fixed)\\s+(?:rate-limit\\s+)?window\\b");
-    private static final Pattern UNNEGATED_RATE_LIMIT_WINDOW = Pattern.compile(
-            "(?i)(?<!not )(?:current|fixed) rate-limit window");
+            "(?i)\\b(?:the\\s+)?(?:rate-limit\\s+)?(?:headers?|x-ratelimit-[a-z-]+)\\b[^.!?]{0,80}?"
+                    + "\\b(?<claim>reflects?|uses?|represents?|describes?|shows?|reports?|are|is)\\b"
+                    + "[^.!?]{0,40}?\\b(?:an?\\s+|the\\s+)?(?:fixed|current)"
+                    + "(?:[- ]window|\\s+rate-limit\\s+window)\\b");
+    private static final Pattern NEGATION = Pattern.compile(
+            "(?i)\\b(?:no|not|never|without)\\b|\\b(?:is|are|was|were|do|does|did|can|could|will|would)n['’]?t\\b");
+    private static final Pattern CONTRAST = Pattern.compile("(?i)\\b(?:but|however|yet|instead)\\b");
 
     @Test
     void publishedContractDescribesTheStrictRetrievalApi() throws IOException {
@@ -46,6 +53,7 @@ class RetrievalOpenApiContractTest {
         assertThat(path(root, "paths", "/openapi/v1/retrieval", "post")).isNotNull();
         assertThat(path(root, "components", "securitySchemes", "RagApiKey", "scheme"))
                 .isEqualTo("bearer");
+        assertExecutableReferencesResolve(root);
         assertThat(mapKeys(path(root, "paths", "/openapi/v1/retrieval", "post", "responses")))
                 .containsExactlyInAnyOrder("200", "400", "401", "403", "413", "415", "429", "500", "503", "504");
         assertReference(root, "#/components/schemas/RetrievalResponse", "paths", "/openapi/v1/retrieval",
@@ -64,12 +72,13 @@ class RetrievalOpenApiContractTest {
         assertErrorResponseReference(root, "500", "InternalError");
         assertErrorResponseReference(root, "503", "RetrievalUnavailable");
         assertErrorResponseReference(root, "504", "RetrievalTimeout");
-        assertThat(schemaProperties(root, "RetrievalRequest"))
-                .containsExactlyInAnyOrder("query", "retrieval_setting");
-        assertThat(path(root, "components", "schemas", "RetrievalRequest", "additionalProperties"))
-                .isEqualTo(false);
-        assertThat(path(root, "components", "schemas", "RetrievalSetting", "additionalProperties"))
-                .isEqualTo(false);
+        assertStrictObjectSchema(root, "RetrievalRequest", List.of("query"), "query", "retrieval_setting");
+        assertSchemaPropertyType(root, "RetrievalRequest", "query", "string");
+        assertReference(root, "#/components/schemas/RetrievalSetting", "components", "schemas",
+                "RetrievalRequest", "properties", "retrieval_setting");
+        assertStrictObjectSchema(root, "RetrievalSetting", List.of(), "top_k", "score_threshold");
+        assertSchemaPropertyType(root, "RetrievalSetting", "top_k", "integer");
+        assertSchemaPropertyType(root, "RetrievalSetting", "score_threshold", "number");
         assertThat(path(root, "components", "schemas", "RetrievalRequest", "properties", "query", "maxLength"))
                 .isEqualTo(250);
         assertThat(path(root, "components", "schemas", "RetrievalRequest", "properties", "query", "minLength"))
@@ -86,16 +95,23 @@ class RetrievalOpenApiContractTest {
                 .isEqualTo(1);
         assertThat(path(root, "components", "schemas", "RetrievalSetting", "properties", "score_threshold", "default"))
                 .isEqualTo(0);
-        assertThat(schemaProperties(root, "RetrievalResponse")).containsExactly("records");
-        assertThat(schemaProperties(root, "RetrievalRecord"))
-                .containsExactlyInAnyOrder("content", "score", "title", "metadata");
-        assertThat(schemaProperties(root, "RetrievalMetadata"))
-                .containsExactlyInAnyOrder("document_id", "chunk_id", "file_type", "page_number", "chunk_index");
+        assertStrictObjectSchema(root, "RetrievalResponse", List.of("records"), "records");
+        assertSchemaPropertyType(root, "RetrievalResponse", "records", "array");
+        assertStrictObjectSchema(root, "RetrievalRecord", List.of("content", "score", "title", "metadata"),
+                "content", "score", "title", "metadata");
+        assertSchemaPropertyType(root, "RetrievalRecord", "content", "string");
+        assertSchemaPropertyType(root, "RetrievalRecord", "score", "number");
+        assertSchemaPropertyType(root, "RetrievalRecord", "title", "string");
+        assertStrictObjectSchema(root, "RetrievalMetadata",
+                List.of("document_id", "chunk_id", "file_type", "page_number", "chunk_index"),
+                "document_id", "chunk_id", "file_type", "page_number", "chunk_index");
         assertNullable(root, "document_id", "string");
         assertNullable(root, "chunk_id", "string");
         assertNullable(root, "file_type", "string");
         assertNullable(root, "page_number", "integer");
         assertNullable(root, "chunk_index", "integer");
+        assertErrorResponseSchema(root);
+        assertHeaderComponentSchemas(root);
         assertThat(mapKeys(path(root, "paths", "/openapi/v1/retrieval", "post", "responses", "200", "headers")))
                 .containsExactlyInAnyOrder("X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining",
                         "X-RateLimit-Reset", "Cache-Control");
@@ -165,13 +181,6 @@ class RetrievalOpenApiContractTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static Set<String> schemaProperties(Map<String, Object> root, String schemaName) {
-        Object properties = path(root, "components", "schemas", schemaName, "properties");
-        assertThat(properties).isInstanceOf(Map.class);
-        return ((Map<String, Object>) properties).keySet();
-    }
-
-    @SuppressWarnings("unchecked")
     private static Set<String> mapKeys(Object value) {
         assertThat(value).isInstanceOf(Map.class);
         return ((Map<String, Object>) value).keySet();
@@ -197,11 +206,124 @@ class RetrievalOpenApiContractTest {
         assertReference(root, "#/components/responses/ErrorResponse", "components", "responses", component);
     }
 
+    private static void assertStrictObjectSchema(Map<String, Object> root, String schemaName,
+                                                 List<String> required, String... properties) {
+        Map<String, Object> schema = map(path(root, "components", "schemas", schemaName));
+        assertStrictObjectSchema(schema, required, properties);
+    }
+
+    private static void assertStrictObjectSchema(Map<String, Object> schema, List<String> required,
+                                                 String... properties) {
+        assertThat(schema.get("type")).isEqualTo("object");
+        assertThat(schema.get("additionalProperties")).isEqualTo(false);
+        assertThat(mapKeys(schema.get("properties"))).containsExactlyInAnyOrder(properties);
+        assertThat(requiredFields(schema)).containsExactlyInAnyOrderElementsOf(required);
+    }
+
+    private static Set<String> requiredFields(Map<String, Object> schema) {
+        Object required = schema.get("required");
+        if (required == null) {
+            return Set.of();
+        }
+        Set<String> fields = new LinkedHashSet<>();
+        for (Object value : list(required)) {
+            assertThat(value).isInstanceOf(String.class);
+            assertThat(fields.add((String) value)).as("required fields must not contain duplicates").isTrue();
+        }
+        return fields;
+    }
+
+    private static void assertSchemaPropertyType(Map<String, Object> root, String schemaName,
+                                                 String property, String type) {
+        assertThat(path(root, "components", "schemas", schemaName, "properties", property, "type"))
+                .isEqualTo(type);
+    }
+
+    private static void assertErrorResponseSchema(Map<String, Object> root) {
+        assertStrictObjectSchema(root, "ErrorResponse", List.of("request_id", "error"), "request_id", "error");
+        assertSchemaPropertyType(root, "ErrorResponse", "request_id", "string");
+        Map<String, Object> error = map(path(root, "components", "schemas", "ErrorResponse", "properties", "error"));
+        assertStrictObjectSchema(error, List.of("code", "message", "param"), "code", "message", "param");
+        assertThat(path(error, "properties", "code", "type")).isEqualTo("string");
+        assertThat(path(error, "properties", "message", "type")).isEqualTo("string");
+        assertNullableType(path(error, "properties", "param", "type"), "string");
+    }
+
+    private static void assertHeaderComponentSchemas(Map<String, Object> root) {
+        assertExactMap(path(root, "components", "headers", "RequestId", "schema"), "type", "string");
+        assertExactMap(path(root, "components", "headers", "RateLimitLimit", "schema"),
+                "type", "integer", "minimum", 1);
+        assertExactMap(path(root, "components", "headers", "RateLimitRemaining", "schema"),
+                "type", "integer", "minimum", 0);
+        assertExactMap(path(root, "components", "headers", "RateLimitReset", "schema"),
+                "type", "integer", "format", "int64");
+        assertExactMap(path(root, "components", "headers", "RetryAfter", "schema"),
+                "type", "integer", "minimum", 1);
+        assertExactMap(path(root, "components", "headers", "NoStore", "schema"),
+                "type", "string", "const", "no-store");
+    }
+
+    private static void assertExactMap(Object value, Object... entries) {
+        Map<String, Object> actual = map(value);
+        assertThat(entries.length).isEven();
+        assertThat(actual).hasSize(entries.length / 2);
+        for (int index = 0; index < entries.length; index += 2) {
+            assertThat(actual).containsEntry((String) entries[index], entries[index + 1]);
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static void assertNullable(Map<String, Object> root, String field, String scalarType) {
         Object type = path(root, "components", "schemas", "RetrievalMetadata", "properties", field, "type");
+        assertNullableType(type, scalarType);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void assertNullableType(Object type, String scalarType) {
         assertThat(type).isInstanceOf(List.class);
         assertThat((List<String>) type).containsExactlyInAnyOrder(scalarType, "null");
+    }
+
+    private static void assertExecutableReferencesResolve(Map<String, Object> root) {
+        Map<String, Object> post = map(path(root, "paths", "/openapi/v1/retrieval", "post"));
+        Set<String> expandedReferences = new HashSet<>();
+        scanReferences(root, post.get("parameters"), expandedReferences);
+        scanReferences(root, post.get("requestBody"), expandedReferences);
+        scanReferences(root, post.get("responses"), expandedReferences);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void scanReferences(Map<String, Object> root, Object node, Set<String> expandedReferences) {
+        if (node instanceof Map<?, ?> nodeMap) {
+            for (Map.Entry<String, Object> entry : ((Map<String, Object>) nodeMap).entrySet()) {
+                if ("$ref".equals(entry.getKey())) {
+                    assertThat(entry.getValue()).as("$ref value").isInstanceOf(String.class);
+                    String reference = (String) entry.getValue();
+                    Object target = resolveRequiredLocalReference(root, reference);
+                    if (expandedReferences.add(reference)) {
+                        scanReferences(root, target, expandedReferences);
+                    }
+                } else {
+                    scanReferences(root, entry.getValue(), expandedReferences);
+                }
+            }
+        } else if (node instanceof List<?> list) {
+            for (Object item : list) {
+                scanReferences(root, item, expandedReferences);
+            }
+        }
+    }
+
+    private static Object resolveRequiredLocalReference(Map<String, Object> root, String reference) {
+        assertThat(reference).as("executable $ref").startsWith("#/");
+        assertThat(reference).as("executable $ref").doesNotContainPattern(INVALID_JSON_POINTER_ESCAPE);
+        Object current = root;
+        for (String segment : reference.substring(2).split("/", -1)) {
+            assertThat(current).as("parent of local reference %s", reference).isInstanceOf(Map.class);
+            current = ((Map<?, ?>) current).get(segment.replace("~1", "/").replace("~0", "~"));
+            assertThat(current).as("resolved local reference %s", reference).isNotNull();
+        }
+        return current;
     }
 
     private static void assertNoForbiddenPostRequestField(Map<String, Object> root, String field) {
@@ -243,10 +365,43 @@ class RetrievalOpenApiContractTest {
     }
 
     private static void assertNoObsoleteClaims(String document) {
-        assertThat(OVERLAP_PERIOD_CLAIM.matcher(document).find()).isFalse();
-        assertThat(CONFIGURED_OVERLAP_PERIOD_CLAIM.matcher(document).find()).isFalse();
-        assertThat(RATE_LIMIT_WINDOW_CLAIM.matcher(document).find()).isFalse();
-        assertThat(UNNEGATED_RATE_LIMIT_WINDOW.matcher(document).find()).isFalse();
+        String normalized = document.replaceAll("\\s+", " ");
+        assertEveryClaimIsNegated(normalized, ROTATION_OVERLAP_CLAIM);
+        assertEveryClaimIsNegated(normalized, CONFIGURED_OVERLAP_CLAIM);
+        assertEveryClaimIsNegated(normalized, OVERLAP_GUARANTEE_CLAIM);
+        assertEveryClaimIsNegated(normalized, RATE_LIMIT_WINDOW_CLAIM);
+    }
+
+    private static void assertEveryClaimIsNegated(String document, Pattern claimPattern) {
+        Matcher matcher = claimPattern.matcher(document);
+        while (matcher.find()) {
+            assertThat(isNegatedClaim(document, matcher))
+                    .as("obsolete affirmative claim: %s", matcher.group())
+                    .isTrue();
+        }
+    }
+
+    private static boolean isNegatedClaim(String document, Matcher claim) {
+        int claimStart = claim.start("claim");
+        int clauseStart = lastClauseBoundary(document, claimStart);
+        String prefix = document.substring(clauseStart, claimStart);
+        Matcher contrast = CONTRAST.matcher(prefix);
+        while (contrast.find()) {
+            prefix = prefix.substring(contrast.end());
+            contrast = CONTRAST.matcher(prefix);
+        }
+        if (NEGATION.matcher(prefix).find()) {
+            return true;
+        }
+        return NEGATION.matcher(document.substring(claimStart, claim.end())).find();
+    }
+
+    private static int lastClauseBoundary(String document, int before) {
+        int boundary = 0;
+        for (char separator : new char[]{'.', '!', '?', ';'}) {
+            boundary = Math.max(boundary, document.lastIndexOf(separator, before - 1) + 1);
+        }
+        return boundary;
     }
 
     private static void assertFencedExamplesAreStrict(String guide) throws IOException {
@@ -323,11 +478,9 @@ class RetrievalOpenApiContractTest {
                 if ("$ref".equals(key) && value instanceof String reference) {
                     assertThat(reference).doesNotContain("/" + field);
                     if (visitedReferences.add(reference)) {
-                        scanExecutableRequestNode(root, resolveLocalReference(root, reference), field,
+                        scanExecutableRequestNode(root, resolveRequiredLocalReference(root, reference), field,
                                 visitedReferences, "$ref");
                     }
-                } else if ("example".equals(key) && value instanceof String example) {
-                    assertThat(example).doesNotContain("\"" + field + "\":", "'" + field + "':");
                 } else {
                     scanExecutableRequestNode(root, value, field, visitedReferences, key);
                 }
@@ -347,39 +500,139 @@ class RetrievalOpenApiContractTest {
                 assertThat(string).isNotEqualTo(field);
             }
             if ("example".equals(parentKey) || "value".equals(parentKey)) {
-                assertThat(string).doesNotContain("\"" + field + "\":", "'" + field + "':");
+                assertStringExampleHasNoForbiddenField(string, field);
             }
         }
+    }
+
+    private static void assertStringExampleHasNoForbiddenField(String example, String field) {
+        Object structured = parseStructuredExample(example);
+        if (structured instanceof Map<?, ?> || structured instanceof List<?>) {
+            assertThat(containsKey(structured, field)).as("forbidden field %s in structured example", field).isFalse();
+            return;
+        }
+        Pattern key = Pattern.compile(
+                "(?m)(?:^|[\\s,{\\[])['\"\\\\]*" + Pattern.quote(field) + "['\"\\\\]*\\s*:");
+        assertThat(key.matcher(example).find()).as("forbidden field %s in string example", field).isFalse();
+    }
+
+    private static Object parseStructuredExample(String example) {
+        try {
+            Object parsed = JSON.readValue(example, Object.class);
+            if (parsed instanceof Map<?, ?> || parsed instanceof List<?>) {
+                return parsed;
+            }
+        } catch (IOException ignored) {
+            // Try YAML next because OpenAPI examples may use either representation.
+        }
+        try {
+            Object parsed = new Yaml().load(example);
+            if (parsed instanceof Map<?, ?> || parsed instanceof List<?>) {
+                return parsed;
+            }
+        } catch (RuntimeException ignored) {
+            // Fall through to formatting-independent key recognition.
+        }
+        return null;
     }
 
     private static boolean isNarrativeKey(String key) {
         return "description".equals(key) || "summary".equals(key) || "title".equals(key);
     }
 
-    private static Object resolveLocalReference(Map<String, Object> root, String reference) {
-        if (!reference.startsWith("#/")) {
-            return null;
-        }
-        Object current = root;
-        for (String segment : reference.substring(2).split("/")) {
-            if (!(current instanceof Map<?, ?> map)) {
-                return null;
-            }
-            current = map.get(segment.replace("~1", "/").replace("~0", "~"));
-        }
-        return current;
-    }
-
     private static List<FencedCodeBlock> fencedCodeBlocks(String guide) {
         List<FencedCodeBlock> blocks = new ArrayList<>();
-        Matcher matcher = FENCED_CODE_BLOCK.matcher(guide);
-        while (matcher.find()) {
-            blocks.add(new FencedCodeBlock(matcher.group(1).trim(), matcher.group(2)));
+        String[] lines = guide.split("\\R", -1);
+        for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+            FenceOpening opening = fenceOpening(lines[lineIndex]);
+            if (opening == null) {
+                continue;
+            }
+            StringBuilder content = new StringBuilder();
+            boolean closed = false;
+            boolean firstContentLine = true;
+            for (int contentLine = lineIndex + 1; contentLine < lines.length; contentLine++) {
+                if (isFenceClosing(lines[contentLine], opening)) {
+                    blocks.add(new FencedCodeBlock(fenceLanguage(opening.info()), content.toString()));
+                    lineIndex = contentLine;
+                    closed = true;
+                    break;
+                }
+                if (!firstContentLine) {
+                    content.append('\n');
+                }
+                content.append(lines[contentLine]);
+                firstContentLine = false;
+            }
+            if (!closed) {
+                blocks.add(new FencedCodeBlock(fenceLanguage(opening.info()), content.toString()));
+                break;
+            }
         }
         return blocks;
     }
 
+    private static FenceOpening fenceOpening(String line) {
+        int indent = leadingSpaces(line);
+        if (indent > 3 || indent == line.length()) {
+            return null;
+        }
+        char marker = line.charAt(indent);
+        if (marker != '`' && marker != '~') {
+            return null;
+        }
+        int markerEnd = indent;
+        while (markerEnd < line.length() && line.charAt(markerEnd) == marker) {
+            markerEnd++;
+        }
+        int markerLength = markerEnd - indent;
+        if (markerLength < 3) {
+            return null;
+        }
+        String info = line.substring(markerEnd);
+        if (marker == '`' && info.indexOf('`') >= 0) {
+            return null;
+        }
+        return new FenceOpening(marker, markerLength, info);
+    }
+
+    private static boolean isFenceClosing(String line, FenceOpening opening) {
+        int indent = leadingSpaces(line);
+        if (indent > 3 || indent == line.length() || line.charAt(indent) != opening.marker()) {
+            return false;
+        }
+        int markerEnd = indent;
+        while (markerEnd < line.length() && line.charAt(markerEnd) == opening.marker()) {
+            markerEnd++;
+        }
+        if (markerEnd - indent < opening.length()) {
+            return false;
+        }
+        return line.substring(markerEnd).isBlank();
+    }
+
+    private static int leadingSpaces(String line) {
+        int spaces = 0;
+        while (spaces < line.length() && line.charAt(spaces) == ' ') {
+            spaces++;
+        }
+        return spaces;
+    }
+
+    private static String fenceLanguage(String info) {
+        String trimmed = info.trim();
+        for (int index = 0; index < trimmed.length(); index++) {
+            if (Character.isWhitespace(trimmed.charAt(index))) {
+                return trimmed.substring(0, index);
+            }
+        }
+        return trimmed;
+    }
+
     private record FencedCodeBlock(String language, String content) {
+    }
+
+    private record FenceOpening(char marker, int length, String info) {
     }
 
     private static Set<String> jsonObjectFields(JsonNode node) {
