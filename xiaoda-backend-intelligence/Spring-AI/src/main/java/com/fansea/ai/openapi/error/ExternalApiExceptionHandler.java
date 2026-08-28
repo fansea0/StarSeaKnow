@@ -5,6 +5,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -12,7 +14,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-@RestControllerAdvice(basePackages = "com.fansea.ai.openapi")
+@Order(Ordered.HIGHEST_PRECEDENCE)
+@RestControllerAdvice
 public class ExternalApiExceptionHandler {
 
     private static final Pattern SAFE_REQUEST_ID = Pattern.compile("[A-Za-z0-9._-]{1,64}");

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
+import org.apache.ibatis.type.ObjectTypeHandler;
 
 import java.io.Serializable;
 import java.util.Date;
@@ -14,13 +15,14 @@ import java.util.UUID;
  * 
  * @TableName knowledge
  */
-@TableName(value ="knowledge")
+@TableName(value ="knowledge", autoResultMap = true)
 @Data
 public class Knowledge implements Serializable {
 
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    @TableField(value = "public_id", typeHandler = ObjectTypeHandler.class)
     private UUID publicId;
 
     private String name;

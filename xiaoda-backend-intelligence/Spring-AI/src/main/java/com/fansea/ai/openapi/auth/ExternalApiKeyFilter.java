@@ -129,7 +129,7 @@ public class ExternalApiKeyFilter extends OncePerRequestFilter {
 
     private void handleFailure(HttpServletRequest request, HttpServletResponse response, Exception exception)
             throws ServletException {
-        if (exceptionResolver.resolveException(request, response, this, exception) == null) {
+        if (exceptionResolver.resolveException(request, response, null, exception) == null) {
             throw new ServletException("External API exception was not resolved", exception);
         }
     }
