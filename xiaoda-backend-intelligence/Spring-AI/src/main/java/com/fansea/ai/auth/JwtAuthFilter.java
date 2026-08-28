@@ -30,6 +30,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest req) {
         String p = req.getRequestURI();
+        if (p.startsWith("/openapi/v1/")) return true;
         for (String e : EXCLUDED_PREFIXES) if (p.startsWith(e)) return true;
         return false;
     }

@@ -1,0 +1,110 @@
+package com.fansea.ai.openapi.auth;
+
+import com.fansea.ai.auth.AuthContext;
+import com.fansea.ai.openapi.credential.ApiCredentialResolver;
+import com.fansea.ai.openapi.credential.ApiKeyCodec;
+import com.fansea.ai.openapi.credential.CredentialAuthenticationException;
+import com.fansea.ai.openapi.error.ExternalApiException;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.servlet.HandlerExceptionResolver;
+
+import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+
+public class ExternalApiKeyFilter extends OncePerRequestFilter {
+
+    private static final String EXTERNAL_API_PREFIX = "/openapi/v1/";
+    private static final int MAX_KEY_LENGTH = 256;
+
+    private final ApiKeyCodec codec;
+    private final ApiCredentialResolver resolver;
+    private final ClientIpResolver clientIpResolver;
+    private final HandlerExceptionResolver exceptionResolver;
+
+    public ExternalApiKeyFilter(ApiKeyCodec codec, ApiCredentialResolver resolver, ClientIpResolver clientIpResolver,
+                                HandlerExceptionResolver exceptionResolver) {
+        this.codec = Objects.requireNonNull(codec, "codec");
+        this.resolver = Objects.requireNonNull(resolver, "resolver");
+        this.clientIpResolver = Objects.requireNonNull(clientIpResolver, "clientIpResolver");
+        this.exceptionResolver = Objects.requireNonNull(exceptionResolver, "exceptionResolver");
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return !request.getRequestURI().startsWith(EXTERNAL_API_PREFIX);
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        try {
+            String rawKey = requiredBearerKey(request);
+            ApiKeyCodec.ParsedKey parsedKey = codec.parse(rawKey);
+            ApiCredentialResolver.ResolvedCredential credential = resolver.resolve(parsedKey);
+            enforceTransportAndIpPolicy(request, credential);
+            AuthContext.set(AuthContext.external(credential));
+            try {
+                chain.doFilter(request, response);
+            } finally {
+                AuthContext.clear();
+            }
+        } catch (ExternalApiException | CredentialAuthenticationException exception) {
+            handleFailure(request, response, exception);
+        } catch (IllegalArgumentException exception) {
+            handleFailure(request, response, new ExternalApiException(HttpStatus.UNAUTHORIZED,
+                    "authentication_failed", "Authentication failed."));
+        }
+    }
+
+    private String requiredBearerKey(HttpServletRequest request) {
+        List<String> headers = Collections.list(request.getHeaders("Authorization"));
+        if (headers.isEmpty()) {
+            throw new ExternalApiException(HttpStatus.UNAUTHORIZED, "missing_authorization_header",
+                    "Authorization header is required.", "Authorization");
+        }
+        if (headers.size() != 1) {
+            throw invalidAuthorizationHeader();
+        }
+        String header = headers.get(0);
+        if (header == null || !header.startsWith("Bearer ")) {
+            throw invalidAuthorizationHeader();
+        }
+        String rawKey = header.substring("Bearer ".length());
+        if (rawKey.isBlank() || rawKey.length() > MAX_KEY_LENGTH) {
+            throw invalidAuthorizationHeader();
+        }
+        return rawKey;
+    }
+
+    private void enforceTransportAndIpPolicy(HttpServletRequest request,
+                                             ApiCredentialResolver.ResolvedCredential credential) {
+        if ("live".equals(credential.environment()) && clientIpResolver.requiresHttps()
+                && !clientIpResolver.isSecure(request)) {
+            throw new ExternalApiException(HttpStatus.BAD_REQUEST, "https_required", "HTTPS is required.");
+        }
+        String clientIp = clientIpResolver.clientIp(request);
+        if (!credential.allowedIpCidrs().isEmpty() && credential.allowedIpCidrs().stream()
+                .noneMatch(cidr -> IpCidrMatcher.matches(clientIp, cidr))) {
+            throw new ExternalApiException(HttpStatus.FORBIDDEN, "ip_not_allowed", "Client IP is not allowed.");
+        }
+    }
+
+    private ExternalApiException invalidAuthorizationHeader() {
+        return new ExternalApiException(HttpStatus.BAD_REQUEST, "invalid_authorization_header",
+                "Authorization header is invalid.", "Authorization");
+    }
+
+    private void handleFailure(HttpServletRequest request, HttpServletResponse response, Exception exception)
+            throws ServletException {
+        if (exceptionResolver.resolveException(request, response, this, exception) == null) {
+            throw new ServletException("External API exception was not resolved", exception);
+        }
+    }
+}

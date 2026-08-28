@@ -39,6 +39,10 @@ public class AuthAspect {
             throw new AuthException(AuthErrorCode.FORBIDDEN_ROLE,
                     "platform access token cannot access tenant endpoint");
         }
+        if (AuthContext.current().getKind() == AuthContext.Kind.EXTERNAL_API) {
+            throw new AuthException(AuthErrorCode.FORBIDDEN_ROLE,
+                    "external API credential cannot access tenant endpoint");
+        }
         return pjp.proceed();
     }
 

@@ -61,6 +61,7 @@ jwt:
 
 external-api:
   require-https: false
+  trusted-proxies: []
   api-key:
     active-pepper-version: v1
     peppers:
