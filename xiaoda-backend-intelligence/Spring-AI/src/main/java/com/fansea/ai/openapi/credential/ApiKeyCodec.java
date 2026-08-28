@@ -40,7 +40,7 @@ public class ApiKeyCodec {
         String secret = encode(randomBytes(SECRET_BYTES));
         String rawPrefix = type.prefix() + "_" + environment;
         String rawKey = compose(rawPrefix, keyId, secret);
-        String digest = digest(rawKey, requiredPepper(pepperVersion));
+        String digest = digest(keyMaterial(keyId, secret), requiredPepper(pepperVersion));
         return new IssuedKey(rawKey, keyId, secret, digest, pepperVersion, type, environment,
                 rawPrefix + "_" + keyId, secret.substring(secret.length() - 4));
     }
@@ -91,7 +91,7 @@ public class ApiKeyCodec {
         if (pepper == null) {
             return false;
         }
-        byte[] expected = digest(compose(key.rawPrefix(), key.keyId(), key.secret()), pepper)
+        byte[] expected = digest(keyMaterial(key.keyId(), key.secret()), pepper)
                 .getBytes(StandardCharsets.US_ASCII);
         return MessageDigest.isEqual(expected, digest.getBytes(StandardCharsets.US_ASCII));
     }
@@ -126,6 +126,10 @@ public class ApiKeyCodec {
 
     private String compose(String rawPrefix, String keyId, String secret) {
         return rawPrefix + "_" + keyId + "." + secret;
+    }
+
+    private String keyMaterial(String keyId, String secret) {
+        return keyId + "." + secret;
     }
 
     private void validateEnvironment(String environment) {

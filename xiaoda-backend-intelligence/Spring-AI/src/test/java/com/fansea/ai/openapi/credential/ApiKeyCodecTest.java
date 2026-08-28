@@ -36,6 +36,17 @@ class ApiKeyCodecTest {
     }
 
     @Test
+    void verifiesFixedDigestOverKeyIdAndSecretWithoutPrefix() {
+        ApiKeyCodec codec = codec(Map.of("v1", PEPPER_V1), "v1");
+        String keyId = "AAAAAAAAAAAAAAAA";
+        String secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        String expectedDigest = "62a686a54c980d6901deaddf43317d3d57d52b43fba4af67b9b03d81f1575dfa";
+
+        assertThat(codec.verify(codec.parse("rag_test_" + keyId + "." + secret), expectedDigest, "v1")).isTrue();
+        assertThat(codec.verify(codec.parse("agt_live_" + keyId + "." + secret), expectedDigest, "v1")).isTrue();
+    }
+
+    @Test
     void defaultPepperCannotIssueLiveKey() {
         ApiKeyCodec defaultCodec = codec(Map.of("v1", DEVELOPMENT_DEFAULT), "v1");
 
