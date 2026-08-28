@@ -1,6 +1,8 @@
 package com.fansea.ai.service;
 
 import com.fansea.ai.domain.File;
+import com.fansea.ai.openapi.retrieval.RetrievalQuery;
+import com.fansea.ai.openapi.retrieval.RetrievedChunk;
 import org.springframework.ai.document.Document;
 
 import java.util.List;
@@ -22,4 +24,6 @@ public interface RagService {
 
     // 匹配相似文档内容
     List<Document> searchByFile(String keyword,Long knowledgeId);
+
+    List<RetrievedChunk> retrieve(RetrievalQuery query);
 }

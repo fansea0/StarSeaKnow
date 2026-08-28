@@ -6,6 +6,8 @@ import com.fansea.ai.auth.AuthErrorCode;
 import com.fansea.ai.auth.AuthException;
 import com.fansea.ai.domain.File;
 import com.fansea.ai.domain.KnowledgeFile;
+import com.fansea.ai.openapi.retrieval.RetrievalQuery;
+import com.fansea.ai.openapi.retrieval.RetrievedChunk;
 import com.fansea.ai.service.FileService;
 import com.fansea.ai.service.KnowledgeFileService;
 import com.fansea.ai.service.RagService;
@@ -27,7 +29,13 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -51,8 +59,58 @@ public class PgVectorRagServiceImpl implements RagService {
     @Override
     public void vectorize(File file, Long knowledgeId) {
         // TODO: 文件分块 ---> 向量化处理 ---> 存入pgvector
-        List<Document> documents = handle(file.getPath(),file.getId(),knowledgeId);
+        List<Document> documents = handle(file.getPath(), file.getId(), knowledgeId,
+                Objects.requireNonNull(file.getPublicId(), "file publicId must not be null"), file.getType());
         this.vectorStore.accept(documents);
+    }
+
+    @Override
+    public List<RetrievedChunk> retrieve(RetrievalQuery query) {
+        Objects.requireNonNull(query, "query must not be null");
+        if (query.knowledgeIds().isEmpty()) {
+            throw new IllegalArgumentException("knowledgeIds must not be empty");
+        }
+
+        String knowledgeIds = query.knowledgeIds().stream()
+                .sorted()
+                .map(String::valueOf)
+                .collect(Collectors.joining(", "));
+        String filter = tenantFilterExpression() + " && knowledgeId in [" + knowledgeIds + "]";
+        SearchRequest request = SearchRequest.builder()
+                .query(query.query())
+                .topK(query.topK())
+                .similarityThreshold(query.scoreThreshold())
+                .filterExpression(filter)
+                .build();
+
+        List<ScoredDocument> scoredDocuments = safeDocuments(vectorStore.similaritySearch(request)).stream()
+                .map(document -> new ScoredDocument(document, normalizeScore(document.getScore())))
+                .filter(result -> result.score() >= query.scoreThreshold())
+                .toList();
+        if (scoredDocuments.isEmpty()) {
+            return List.of();
+        }
+
+        List<Long> fileIds = scoredDocuments.stream()
+                .map(result -> metadataLong(result.document(), "fileId"))
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (fileIds.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, File> enabledFiles = safeFiles(fileService.listByIds(fileIds)).stream()
+                .filter(file -> file != null && file.getId() != null)
+                .filter(file -> Integer.valueOf(1).equals(file.getStatus()))
+                .filter(file -> file.getPublicId() != null)
+                .collect(Collectors.toMap(File::getId, Function.identity(), (first, ignored) -> first,
+                        LinkedHashMap::new));
+
+        return scoredDocuments.stream()
+                .map(result -> toRetrievedChunk(result, enabledFiles))
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     @Override
@@ -119,7 +177,7 @@ public class PgVectorRagServiceImpl implements RagService {
     }
 
 
-    List<Document> handle(String path,Long fileId,Long knowledgeId){
+    List<Document> handle(String path, Long fileId, Long knowledgeId, UUID documentPublicId, String fileType) {
         // 解析当前请求的租户ID,所有写入pgvector的Document必须携带tenantId,
         // 否则后续search的 tenantId == N 过滤无法命中任何数据(数据隔离)。
         AuthContext ctx = AuthContext.current();
@@ -143,14 +201,16 @@ public class PgVectorRagServiceImpl implements RagService {
             // 对于pdf文件采用大分块方法，适用于一章内容都在一页的PDF
             tokenTextSplitter = new TokenTextSplitter();
             // 兜底注入tenantId/knowledgeId/fileId(PagePdfDocumentReader不会自动设置这些metadata)
-            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId);
+            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId,
+                    documentPublicId, fileType);
         }else if(path.endsWith(".txt")){
             TextReader documentReader = new TextReader(resource);
             documentReader.getCustomMetadata().put("knowledgeId",knowledgeId);
             documentReader.getCustomMetadata().put("fileId",fileId);
             // 对于txt文件采用小分块方法
             tokenTextSplitter = new TokenTextSplitter(150,100,5,10000,true);
-            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId);
+            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId,
+                    documentPublicId, fileType);
         }else if (path.endsWith(".md")||path.endsWith(".markdown")){
             MarkdownDocumentReaderConfig config = MarkdownDocumentReaderConfig.builder()
                     .withHorizontalRuleCreateDocument(true)
@@ -164,29 +224,134 @@ public class PgVectorRagServiceImpl implements RagService {
             tokenTextSplitter = new TokenTextSplitter();
             List<Document> documentList = tokenTextSplitter.apply(reader.get());
             printDocument(documentList);
-            return applyMetadata(documentList, tenantId, knowledgeId, fileId);
+            return applyMetadata(documentList, tenantId, knowledgeId, fileId, documentPublicId, fileType);
         } else if (path.endsWith(".doc")||path.endsWith(".docx")||path.endsWith(".ppt")||path.endsWith(".pptx")||path.endsWith(".html")){
             TikaDocumentReader documentReader = new TikaDocumentReader(resource);
             tokenTextSplitter = new TokenTextSplitter();
             // TikaReader不暴露customMetadata,需要在生成Document后兜底注入
-            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId);
+            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId,
+                    documentPublicId, fileType);
         }else {
             throw new RuntimeException("不支持的文件类型");
         }
     }
 
     /**
-     * 对 Document 列表统一写入 tenantId / knowledgeId / fileId metadata。
+     * 对 Document 列表统一写入租户、来源与稳定分块 metadata。
      * 用于保证后续 search() 的 tenantId == N 过滤能够命中本租户的所有文件类型向量。
      */
-    private static List<Document> applyMetadata(List<Document> documents, Long tenantId, Long knowledgeId, Long fileId) {
+    private static List<Document> applyMetadata(List<Document> documents, Long tenantId, Long knowledgeId, Long fileId,
+                                                UUID documentPublicId, String fileType) {
         if (documents == null) return null;
-        for (Document doc : documents) {
+        for (int index = 0; index < documents.size(); index++) {
+            Document doc = documents.get(index);
             doc.getMetadata().put("tenantId", tenantId);
             doc.getMetadata().put("knowledgeId", knowledgeId);
             doc.getMetadata().put("fileId", fileId);
+            doc.getMetadata().put("documentPublicId", documentPublicId.toString());
+            doc.getMetadata().put("chunkId", doc.getId());
+            doc.getMetadata().put("chunkIndex", index);
+            doc.getMetadata().put("fileType", fileType);
+            Object pageNumber = firstMetadata(doc, "pageNumber", "page_number", "start_page_number", "page");
+            if (pageNumber != null) {
+                doc.getMetadata().put("pageNumber", pageNumber);
+            }
         }
         return documents;
+    }
+
+    private static RetrievedChunk toRetrievedChunk(ScoredDocument result, Map<Long, File> files) {
+        Document document = result.document();
+        File file = files.get(metadataLong(document, "fileId"));
+        if (file == null) {
+            return null;
+        }
+        UUID chunkId = metadataUuid(document, "chunkId");
+        if (chunkId == null) {
+            chunkId = parseUuid(document.getId());
+        }
+        if (chunkId == null) {
+            return null;
+        }
+        return new RetrievedChunk(document.getText(), result.score(), file.getFileName(), file.getPublicId(),
+                chunkId, file.getType(), metadataInteger(document, "pageNumber", "page_number"),
+                metadataInteger(document, "chunkIndex"));
+    }
+
+    private static List<Document> safeDocuments(List<Document> documents) {
+        return documents == null ? List.of() : documents;
+    }
+
+    private static Collection<File> safeFiles(Collection<File> files) {
+        return files == null ? List.of() : files;
+    }
+
+    private static double normalizeScore(Double score) {
+        if (score == null || !Double.isFinite(score)) {
+            return 0.0;
+        }
+        return Math.max(0.0, Math.min(1.0, score));
+    }
+
+    private static Long metadataLong(Document document, String key) {
+        Object value = document.getMetadata().get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String string && string.matches("-?[0-9]+")) {
+            try {
+                return Long.valueOf(string);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static Integer metadataInteger(Document document, String... keys) {
+        Object value = firstMetadata(document, keys);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String string && string.matches("-?[0-9]+")) {
+            try {
+                return Integer.valueOf(string);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static UUID metadataUuid(Document document, String key) {
+        return parseUuid(document.getMetadata().get(key));
+    }
+
+    private static UUID parseUuid(Object value) {
+        if (value instanceof UUID uuid) {
+            return uuid;
+        }
+        if (value instanceof String string) {
+            try {
+                return UUID.fromString(string);
+            } catch (IllegalArgumentException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static Object firstMetadata(Document document, String... keys) {
+        for (String key : keys) {
+            Object value = document.getMetadata().get(key);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private record ScoredDocument(Document document, double score) {
     }
 
     private static void printDocument(List<Document> documents) {
