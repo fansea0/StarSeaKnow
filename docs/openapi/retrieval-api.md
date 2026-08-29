@@ -195,3 +195,16 @@ cutover: every caller must be ready to atomically replace and use the newly
 returned one-time key when rotation is performed. Store the new value in the
 server-side secret manager before use. If the one-time value is lost, rotate
 again; it cannot be retrieved.
+
+## Deployment note: credential cache
+
+The initial implementation uses an in-process Caffeine credential cache. Its
+generation guard prevents an eviction racing with an in-flight database load
+from publishing an obsolete credential again, but both entries and eviction
+events are local to one application process. Immediate disable, revoke, rotate,
+and tenant-disable semantics therefore require a single external-API process in
+this phase. Before running multiple API instances, provide the existing cache
+abstraction with a shared Redis-backed implementation that distributes
+invalidation (including tenant-wide invalidation); the Redis implementation is
+responsible for shared ordering/generation semantics. Do not assume a local
+Caffeine eviction propagates to another instance.

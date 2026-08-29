@@ -34,7 +34,9 @@ import java.util.stream.IntStream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,6 +62,8 @@ class ApiCredentialServiceTest {
     @BeforeEach
     void setUp() {
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), "test"), Knowledge.class);
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), "credential-test"), ApiCredential.class);
+        lenient().when(credentials.update(isNull(), any())).thenReturn(1);
         service = serviceWithCodec(codec(Map.of("v1", PEPPER), "v1"));
     }
 
@@ -231,6 +235,32 @@ class ApiCredentialServiceTest {
     }
 
     @Test
+    void metadataPatchCannotOverwriteAConcurrentRevocation() {
+        ApiCredential initiallyActive = credential(41L, "old-key-id", 7L);
+        ApiCredential concurrentlyRevoked = credential(41L, "old-key-id", 7L);
+        concurrentlyRevoked.setStatus("revoked");
+        concurrentlyRevoked.setRevokedAt(OffsetDateTime.parse("2030-01-01T00:00:00Z"));
+        when(credentials.selectOne(any())).thenReturn(initiallyActive, concurrentlyRevoked);
+        when(credentials.update(any(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.update(CREDENTIAL_PUBLIC_ID,
+                new ApiCredentialService.UpdateCredentialCommand("new name", null, null, null, null, null,
+                        false, null, null), tenantAdminContext()))
+                .isInstanceOf(AuthException.class)
+                .hasMessageContaining("revoked");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.Wrapper<ApiCredential>> wrapper =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(credentials).update(isNull(), wrapper.capture());
+        assertThat(wrapper.getValue().getExpression().getSqlSegment()).contains("status");
+        assertThat(((com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ApiCredential>)
+                wrapper.getValue()).getSqlSet()).contains("name").doesNotContain("authorization_version");
+        verify(credentials, never()).updateById(any());
+        assertThat(initiallyActive.getAuthorizationVersion()).isEqualTo(7L);
+    }
+
+    @Test
     void rejectsCredentialTypesOtherThanRagRetrievalInV1() {
         ApiCredentialService.CreateCredentialCommand command = new ApiCredentialService.CreateCredentialCommand(
                 "Agent", "AGENT_INVOKE", "test", Set.of(), List.of(), 60, 10, 5, null);
@@ -270,7 +300,7 @@ class ApiCredentialServiceTest {
         ArgumentCaptor<ApiCredentialKnowledge> link = ArgumentCaptor.forClass(ApiCredentialKnowledge.class);
         verify(credentialKnowledge).insert(link.capture());
         assertThat(link.getValue().getKnowledgeId()).isEqualTo(92L);
-        verify(credentials).updateById(existing);
+        verify(credentials).update(isNull(), any());
         assertThat(existing.getAuthorizationVersion()).isEqualTo(8L);
         verify(cache).evict("old-key-id");
     }
@@ -328,13 +358,33 @@ class ApiCredentialServiceTest {
         assertThat(replacement.getRotatedFromId()).isEqualTo(41L);
         assertThat(old.getStatus()).isEqualTo("revoked");
         assertThat(old.getRevokedAt()).isNotNull();
-        verify(credentials).updateById(old);
+        verify(credentials).update(isNull(), any());
         verify(cache).evict("old-key-id");
         verify(cache).evict(replacement.getKeyId());
         ArgumentCaptor<ApiCredentialKnowledge> replacementLink = ArgumentCaptor.forClass(ApiCredentialKnowledge.class);
         verify(credentialKnowledge).insert(replacementLink.capture());
         assertThat(replacementLink.getValue().getCredentialId()).isEqualTo(42L);
         assertThat(replacementLink.getValue().getKnowledgeId()).isEqualTo(91L);
+    }
+
+    @Test
+    void rotationConditionsRevocationOnTheAuthorizationVersionItCopied() {
+        ApiCredential old = credential(41L, "old-key-id", 7L);
+        when(credentials.selectOne(any())).thenReturn(old);
+        when(credentialKnowledge.selectList(any())).thenReturn(List.of());
+        when(credentials.insert(any())).thenAnswer(invocation -> {
+            ((ApiCredential) invocation.getArgument(0)).setId(42L);
+            return 1;
+        });
+
+        service.rotate(CREDENTIAL_PUBLIC_ID, tenantAdminContext());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.Wrapper<ApiCredential>> wrapper =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(credentials).update(isNull(), wrapper.capture());
+        assertThat(wrapper.getValue().getExpression().getSqlSegment())
+                .contains("authorization_version");
     }
 
     @Test

@@ -10,6 +10,8 @@ import com.fansea.ai.domain.dto.AjaxResult;
 import com.fansea.ai.mapper.TenantMapper;
 import com.fansea.ai.tenant.TenantStatusChangeNotifier;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.*;
@@ -21,6 +23,8 @@ import java.util.Map;
 @RequestMapping("/platform")
 @RequiredArgsConstructor
 public class PlatformTenantController {
+
+    private static final Logger log = LoggerFactory.getLogger(PlatformTenantController.class);
 
     private final TenantMapper tenants;
     private final ObjectProvider<TenantStatusChangeNotifier> tenantStatusChanges;
@@ -57,10 +61,18 @@ public class PlatformTenantController {
             throw new AuthException(AuthErrorCode.TENANT_NOT_FOUND, "tenant not found");
         }
         t.setStatus(0);
-        tenants.updateById(t);
+        if (tenants.updateById(t) != 1) {
+            throw new AuthException(AuthErrorCode.REGISTRATION_INVALID,
+                    "tenant status changed concurrently");
+        }
         TenantStatusChangeNotifier notifier = tenantStatusChanges.getIfAvailable();
         if (notifier != null) {
-            notifier.statusChanged(id);
+            try {
+                notifier.statusChanged(id);
+            } catch (RuntimeException exception) {
+                log.warn("event=tenant_security_cache_invalidation_failed stage=notify tenant_id={}",
+                        id, exception);
+            }
         }
         return AjaxResult.success();
     }

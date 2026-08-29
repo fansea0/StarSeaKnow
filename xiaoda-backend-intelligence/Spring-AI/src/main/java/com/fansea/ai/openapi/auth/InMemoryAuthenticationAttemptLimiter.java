@@ -21,7 +21,7 @@ public final class InMemoryAuthenticationAttemptLimiter {
         this.blockNanos = Duration.ofSeconds(Math.max(1, properties.getAuthenticationFailureBlockSeconds())).toNanos();
         this.failures = Caffeine.newBuilder()
                 .maximumSize(Math.max(1, properties.getAuthenticationFailureMaximumSize()))
-                .expireAfterAccess(Duration.ofNanos(blockNanos * 2))
+                .expireAfterWrite(Duration.ofNanos(blockNanos * 2))
                 .build();
     }
 
@@ -34,13 +34,16 @@ public final class InMemoryAuthenticationAttemptLimiter {
 
     public void recordFailure(String clientIp) {
         FailureState state = failures.asMap().computeIfAbsent(clientIp, ignored -> new FailureState());
-        if (state.failed(threshold, blockNanos, System.nanoTime())) {
+        boolean blocked = state.failed(threshold, blockNanos, System.nanoTime());
+        failures.put(clientIp, state);
+        if (blocked) {
             throw rateLimited();
         }
     }
 
     public void recordSuccess(String clientIp) {
-        failures.invalidate(clientIp);
+        // A valid key may be available to an attacker and must not erase the failure budget for the source IP.
+        // Failure state expires naturally after the configured window; this hook remains for future safe decay.
     }
 
     public long retryAfterSeconds() {

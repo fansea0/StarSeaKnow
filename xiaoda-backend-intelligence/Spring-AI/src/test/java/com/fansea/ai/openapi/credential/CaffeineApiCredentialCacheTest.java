@@ -86,6 +86,22 @@ class CaffeineApiCredentialCacheTest {
         assertThat(cache.negativeSize()).isGreaterThan(0);
     }
 
+    @Test
+    void evictionEpochPreventsAnOlderDatabaseLoadFromRepopulatingTheCache() {
+        CaffeineApiCredentialCache cache = new CaffeineApiCredentialCache(new MutableTicker());
+        ApiCredentialCache.LoadToken keyLoad = cache.beginLoad("key-race");
+
+        cache.evict("key-race");
+        cache.publishValid(keyLoad, credential(1L));
+
+        assertThat(cache.get("key-race")).isInstanceOf(CachedCredentialResult.NotCached.class);
+
+        ApiCredentialCache.LoadToken tenantLoad = cache.beginLoad("tenant-race");
+        cache.evictTenant(1L);
+        cache.publishValid(tenantLoad, credential(1L));
+        assertThat(cache.get("tenant-race")).isInstanceOf(CachedCredentialResult.NotCached.class);
+    }
+
     private ApiKeyProperties properties(Duration positiveTtl, Duration negativeTtl,
                                          long positiveMaximum, long negativeMaximum) {
         ApiKeyProperties properties = new ApiKeyProperties();

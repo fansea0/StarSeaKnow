@@ -282,6 +282,50 @@ class ExternalApiKeyFilterTest {
     }
 
     @Test
+    void disallowedIpCredentialCannotErasePriorAuthenticationFailures() throws Exception {
+        ApiKeyCodec codec = mock(ApiKeyCodec.class);
+        ApiCredentialResolver resolver = mock(ApiCredentialResolver.class);
+        when(codec.parse(RAW_KEY)).thenReturn(parsedKey());
+        CredentialAuthenticationException failure = new CredentialAuthenticationException("authentication_failed");
+        when(resolver.resolve(any()))
+                .thenThrow(failure, failure, failure, failure)
+                .thenReturn(credential("test", List.of("192.0.2.0/24")))
+                .thenThrow(failure);
+        ExternalApiKeyFilter filter = filter(codec, resolver, new ExternalApiTransportProperties());
+
+        for (int attempt = 0; attempt < 4; attempt++) {
+            assertThat(authenticate(filter, "198.51.100.9").getStatus()).isEqualTo(401);
+        }
+        assertThat(authenticate(filter, "198.51.100.9").getStatus()).isEqualTo(403);
+        MockHttpServletResponse blocked = authenticate(filter, "198.51.100.9");
+
+        assertThat(blocked.getStatus()).isEqualTo(429);
+        verify(resolver, times(6)).resolve(any());
+    }
+
+    @Test
+    void successfulCredentialDoesNotResetIpFailureBudget() throws Exception {
+        ApiKeyCodec codec = mock(ApiKeyCodec.class);
+        ApiCredentialResolver resolver = mock(ApiCredentialResolver.class);
+        when(codec.parse(RAW_KEY)).thenReturn(parsedKey());
+        CredentialAuthenticationException failure = new CredentialAuthenticationException("authentication_failed");
+        when(resolver.resolve(any()))
+                .thenThrow(failure, failure, failure, failure)
+                .thenReturn(credential("test", List.of()))
+                .thenThrow(failure);
+        ExternalApiKeyFilter filter = filter(codec, resolver, new ExternalApiTransportProperties());
+
+        for (int attempt = 0; attempt < 4; attempt++) {
+            assertThat(authenticate(filter, "198.51.100.9").getStatus()).isEqualTo(401);
+        }
+        assertThat(authenticate(filter, "198.51.100.9").getStatus()).isEqualTo(200);
+        MockHttpServletResponse blocked = authenticate(filter, "198.51.100.9");
+
+        assertThat(blocked.getStatus()).isEqualTo(429);
+        verify(resolver, times(6)).resolve(any());
+    }
+
+    @Test
     void externalErrorHandlerDoesNotReflectApiKeyLikeOrControlCharacterRequestIds() {
         ExternalApiExceptionHandler handler = new ExternalApiExceptionHandler();
         MockHttpServletRequest apiKeyRequest = request("/openapi/v1/retrieval", "127.0.0.1");
@@ -338,6 +382,14 @@ class ExternalApiKeyFilterTest {
         };
         return new ExternalApiKeyFilter(codec, resolver, new ClientIpResolver(properties),
                 new InMemoryAuthenticationAttemptLimiter(properties), exceptionResolver);
+    }
+
+    private MockHttpServletResponse authenticate(ExternalApiKeyFilter filter, String remoteAddress) throws Exception {
+        MockHttpServletRequest request = request("/openapi/v1/retrieval", remoteAddress);
+        request.addHeader("Authorization", "Bearer " + RAW_KEY);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, res) -> response.setStatus(200));
+        return response;
     }
 
     private MockHttpServletRequest request(String path, String remoteAddress) {

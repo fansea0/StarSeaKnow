@@ -125,7 +125,8 @@ let activeCredentialId = ''
 let knowledgeRequestToken = 0
 const pendingReplacementId = ref('')
 const activeDialog = computed(() => showScopeEditor.value || showRotateConfirmation.value || showRevokeConfirmation.value || Boolean(oneTimeKey.value))
-const actionBlocked = computed(() => rotating.value || savingStatus.value || activeDialog.value)
+const actionBlocked = computed(() => saving.value || savingScope.value || rotating.value || revoking.value
+  || savingStatus.value || activeDialog.value)
 
 function safeCredential(source = {}) {
   return {

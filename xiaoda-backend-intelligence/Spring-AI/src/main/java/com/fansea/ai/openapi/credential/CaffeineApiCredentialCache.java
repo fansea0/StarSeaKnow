@@ -13,6 +13,7 @@ public class CaffeineApiCredentialCache implements ApiCredentialCache {
 
     private final Cache<String, ApiCredentialResolver.CachedCredential> validCredentials;
     private final Cache<String, Boolean> missingCredentials;
+    private long invalidationEpoch;
 
     @Autowired
     public CaffeineApiCredentialCache(ApiKeyProperties properties) {
@@ -52,26 +53,47 @@ public class CaffeineApiCredentialCache implements ApiCredentialCache {
     }
 
     @Override
-    public void putValid(String keyId, ApiCredentialResolver.CachedCredential value) {
+    public synchronized void putValid(String keyId, ApiCredentialResolver.CachedCredential value) {
         missingCredentials.invalidate(keyId);
         validCredentials.put(keyId, value);
     }
 
     @Override
-    public void putMissing(String keyId) {
+    public synchronized void putMissing(String keyId) {
         validCredentials.invalidate(keyId);
         missingCredentials.put(keyId, Boolean.TRUE);
     }
 
     @Override
-    public void evict(String keyId) {
+    public synchronized LoadToken beginLoad(String keyId) {
+        return new LoadToken(keyId, invalidationEpoch);
+    }
+
+    @Override
+    public synchronized void publishValid(LoadToken token, ApiCredentialResolver.CachedCredential value) {
+        if (token != null && token.invalidationEpoch() == invalidationEpoch) {
+            putValid(token.keyId(), value);
+        }
+    }
+
+    @Override
+    public synchronized void publishMissing(LoadToken token) {
+        if (token != null && token.invalidationEpoch() == invalidationEpoch) {
+            putMissing(token.keyId());
+        }
+    }
+
+    @Override
+    public synchronized void evict(String keyId) {
+        invalidationEpoch++;
         validCredentials.invalidate(keyId);
         missingCredentials.invalidate(keyId);
     }
 
     @Override
-    public void evictTenant(Long tenantId) {
+    public synchronized void evictTenant(Long tenantId) {
         if (tenantId != null) {
+            invalidationEpoch++;
             validCredentials.asMap().entrySet()
                     .removeIf(entry -> tenantId.equals(entry.getValue().tenantId()));
         }

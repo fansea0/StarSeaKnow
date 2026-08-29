@@ -95,9 +95,9 @@ public class ExternalRetrievalController {
             }
 
             List<RetrievedChunk> chunks;
-            try (lease) {
+            try {
                 chunks = retrievalExecutor.retrieve(new RetrievalQuery(parsed.query(), scope.knowledgeIds(),
-                        parsed.topK(), parsed.scoreThreshold()), context);
+                        parsed.topK(), parsed.scoreThreshold()), context, lease);
             } catch (TimeoutException exception) {
                 throw mapRetrievalFailure(exception);
             } catch (RuntimeException exception) {

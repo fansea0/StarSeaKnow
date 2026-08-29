@@ -54,10 +54,11 @@ public class ApiCredentialResolver {
     }
 
     private ResolvedCredential loadAndResolve(ApiKeyCodec.ParsedKey parsedKey) {
+        ApiCredentialCache.LoadToken loadToken = cache.beginLoad(parsedKey.keyId());
         ApiCredential credential = credentials.selectOne(new LambdaQueryWrapper<ApiCredential>()
                 .eq(ApiCredential::getKeyId, parsedKey.keyId()));
         if (credential == null) {
-            cache.putMissing(parsedKey.keyId());
+            cache.publishMissing(loadToken);
             throw failure(AUTHENTICATION_FAILED);
         }
 
@@ -76,7 +77,7 @@ public class ApiCredentialResolver {
                 credential.getSecretDigest(), credential.getPepperVersion(), credential.getStatus(), credential.getExpiresAt(),
                 credential.getAllowedIpCidrs(), credential.getRequestsPerMinute(), credential.getBurstCapacity(),
                 credential.getMaxConcurrency(), credential.getAuthorizationVersion(), loader.apply(credential));
-        cache.putValid(parsedKey.keyId(), cached);
+        cache.publishValid(loadToken, cached);
         return resolved(cached);
     }
 

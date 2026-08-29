@@ -91,13 +91,13 @@ public class ExternalApiKeyFilter extends OncePerRequestFilter {
             recordAuthenticationFailure(request, response, clientIp, exception);
             return null;
         }
-        authenticationAttempts.recordSuccess(clientIp);
         try {
             enforceTransportAndIpPolicy(request, credential);
         } catch (ExternalApiException exception) {
             handleFailure(request, response, exception);
             return null;
         }
+        authenticationAttempts.recordSuccess(clientIp);
         return AuthContext.external(credential);
     }
 

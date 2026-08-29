@@ -48,7 +48,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@TestPropertySource(properties = "spring.main.banner-mode=off")
+@TestPropertySource(properties = {
+        "spring.main.banner-mode=off",
+        "external-api.authentication-failure-threshold=1000"
+})
 @ExtendWith(OutputCaptureExtension.class)
 class ExternalRetrievalIntegrationTest {
 

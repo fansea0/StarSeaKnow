@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -133,12 +134,43 @@ class PlatformManagementControllerTest {
         tenant.setId(10L);
         tenant.setStatus(1);
         when(tenants.selectById(10L)).thenReturn(tenant);
+        when(tenants.updateById(tenant)).thenReturn(1);
 
         mockMvc.perform(post("/platform/tenants/10/disable"))
                 .andExpect(status().isOk());
 
         verify(tenants).updateById(tenant);
         verify(tenantStatusChanges).statusChanged(10L);
+    }
+
+    @Test
+    void disablingTenantRejectsAConcurrentMissingUpdateAndDoesNotNotify() throws Exception {
+        Tenant tenant = new Tenant();
+        tenant.setId(10L);
+        tenant.setStatus(1);
+        when(tenants.selectById(10L)).thenReturn(tenant);
+        when(tenants.updateById(tenant)).thenReturn(0);
+
+        mockMvc.perform(post("/platform/tenants/10/disable"))
+                .andExpect(status().isBadRequest());
+
+        verify(tenantStatusChanges, never()).statusChanged(10L);
+    }
+
+    @Test
+    void notifierFailureDoesNotFailAnAlreadySuccessfulTenantDisable() throws Exception {
+        Tenant tenant = new Tenant();
+        tenant.setId(10L);
+        tenant.setStatus(1);
+        when(tenants.selectById(10L)).thenReturn(tenant);
+        when(tenants.updateById(tenant)).thenReturn(1);
+        org.mockito.Mockito.doThrow(new IllegalStateException("cache unavailable"))
+                .when(tenantStatusChanges).statusChanged(10L);
+
+        mockMvc.perform(post("/platform/tenants/10/disable"))
+                .andExpect(status().isOk());
+
+        verify(tenants).updateById(tenant);
     }
 
     @Test

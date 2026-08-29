@@ -2,6 +2,7 @@ package com.fansea.ai.openapi.credential;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fansea.ai.auth.AuthContext;
 import com.fansea.ai.auth.AuthErrorCode;
 import com.fansea.ai.auth.AuthException;
@@ -125,9 +126,16 @@ public class ApiCredentialService {
             throw invalid("credential update is required");
         }
         ApiCredential row = requireCredential(credentialId, actor.tenantId());
+        LambdaUpdateWrapper<ApiCredential> update = new LambdaUpdateWrapper<ApiCredential>()
+                .eq(ApiCredential::getId, row.getId())
+                .eq(ApiCredential::getTenantId, actor.tenantId())
+                .ne(ApiCredential::getStatus, "revoked");
+        boolean changed = false;
         if (command.name() != null) {
             validateName(command.name());
             row.setName(command.name().trim());
+            update.set(ApiCredential::getName, row.getName());
+            changed = true;
         }
         if (command.description() != null) {
             String description = command.description().trim();
@@ -135,30 +143,46 @@ public class ApiCredentialService {
                 throw invalid("description must be at most 512 characters");
             }
             row.setDescription(description.isEmpty() ? null : description);
+            update.set(ApiCredential::getDescription, row.getDescription());
+            changed = true;
         }
         if (command.allowedIpCidrs() != null) {
             validateCidrs(command.allowedIpCidrs());
             row.setAllowedIpCidrs(copyCidrs(command.allowedIpCidrs()));
+            update.set(ApiCredential::getAllowedIpCidrs, row.getAllowedIpCidrs());
+            changed = true;
         }
         if (command.requestsPerMinute() != null) {
             validateLimit(command.requestsPerMinute(), 100_000, "requestsPerMinute");
             row.setRequestsPerMinute(command.requestsPerMinute());
+            update.set(ApiCredential::getRequestsPerMinute, row.getRequestsPerMinute());
+            changed = true;
         }
         if (command.burstCapacity() != null) {
             validateLimit(command.burstCapacity(), 100_000, "burstCapacity");
             row.setBurstCapacity(command.burstCapacity());
+            update.set(ApiCredential::getBurstCapacity, row.getBurstCapacity());
+            changed = true;
         }
         if (command.maxConcurrency() != null) {
             validateLimit(command.maxConcurrency(), 10_000, "maxConcurrency");
             row.setMaxConcurrency(command.maxConcurrency());
+            update.set(ApiCredential::getMaxConcurrency, row.getMaxConcurrency());
+            changed = true;
         }
         if (command.expiresAtPresent()) {
             row.setExpiresAt(toOffsetDateTime(command.expiresAt()));
+            update.set(ApiCredential::getExpiresAt, row.getExpiresAt());
+            changed = true;
         }
         if (command.status() != null) {
             updateStatus(row, command.status());
+            update.set(ApiCredential::getStatus, row.getStatus());
+            changed = true;
         }
-        credentials.updateById(row);
+        if (changed && credentials.update(null, update) != 1) {
+            throw concurrentCredentialChange(credentialId, actor.tenantId());
+        }
         evictNowAndAfterCommit(row.getKeyId());
         lifecycleLog("updated", actor.tenantId(), row.getPublicId());
         return toView(row, loadKnowledgePublicIds(row.getId()));
@@ -177,8 +201,18 @@ public class ApiCredentialService {
                 .eq(ApiCredentialKnowledge::getCredentialId, row.getId())
                 .eq(ApiCredentialKnowledge::getTenantId, actor.tenantId()));
         insertScope(row, scope.values(), OffsetDateTime.now(ZoneOffset.UTC));
-        row.setAuthorizationVersion(nextAuthorizationVersion(row.getAuthorizationVersion()));
-        credentials.updateById(row);
+        Long previousAuthorizationVersion = row.getAuthorizationVersion();
+        row.setAuthorizationVersion(nextAuthorizationVersion(previousAuthorizationVersion));
+        int affected = credentials.update(null, new LambdaUpdateWrapper<ApiCredential>()
+                .eq(ApiCredential::getId, row.getId())
+                .eq(ApiCredential::getTenantId, actor.tenantId())
+                .ne(ApiCredential::getStatus, "revoked")
+                .eq(previousAuthorizationVersion != null, ApiCredential::getAuthorizationVersion,
+                        previousAuthorizationVersion)
+                .set(ApiCredential::getAuthorizationVersion, row.getAuthorizationVersion()));
+        if (affected != 1) {
+            throw concurrentCredentialChange(credentialId, actor.tenantId());
+        }
         evictNowAndAfterCommit(row.getKeyId());
         lifecycleLog("scope_replaced", actor.tenantId(), row.getPublicId());
         return toView(row, scope.keySet());
@@ -197,9 +231,18 @@ public class ApiCredentialService {
         List<ApiCredentialKnowledge> oldScope = loadScopeLinks(old.getId());
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
+        int revoked = credentials.update(null, new LambdaUpdateWrapper<ApiCredential>()
+                .eq(ApiCredential::getId, old.getId())
+                .eq(ApiCredential::getTenantId, actor.tenantId())
+                .in(ApiCredential::getStatus, "active", "disabled")
+                .eq(ApiCredential::getAuthorizationVersion, old.getAuthorizationVersion())
+                .set(ApiCredential::getStatus, "revoked")
+                .set(ApiCredential::getRevokedAt, now));
+        if (revoked != 1) {
+            throw concurrentCredentialChange(credentialId, actor.tenantId());
+        }
         old.setStatus("revoked");
         old.setRevokedAt(now);
-        credentials.updateById(old);
 
         ApiCredential replacement = copyForRotation(old, issued, actor.userId(), now);
         credentials.insert(replacement);
@@ -223,9 +266,23 @@ public class ApiCredentialService {
         TenantActor actor = requireTenantAdmin(context);
         ApiCredential row = requireCredential(credentialId, actor.tenantId());
         if (!"revoked".equals(row.getStatus())) {
-            row.setStatus("revoked");
-            row.setRevokedAt(OffsetDateTime.now(ZoneOffset.UTC));
-            credentials.updateById(row);
+            OffsetDateTime revokedAt = OffsetDateTime.now(ZoneOffset.UTC);
+            int affected = credentials.update(null, new LambdaUpdateWrapper<ApiCredential>()
+                    .eq(ApiCredential::getId, row.getId())
+                    .eq(ApiCredential::getTenantId, actor.tenantId())
+                    .in(ApiCredential::getStatus, "active", "disabled")
+                    .set(ApiCredential::getStatus, "revoked")
+                    .set(ApiCredential::getRevokedAt, revokedAt));
+            if (affected != 1) {
+                ApiCredential current = requireCredential(credentialId, actor.tenantId());
+                if (!"revoked".equals(current.getStatus())) {
+                    throw invalid("credential changed concurrently");
+                }
+                row = current;
+            } else {
+                row.setStatus("revoked");
+                row.setRevokedAt(revokedAt);
+            }
             lifecycleLog("revoked", actor.tenantId(), row.getPublicId());
         }
         evictNowAndAfterCommit(row.getKeyId());
@@ -375,6 +432,14 @@ public class ApiCredentialService {
             throw invalid("credential status transition is not allowed");
         }
         row.setStatus(requestedStatus);
+    }
+
+    private AuthException concurrentCredentialChange(UUID publicId, long tenantId) {
+        ApiCredential current = requireCredential(publicId, tenantId);
+        if ("revoked".equals(current.getStatus())) {
+            return invalid("revoked credential cannot be modified");
+        }
+        return invalid("credential changed concurrently");
     }
 
     private TenantActor requireTenantAdmin(AuthContext context) {

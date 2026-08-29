@@ -236,6 +236,21 @@ class ApiCredentialResolverTest {
         }
 
         @Override
+        public LoadToken beginLoad(String keyId) {
+            return new LoadToken(keyId, 0);
+        }
+
+        @Override
+        public void publishValid(LoadToken token, ApiCredentialResolver.CachedCredential value) {
+            putValid(token.keyId(), value);
+        }
+
+        @Override
+        public void publishMissing(LoadToken token) {
+            putMissing(token.keyId());
+        }
+
+        @Override
         public void evict(String keyId) {
             valid.remove(keyId);
             missing.remove(keyId);

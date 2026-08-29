@@ -40,16 +40,35 @@ public final class RetrievalDeadlineExecutor implements AutoCloseable {
                 new ThreadPoolExecutor.AbortPolicy());
     }
 
-    public List<RetrievedChunk> retrieve(RetrievalQuery query, AuthContext context) throws TimeoutException {
-        Future<List<RetrievedChunk>> future = executor.submit(() -> withContext(context, () -> ragService.retrieve(query)));
+    public List<RetrievedChunk> retrieve(RetrievalQuery query, AuthContext context,
+                                         CredentialRateLimiter.RateLimitLease lease) throws TimeoutException {
+        LeaseHandoff handoff = new LeaseHandoff(lease);
+        Future<List<RetrievedChunk>> future;
+        try {
+            future = executor.submit(() -> {
+                if (!handoff.claimForWorker()) {
+                    throw new java.util.concurrent.CancellationException("retrieval cancelled before start");
+                }
+                try {
+                    return withContext(context, () -> ragService.retrieve(query));
+                } finally {
+                    handoff.releaseFromWorker();
+                }
+            });
+        } catch (RuntimeException exception) {
+            handoff.releaseBeforeStart();
+            throw exception;
+        }
         try {
             return future.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
         } catch (TimeoutException exception) {
             future.cancel(true);
+            handoff.releaseBeforeStart();
             executor.purge();
             throw exception;
         } catch (InterruptedException exception) {
             future.cancel(true);
+            handoff.releaseBeforeStart();
             Thread.currentThread().interrupt();
             throw new IllegalStateException("retrieval interrupted", exception);
         } catch (ExecutionException exception) {
@@ -57,6 +76,25 @@ public final class RetrievalDeadlineExecutor implements AutoCloseable {
             if (cause instanceof RuntimeException runtime) throw runtime;
             if (cause instanceof Error error) throw error;
             throw new IllegalStateException("retrieval failed", cause);
+        }
+    }
+
+    private static final class LeaseHandoff {
+        private final CredentialRateLimiter.RateLimitLease lease;
+        private final AtomicInteger state = new AtomicInteger();
+
+        private LeaseHandoff(CredentialRateLimiter.RateLimitLease lease) {
+            this.lease = Objects.requireNonNull(lease, "lease");
+        }
+
+        boolean claimForWorker() { return state.compareAndSet(0, 1); }
+
+        void releaseBeforeStart() {
+            if (state.compareAndSet(0, 2)) lease.close();
+        }
+
+        void releaseFromWorker() {
+            if (state.compareAndSet(1, 2)) lease.close();
         }
     }
 

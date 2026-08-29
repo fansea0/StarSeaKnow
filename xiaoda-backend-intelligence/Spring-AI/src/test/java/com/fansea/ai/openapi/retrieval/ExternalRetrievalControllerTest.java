@@ -81,7 +81,7 @@ class ExternalRetrievalControllerTest {
 
     @Test
     void returnsStableRecordsHeadersAndCompleteSourceMetadata() throws Exception {
-        when(retrievalExecutor.retrieve(any(), any())).thenReturn(List.of(new RetrievedChunk(
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenReturn(List.of(new RetrievedChunk(
                 "退款申请需要订单号。", 0.92, "售后服务说明.pdf", DOCUMENT_ID, CHUNK_ID, "pdf", 3, 12)));
 
         mockMvc.perform(post(PATH)
@@ -106,19 +106,19 @@ class ExternalRetrievalControllerTest {
                 .andExpect(header().string("X-RateLimit-Reset", "1787890000"));
 
         ArgumentCaptor<RetrievalQuery> query = ArgumentCaptor.forClass(RetrievalQuery.class);
-        verify(retrievalExecutor).retrieve(query.capture(), any());
+        verify(retrievalExecutor).retrieve(query.capture(), any(), any());
         assertThat(query.getValue()).isEqualTo(new RetrievalQuery("退款材料", Set.of(11L, 12L), 5, 0.5));
     }
 
     @Test
     void appliesDocumentedDefaults() throws Exception {
-        when(retrievalExecutor.retrieve(any(), any())).thenReturn(List.of());
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenReturn(List.of());
 
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
                 .andExpect(status().isOk());
 
         ArgumentCaptor<RetrievalQuery> query = ArgumentCaptor.forClass(RetrievalQuery.class);
-        verify(retrievalExecutor).retrieve(query.capture(), any());
+        verify(retrievalExecutor).retrieve(query.capture(), any(), any());
         assertThat(query.getValue().topK()).isEqualTo(5);
         assertThat(query.getValue().scoreThreshold()).isZero();
     }
@@ -208,7 +208,7 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.param").value("Content-Type"))
                 .andExpect(header().exists("X-Request-ID"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("HttpMediaType"))));
-        verify(retrievalExecutor, never()).retrieve(any(), any());
+        verify(retrievalExecutor, never()).retrieve(any(), any(), any());
     }
 
     @ParameterizedTest(name = "rejects nonempty Content-Type {0}")
@@ -225,7 +225,7 @@ class ExternalRetrievalControllerTest {
 
     @Test
     void acceptsCaseInsensitiveApplicationJsonWithCharsetParameter() throws Exception {
-        when(retrievalExecutor.retrieve(any(), any())).thenReturn(List.of());
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenReturn(List.of());
 
         mockMvc.perform(post(PATH)
                         .header(HttpHeaders.CONTENT_TYPE, "Application/JSON; Charset=UTF-8")
@@ -233,7 +233,7 @@ class ExternalRetrievalControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string("{\"records\":[]}"));
 
-        verify(retrievalExecutor).retrieve(any(), any());
+        verify(retrievalExecutor).retrieve(any(), any(), any());
     }
 
     @Test
@@ -245,7 +245,7 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.code").value("invalid_request"))
                 .andExpect(header().string("X-Request-ID", "req-empty-json"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Ambiguous"))));
-        verify(retrievalExecutor, never()).retrieve(any(), any());
+        verify(retrievalExecutor, never()).retrieve(any(), any(), any());
     }
 
     @Test
@@ -289,14 +289,14 @@ class ExternalRetrievalControllerTest {
 
     @Test
     void trimsUnicodeBoundarySpacesWithoutChangingCjkQuery() throws Exception {
-        when(retrievalExecutor.retrieve(any(), any())).thenReturn(List.of());
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenReturn(List.of());
 
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"query\":\"\\u3000退款材料\\u00a0\"}"))
                 .andExpect(status().isOk());
 
         ArgumentCaptor<RetrievalQuery> query = ArgumentCaptor.forClass(RetrievalQuery.class);
-        verify(retrievalExecutor).retrieve(query.capture(), any());
+        verify(retrievalExecutor).retrieve(query.capture(), any(), any());
         assertThat(query.getValue().query()).isEqualTo("退款材料");
     }
 
@@ -352,7 +352,7 @@ class ExternalRetrievalControllerTest {
 
     @Test
     void returnsExactEmptyRecordsResponse() throws Exception {
-        when(retrievalExecutor.retrieve(any(), any())).thenReturn(List.of());
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenReturn(List.of());
 
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
                 .andExpect(status().isOk())
@@ -379,7 +379,10 @@ class ExternalRetrievalControllerTest {
     void closesRateLimitLeaseWhenRetrievalFails() throws Exception {
         TrackingLease lease = new TrackingLease();
         when(rateLimiter.acquire(41L, 60, 10, 5)).thenReturn(lease);
-        when(retrievalExecutor.retrieve(any(), any())).thenThrow(new IllegalStateException("sensitive database details"));
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenAnswer(invocation -> {
+            ((CredentialRateLimiter.RateLimitLease) invocation.getArgument(2)).close();
+            throw new IllegalStateException("sensitive database details");
+        });
 
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
                 .andExpect(status().isInternalServerError())
@@ -392,7 +395,7 @@ class ExternalRetrievalControllerTest {
 
     @Test
     void sanitizesAuthShapedExternalExceptionThrownByRetrievalService() throws Exception {
-        when(retrievalExecutor.retrieve(any(), any())).thenThrow(new ExternalApiException(
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenThrow(new ExternalApiException(
                 HttpStatus.UNAUTHORIZED, "authentication_failed", "downstream secret details"));
 
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
@@ -404,7 +407,7 @@ class ExternalRetrievalControllerTest {
 
     @Test
     void mapsDependencyFailureAndTimeoutWithoutLeakingInternals() throws Exception {
-        when(retrievalExecutor.retrieve(any(), any())).thenThrow(new DataAccessResourceFailureException("database host secret"));
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenThrow(new DataAccessResourceFailureException("database host secret"));
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error.code").value("retrieval_unavailable"))
@@ -413,7 +416,10 @@ class ExternalRetrievalControllerTest {
         reset(retrievalExecutor);
         TrackingLease timeoutLease = new TrackingLease();
         when(rateLimiter.acquire(41L, 60, 10, 5)).thenReturn(timeoutLease);
-        when(retrievalExecutor.retrieve(any(), any())).thenThrow(new TimeoutException("slow query"));
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenAnswer(invocation -> {
+            ((CredentialRateLimiter.RateLimitLease) invocation.getArgument(2)).close();
+            throw new TimeoutException("slow query");
+        });
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
                 .andExpect(status().isGatewayTimeout())
                 .andExpect(jsonPath("$.error.code").value("retrieval_timeout"))
@@ -425,7 +431,10 @@ class ExternalRetrievalControllerTest {
     void mapsSaturatedDeadlineExecutorToUnavailableAndReleasesLease() throws Exception {
         TrackingLease lease = new TrackingLease();
         when(rateLimiter.acquire(41L, 60, 10, 5)).thenReturn(lease);
-        when(retrievalExecutor.retrieve(any(), any())).thenThrow(new RejectedExecutionException("queue detail"));
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenAnswer(invocation -> {
+            ((CredentialRateLimiter.RateLimitLease) invocation.getArgument(2)).close();
+            throw new RejectedExecutionException("queue detail");
+        });
 
         mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content("{\"query\":\"refund\"}"))
                 .andExpect(status().isServiceUnavailable())
@@ -441,7 +450,7 @@ class ExternalRetrievalControllerTest {
             chunks.add(new RetrievedChunk("界".repeat(3_000), 1.0 - index * 0.01, "source-" + index,
                     UUID.randomUUID(), UUID.randomUUID(), "txt", null, index));
         }
-        when(retrievalExecutor.retrieve(any(), any())).thenReturn(chunks);
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenReturn(chunks);
 
         byte[] response = mockMvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"query\":\"refund\",\"retrieval_setting\":{\"top_k\":20}}"))
@@ -456,7 +465,7 @@ class ExternalRetrievalControllerTest {
 
     @Test
     void normalizesScoresBeforeSortingPublicRecordsDescending() throws Exception {
-        when(retrievalExecutor.retrieve(any(), any())).thenReturn(List.of(
+        when(retrievalExecutor.retrieve(any(), any(), any())).thenReturn(List.of(
                 new RetrievedChunk("invalid", Double.NaN, "invalid-source", DOCUMENT_ID, CHUNK_ID,
                         "txt", null, 0),
                 new RetrievedChunk("valid", 0.8, "valid-source", DOCUMENT_ID, CHUNK_ID,
@@ -475,7 +484,7 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.code").value("invalid_request"))
                 .andExpect(jsonPath("$.error.param").value(param))
                 .andExpect(header().exists("X-Request-ID"));
-        verify(retrievalExecutor, never()).retrieve(any(), any());
+        verify(retrievalExecutor, never()).retrieve(any(), any(), any());
     }
 
     private void assertInvalidWireJson(byte[] body) throws Exception {
@@ -484,7 +493,7 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.code").value("invalid_request"))
                 .andExpect(header().exists("X-Request-ID"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Json"))));
-        verify(retrievalExecutor, never()).retrieve(any(), any());
+        verify(retrievalExecutor, never()).retrieve(any(), any(), any());
     }
 
     private void assertUnsupportedMediaType(MediaType mediaType) throws Exception {
@@ -494,7 +503,7 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.param").value("Content-Type"))
                 .andExpect(header().exists("X-Request-ID"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("HttpMediaType"))));
-        verify(retrievalExecutor, never()).retrieve(any(), any());
+        verify(retrievalExecutor, never()).retrieve(any(), any(), any());
     }
 
     private void assertUnsupportedEmptyRequest(MediaType mediaType, String requestId) throws Exception {
@@ -508,7 +517,7 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.param").value("Content-Type"))
                 .andExpect(header().string("X-Request-ID", requestId))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("Ambiguous"))));
-        verify(retrievalExecutor, never()).retrieve(any(), any());
+        verify(retrievalExecutor, never()).retrieve(any(), any(), any());
     }
 
     private void assertUnsupportedRawContentType(String contentType, String body, String requestId) throws Exception {
@@ -522,7 +531,7 @@ class ExternalRetrievalControllerTest {
                 .andExpect(jsonPath("$.error.param").value("Content-Type"))
                 .andExpect(header().string("X-Request-ID", requestId))
                 .andExpect(content().string(org.hamcrest.Matchers.not(containsString("MediaType"))));
-        verify(retrievalExecutor, never()).retrieve(any(), any());
+        verify(retrievalExecutor, never()).retrieve(any(), any(), any());
     }
 
     private static AuthContext external(CredentialType type, Set<Long> knowledgeIds) {

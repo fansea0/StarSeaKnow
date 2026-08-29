@@ -239,6 +239,26 @@ describe('tenant API credential detail', () => {
     })
   })
 
+  it('blocks every lifecycle action while metadata is being saved', async () => {
+    const pendingSave = deferred()
+    patch.mockReturnValueOnce(pendingSave.promise)
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+
+    await wrapper.get('form').trigger('submit')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('[data-testid="toggle-credential-status"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="open-rotate-confirmation"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="open-revoke-confirmation"]').attributes('disabled')).toBeDefined()
+
+    pendingSave.resolve({ data: { code: 200, data: credential } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="toggle-credential-status"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="open-rotate-confirmation"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="open-revoke-confirmation"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('explicitly disables and re-enables a non-revoked credential', async () => {
     patch
       .mockResolvedValueOnce({ data: { code: 200, data: { ...credential, status: 'disabled' } } })

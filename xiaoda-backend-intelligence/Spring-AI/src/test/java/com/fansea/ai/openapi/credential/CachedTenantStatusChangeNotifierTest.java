@@ -6,6 +6,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -51,5 +52,19 @@ class CachedTenantStatusChangeNotifierTest {
         TransactionSynchronizationManager.getSynchronizations()
                 .forEach(TransactionSynchronization::afterCommit);
         assertThat(cache.get("cached-key")).isInstanceOf(CachedCredentialResult.NotCached.class);
+    }
+
+    @Test
+    void cacheFailureAfterCommitIsContained() {
+        ApiCredentialCache cache = mock(ApiCredentialCache.class);
+        org.mockito.Mockito.doThrow(new IllegalStateException("cache unavailable"))
+                .when(cache).evictTenant(22L);
+        CachedTenantStatusChangeNotifier notifier = new CachedTenantStatusChangeNotifier(cache);
+        TransactionSynchronizationManager.initSynchronization();
+        notifier.statusChanged(22L);
+
+        assertThatCode(() -> TransactionSynchronizationManager.getSynchronizations()
+                .forEach(TransactionSynchronization::afterCommit)).doesNotThrowAnyException();
+        verify(cache).evictTenant(22L);
     }
 }
