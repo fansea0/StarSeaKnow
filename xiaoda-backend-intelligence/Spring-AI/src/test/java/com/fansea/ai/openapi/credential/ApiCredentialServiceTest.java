@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -160,6 +162,72 @@ class ApiCredentialServiceTest {
         assertThat(result.credential().knowledgeIds()).isEmpty();
         verify(knowledge, never()).selectList(any());
         verify(credentialKnowledge, never()).insert(any());
+    }
+
+    @Test
+    void rejectsMoreThanFiftyDistinctKnowledgeIdsBeforeDatabaseLookup() {
+        Set<UUID> tooMany = IntStream.rangeClosed(1, 51)
+                .mapToObj(index -> new UUID(0L, index))
+                .collect(Collectors.toSet());
+
+        assertThatThrownBy(() -> service.create(createCommand(tooMany), tenantAdminContext()))
+                .isInstanceOf(AuthException.class)
+                .hasMessageContaining("at most 50");
+
+        verify(knowledge, never()).selectList(any());
+        verify(credentials, never()).insert(any());
+    }
+
+    @Test
+    void rejectsOversizedReplacementBeforeCredentialOrKnowledgeDatabaseLookup() {
+        Set<UUID> tooMany = IntStream.rangeClosed(1, 51)
+                .mapToObj(index -> new UUID(0L, index))
+                .collect(Collectors.toSet());
+
+        assertThatThrownBy(() -> service.replaceKnowledgeBases(CREDENTIAL_PUBLIC_ID, tooMany, tenantAdminContext()))
+                .isInstanceOf(AuthException.class)
+                .hasMessageContaining("at most 50");
+
+        verify(credentials, never()).selectOne(any());
+        verify(knowledge, never()).selectList(any());
+    }
+
+    @Test
+    void disablesAndReenablesCredentialButNeverRestoresRevokedCredential() {
+        ApiCredential row = credential(41L, "old-key-id", 7L);
+        when(credentials.selectOne(any())).thenReturn(row);
+        when(credentialKnowledge.selectList(any())).thenReturn(List.of());
+
+        ApiCredentialService.ApiCredentialView disabled = service.update(CREDENTIAL_PUBLIC_ID,
+                new ApiCredentialService.UpdateCredentialCommand(null, null, null, null, null, null,
+                        false, null, "disabled"), tenantAdminContext());
+        assertThat(disabled.status()).isEqualTo("disabled");
+        verify(cache).evict("old-key-id");
+
+        row.setStatus("revoked");
+        assertThatThrownBy(() -> service.update(CREDENTIAL_PUBLIC_ID,
+                new ApiCredentialService.UpdateCredentialCommand(null, null, null, null, null, null,
+                        false, null, "active"), tenantAdminContext()))
+                .isInstanceOf(AuthException.class)
+                .hasMessageContaining("revoked");
+    }
+
+    @Test
+    void distinguishesAbsentExpiryFromExplicitNull() {
+        ApiCredential row = credential(41L, "old-key-id", 7L);
+        row.setExpiresAt(OffsetDateTime.parse("2030-01-01T00:00:00Z"));
+        when(credentials.selectOne(any())).thenReturn(row);
+        when(credentialKnowledge.selectList(any())).thenReturn(List.of());
+
+        service.update(CREDENTIAL_PUBLIC_ID,
+                new ApiCredentialService.UpdateCredentialCommand("new", null, null, null, null, null,
+                        false, null, null), tenantAdminContext());
+        assertThat(row.getExpiresAt()).isEqualTo(OffsetDateTime.parse("2030-01-01T00:00:00Z"));
+
+        service.update(CREDENTIAL_PUBLIC_ID,
+                new ApiCredentialService.UpdateCredentialCommand(null, null, null, null, null, null,
+                        true, null, null), tenantAdminContext());
+        assertThat(row.getExpiresAt()).isNull();
     }
 
     @Test

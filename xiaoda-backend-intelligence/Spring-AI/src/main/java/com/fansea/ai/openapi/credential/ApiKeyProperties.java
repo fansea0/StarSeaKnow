@@ -20,6 +20,9 @@ public class ApiKeyProperties {
     private Map<String, String> peppers = new LinkedHashMap<>();
     private Duration positiveCacheTtl = Duration.ofSeconds(60);
     private Duration negativeCacheTtl = Duration.ofSeconds(10);
+    private long positiveCacheMaximumSize = 10_000;
+    private long negativeCacheMaximumSize = 20_000;
+    private int maxKnowledgeBases = 50;
 
     @PostConstruct
     public void afterPropertiesSet() {
@@ -61,6 +64,13 @@ public class ApiKeyProperties {
     public void setNegativeCacheTtl(Duration negativeCacheTtl) {
         this.negativeCacheTtl = negativeCacheTtl;
     }
+
+    public long getPositiveCacheMaximumSize() { return positiveCacheMaximumSize; }
+    public void setPositiveCacheMaximumSize(long value) { this.positiveCacheMaximumSize = value; }
+    public long getNegativeCacheMaximumSize() { return negativeCacheMaximumSize; }
+    public void setNegativeCacheMaximumSize(long value) { this.negativeCacheMaximumSize = value; }
+    public int getMaxKnowledgeBases() { return maxKnowledgeBases; }
+    public void setMaxKnowledgeBases(int value) { this.maxKnowledgeBases = value; }
 
     public boolean usesDevelopmentDefault(String version) {
         return DEVELOPMENT_DEFAULT_PEPPER.equals(peppers.get(version));

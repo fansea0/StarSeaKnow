@@ -6,7 +6,6 @@ import com.fansea.ai.auth.AuthContext;
 import com.fansea.ai.openapi.credential.CredentialType;
 import com.fansea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
 import com.fansea.ai.openapi.error.ExternalApiException;
-import com.fansea.ai.service.RagService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
@@ -35,6 +34,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.regex.Pattern;
 
 @RestController
@@ -51,16 +51,16 @@ public class ExternalRetrievalController {
             Pattern.compile("[a-z]+_[a-z0-9-]+_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+");
 
     private final RetrievalRequestParser parser;
-    private final RagService ragService;
+    private final RetrievalDeadlineExecutor retrievalExecutor;
     private final CredentialRateLimiter rateLimiter;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<MeterRegistry> meterRegistries;
 
-    public ExternalRetrievalController(RetrievalRequestParser parser, RagService ragService,
+    public ExternalRetrievalController(RetrievalRequestParser parser, RetrievalDeadlineExecutor retrievalExecutor,
                                        CredentialRateLimiter rateLimiter, ObjectMapper objectMapper,
                                        ObjectProvider<MeterRegistry> meterRegistries) {
         this.parser = parser;
-        this.ragService = ragService;
+        this.retrievalExecutor = retrievalExecutor;
         this.rateLimiter = rateLimiter;
         this.objectMapper = objectMapper;
         this.meterRegistries = meterRegistries;
@@ -96,8 +96,10 @@ public class ExternalRetrievalController {
 
             List<RetrievedChunk> chunks;
             try (lease) {
-                chunks = ragService.retrieve(new RetrievalQuery(parsed.query(), scope.knowledgeIds(),
-                        parsed.topK(), parsed.scoreThreshold()));
+                chunks = retrievalExecutor.retrieve(new RetrievalQuery(parsed.query(), scope.knowledgeIds(),
+                        parsed.topK(), parsed.scoreThreshold()), context);
+            } catch (TimeoutException exception) {
+                throw mapRetrievalFailure(exception);
             } catch (RuntimeException exception) {
                 throw mapRetrievalFailure(exception);
             }
@@ -206,12 +208,14 @@ public class ExternalRetrievalController {
         }
     }
 
-    private ExternalApiException mapRetrievalFailure(RuntimeException exception) {
+    private ExternalApiException mapRetrievalFailure(Throwable exception) {
         if (hasCause(exception, TimeoutException.class) || hasCauseName(exception, "Timeout")) {
             return new ExternalApiException(HttpStatus.GATEWAY_TIMEOUT, "retrieval_timeout",
                     "Retrieval timed out.");
         }
-        if (hasCause(exception, DataAccessException.class) || hasPackageCause(exception, "org.springframework.ai")) {
+        if (hasCause(exception, RejectedExecutionException.class)
+                || hasCause(exception, DataAccessException.class)
+                || hasPackageCause(exception, "org.springframework.ai")) {
             return new ExternalApiException(HttpStatus.SERVICE_UNAVAILABLE, "retrieval_unavailable",
                     "Retrieval is temporarily unavailable.");
         }

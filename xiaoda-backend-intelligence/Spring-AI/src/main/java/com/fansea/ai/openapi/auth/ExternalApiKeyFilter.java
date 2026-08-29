@@ -26,13 +26,16 @@ public class ExternalApiKeyFilter extends OncePerRequestFilter {
     private final ApiKeyCodec codec;
     private final ApiCredentialResolver resolver;
     private final ClientIpResolver clientIpResolver;
+    private final InMemoryAuthenticationAttemptLimiter authenticationAttempts;
     private final HandlerExceptionResolver exceptionResolver;
 
     public ExternalApiKeyFilter(ApiKeyCodec codec, ApiCredentialResolver resolver, ClientIpResolver clientIpResolver,
+                                InMemoryAuthenticationAttemptLimiter authenticationAttempts,
                                 HandlerExceptionResolver exceptionResolver) {
         this.codec = Objects.requireNonNull(codec, "codec");
         this.resolver = Objects.requireNonNull(resolver, "resolver");
         this.clientIpResolver = Objects.requireNonNull(clientIpResolver, "clientIpResolver");
+        this.authenticationAttempts = Objects.requireNonNull(authenticationAttempts, "authenticationAttempts");
         this.exceptionResolver = Objects.requireNonNull(exceptionResolver, "exceptionResolver");
     }
 
@@ -58,18 +61,26 @@ public class ExternalApiKeyFilter extends OncePerRequestFilter {
     }
 
     private AuthContext authenticate(HttpServletRequest request, HttpServletResponse response) throws ServletException {
+        String clientIp = clientIpResolver.clientIp(request);
+        try {
+            authenticationAttempts.check(clientIp);
+        } catch (ExternalApiException exception) {
+            response.setHeader("Retry-After", Long.toString(authenticationAttempts.retryAfterSeconds()));
+            handleFailure(request, response, exception);
+            return null;
+        }
         String rawKey;
         try {
             rawKey = requiredBearerKey(request);
         } catch (ExternalApiException exception) {
-            handleFailure(request, response, exception);
+            recordAuthenticationFailure(request, response, clientIp, exception);
             return null;
         }
         ApiKeyCodec.ParsedKey parsedKey;
         try {
             parsedKey = codec.parse(rawKey);
         } catch (IllegalArgumentException exception) {
-            handleFailure(request, response, new ExternalApiException(HttpStatus.UNAUTHORIZED,
+            recordAuthenticationFailure(request, response, clientIp, new ExternalApiException(HttpStatus.UNAUTHORIZED,
                     "authentication_failed", "Authentication failed."));
             return null;
         }
@@ -77,9 +88,10 @@ public class ExternalApiKeyFilter extends OncePerRequestFilter {
         try {
             credential = resolver.resolve(parsedKey);
         } catch (CredentialAuthenticationException exception) {
-            handleFailure(request, response, exception);
+            recordAuthenticationFailure(request, response, clientIp, exception);
             return null;
         }
+        authenticationAttempts.recordSuccess(clientIp);
         try {
             enforceTransportAndIpPolicy(request, credential);
         } catch (ExternalApiException exception) {
@@ -87,6 +99,17 @@ public class ExternalApiKeyFilter extends OncePerRequestFilter {
             return null;
         }
         return AuthContext.external(credential);
+    }
+
+    private void recordAuthenticationFailure(HttpServletRequest request, HttpServletResponse response,
+                                             String clientIp, Exception original) throws ServletException {
+        try {
+            authenticationAttempts.recordFailure(clientIp);
+            handleFailure(request, response, original);
+        } catch (ExternalApiException limited) {
+            response.setHeader("Retry-After", Long.toString(authenticationAttempts.retryAfterSeconds()));
+            handleFailure(request, response, limited);
+        }
     }
 
     private String requiredBearerKey(HttpServletRequest request) {

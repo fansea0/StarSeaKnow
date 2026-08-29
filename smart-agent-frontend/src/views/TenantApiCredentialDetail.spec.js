@@ -224,7 +224,6 @@ describe('tenant API credential detail', () => {
       requestsPerMinute: 60,
       burstCapacity: 10,
       maxConcurrency: 5,
-      expiresAt: '2026-12-31T00:00:00Z',
     })
 
     await wrapper.get('[data-testid="open-scope-editor"]').trigger('click')
@@ -238,6 +237,38 @@ describe('tenant API credential detail', () => {
         'a3e5987d-4125-469c-83be-d11f0f62a74d',
       ],
     })
+  })
+
+  it('explicitly disables and re-enables a non-revoked credential', async () => {
+    patch
+      .mockResolvedValueOnce({ data: { code: 200, data: { ...credential, status: 'disabled' } } })
+      .mockResolvedValueOnce({ data: { code: 200, data: { ...credential, status: 'active' } } })
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="toggle-credential-status"]').trigger('click')
+    await flushPromises()
+    expect(patch).toHaveBeenNthCalledWith(1, `/tenant/api-credentials/${credential.id}`, { status: 'disabled' })
+    expect(wrapper.get('[data-testid="toggle-credential-status"]').text()).toContain('启用')
+
+    await wrapper.get('[data-testid="toggle-credential-status"]').trigger('click')
+    await flushPromises()
+    expect(patch).toHaveBeenNthCalledWith(2, `/tenant/api-credentials/${credential.id}`, { status: 'active' })
+  })
+
+  it('omits unchanged expiry but sends explicit null when the user clears it', async () => {
+    patch.mockResolvedValue({ data: { code: 200, data: credential } })
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(patch.mock.calls[0][1]).not.toHaveProperty('expiresAt')
+
+    await wrapper.get('input[placeholder="2026-12-31T00:00:00Z"]').setValue('')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(patch.mock.calls[1][1]).toHaveProperty('expiresAt', null)
   })
 
   it('rotates into the replacement credential and discloses the new Key until acknowledgement', async () => {

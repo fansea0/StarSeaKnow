@@ -4,29 +4,38 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Ticker;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Duration;
 
 @Component
 public class CaffeineApiCredentialCache implements ApiCredentialCache {
 
-    private static final Duration POSITIVE_TTL = Duration.ofSeconds(60);
-    private static final Duration NEGATIVE_TTL = Duration.ofSeconds(10);
-
     private final Cache<String, ApiCredentialResolver.CachedCredential> validCredentials;
     private final Cache<String, Boolean> missingCredentials;
 
-    public CaffeineApiCredentialCache() {
-        this(Ticker.systemTicker());
+    @Autowired
+    public CaffeineApiCredentialCache(ApiKeyProperties properties) {
+        this(properties, Ticker.systemTicker());
     }
 
-    public CaffeineApiCredentialCache(Ticker ticker) {
+    CaffeineApiCredentialCache() {
+        this(new ApiKeyProperties(), Ticker.systemTicker());
+    }
+
+    CaffeineApiCredentialCache(Ticker ticker) {
+        this(new ApiKeyProperties(), ticker);
+    }
+
+    CaffeineApiCredentialCache(ApiKeyProperties properties, Ticker ticker) {
         validCredentials = Caffeine.newBuilder()
-                .expireAfterWrite(POSITIVE_TTL)
+                .expireAfterWrite(properties.getPositiveCacheTtl())
+                .maximumSize(properties.getPositiveCacheMaximumSize())
                 .ticker(ticker)
                 .build();
         missingCredentials = Caffeine.newBuilder()
-                .expireAfterWrite(NEGATIVE_TTL)
+                .expireAfterWrite(properties.getNegativeCacheTtl())
+                .maximumSize(properties.getNegativeCacheMaximumSize())
                 .ticker(ticker)
                 .build();
     }
@@ -67,4 +76,8 @@ public class CaffeineApiCredentialCache implements ApiCredentialCache {
                     .removeIf(entry -> tenantId.equals(entry.getValue().tenantId()));
         }
     }
+
+    void cleanUp() { validCredentials.cleanUp(); missingCredentials.cleanUp(); }
+    long positiveSize() { return validCredentials.estimatedSize(); }
+    long negativeSize() { return missingCredentials.estimatedSize(); }
 }

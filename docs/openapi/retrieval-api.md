@@ -150,8 +150,10 @@ Successful responses include:
 | `X-RateLimit-Reset` | Estimated Unix epoch second when the token bucket refills to burst capacity. |
 | `Cache-Control: no-store` | The response must not be stored by shared caches or browsers. |
 
-These headers report token-bucket state. `Retry-After` on a 429 response is the
-wait before retrying after that rate-limit rejection.
+These headers report authenticated credential token-bucket state. `Retry-After`
+on every 429 response is the wait before retrying. Authentication-failure 429s
+occur before a credential is resolved and therefore do not include credential
+token-bucket headers.
 
 ## Errors and retries
 
@@ -176,7 +178,7 @@ input field is at fault; otherwise it is `null`.
 | 403 | `credential_disabled`, `credential_type_not_allowed`, `ip_not_allowed`, `credential_has_no_knowledge_scope` | Disabled credentials return 403; ask the tenant administrator to enable or correctly scope the credential, or update the IP allowlist. |
 | 413 | `request_too_large` | Keep the UTF-8 request body at or below 32 KiB. |
 | 415 | `invalid_request` | Send `Content-Type: application/json`. |
-| 429 | `rate_limit_exceeded` | Wait the `Retry-After` number of seconds before retrying. The response also includes the rate-limit headers. |
+| 429 | `rate_limit_exceeded`, `authentication_rate_limited` | Wait the `Retry-After` number of seconds before retrying. Credential rate-limit responses also include the credential rate-limit headers. |
 | 500 | `internal_error` | Retry only when appropriate for your operation; no internals are exposed. |
 | 503 | `retrieval_unavailable` | Retry with bounded exponential backoff. |
 | 504 | `retrieval_timeout` | Retry with bounded exponential backoff and a suitable deadline. |

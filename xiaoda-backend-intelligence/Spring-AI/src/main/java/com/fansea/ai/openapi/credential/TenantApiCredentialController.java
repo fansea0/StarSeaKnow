@@ -1,5 +1,6 @@
 package com.fansea.ai.openapi.credential;
 
+import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fansea.ai.auth.AuthContext;
 import com.fansea.ai.auth.AuthErrorCode;
 import com.fansea.ai.auth.AuthException;
@@ -66,12 +67,13 @@ public class TenantApiCredentialController {
     @PatchMapping("/{credentialId}")
     public AjaxResult update(@PathVariable UUID credentialId,
                              @RequestBody PatchCredentialRequest request) {
-        if (request.credentialType() != null) {
-            throw new AuthException(AuthErrorCode.REGISTRATION_INVALID, "credentialType is immutable");
+        if (request == null) {
+            throw invalid("credential update is required");
         }
         ApiCredentialService.UpdateCredentialCommand command = new ApiCredentialService.UpdateCredentialCommand(
-                request.name(), request.description(), request.allowedIpCidrs(), request.requestsPerMinute(),
-                request.burstCapacity(), request.maxConcurrency(), request.expiresAt());
+                request.name, request.description, request.allowedIpCidrs, request.requestsPerMinute,
+                request.burstCapacity, request.maxConcurrency, request.expiresAtPresent, request.expiresAt,
+                request.status);
         return AjaxResult.success(service.update(credentialId, command, AuthContext.current()));
     }
 
@@ -136,15 +138,26 @@ public class TenantApiCredentialController {
             Instant expiresAt) {
     }
 
-    public record PatchCredentialRequest(
-            String name,
-            String description,
-            List<String> allowedIpCidrs,
-            Integer requestsPerMinute,
-            Integer burstCapacity,
-            Integer maxConcurrency,
-            Instant expiresAt,
-            String credentialType) {
+    public static final class PatchCredentialRequest {
+        public String name;
+        public String description;
+        public List<String> allowedIpCidrs;
+        public Integer requestsPerMinute;
+        public Integer burstCapacity;
+        public Integer maxConcurrency;
+        public String status;
+        public Instant expiresAt;
+        public boolean expiresAtPresent;
+
+        public void setExpiresAt(Instant expiresAt) {
+            this.expiresAtPresent = true;
+            this.expiresAt = expiresAt;
+        }
+
+        @JsonAnySetter
+        public void rejectUnknown(String field, Object ignored) {
+            throw new IllegalArgumentException("unknown field: " + field);
+        }
     }
 
     public record ReplaceKnowledgeBasesRequest(Set<UUID> knowledgeIds) {

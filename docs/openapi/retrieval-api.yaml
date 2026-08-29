@@ -159,7 +159,9 @@ components:
       description: invalid_request; Content-Type must be application/json.
       $ref: '#/components/responses/ErrorResponse'
     RateLimited:
-      description: rate_limit_exceeded; request, burst, or concurrency limit exceeded.
+      description: |
+        rate_limit_exceeded for an authenticated credential request, or
+        authentication_rate_limited after repeated authentication failures from one client IP.
       headers:
         X-Request-ID:
           $ref: '#/components/headers/RequestId'

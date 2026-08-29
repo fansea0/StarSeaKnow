@@ -16,9 +16,10 @@ public class ExternalApiFilterConfig {
             ApiKeyCodec codec,
             ApiCredentialResolver resolver,
             ClientIpResolver clientIpResolver,
+            InMemoryAuthenticationAttemptLimiter authenticationAttempts,
             @Qualifier("handlerExceptionResolver") HandlerExceptionResolver exceptionResolver) {
         FilterRegistrationBean<ExternalApiKeyFilter> registration = new FilterRegistrationBean<>(
-                new ExternalApiKeyFilter(codec, resolver, clientIpResolver, exceptionResolver));
+                new ExternalApiKeyFilter(codec, resolver, clientIpResolver, authenticationAttempts, exceptionResolver));
         registration.addUrlPatterns("/*");
         registration.setOrder(9);
         return registration;

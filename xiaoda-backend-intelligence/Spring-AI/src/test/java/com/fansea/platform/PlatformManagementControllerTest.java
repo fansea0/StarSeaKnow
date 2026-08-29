@@ -7,6 +7,7 @@ import com.fansea.ai.auth.AuthAuditLogger;
 import com.fansea.ai.domain.Tenant;
 import com.fansea.ai.mapper.AppUserMapper;
 import com.fansea.ai.mapper.TenantMapper;
+import com.fansea.ai.tenant.TenantStatusChangeNotifier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -43,6 +45,9 @@ class PlatformManagementControllerTest {
 
     @MockBean
     private AppUserMapper users;
+
+    @MockBean
+    private TenantStatusChangeNotifier tenantStatusChanges;
 
     @MockBean
     private com.fansea.ai.mapper.PlatformAdminMapper platformAdmins;
@@ -120,6 +125,20 @@ class PlatformManagementControllerTest {
         mockMvc.perform(post("/platform/tenants/999999/disable"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(40401));
+    }
+
+    @Test
+    void disablingTenantNotifiesDerivedSecurityState() throws Exception {
+        Tenant tenant = new Tenant();
+        tenant.setId(10L);
+        tenant.setStatus(1);
+        when(tenants.selectById(10L)).thenReturn(tenant);
+
+        mockMvc.perform(post("/platform/tenants/10/disable"))
+                .andExpect(status().isOk());
+
+        verify(tenants).updateById(tenant);
+        verify(tenantStatusChanges).statusChanged(10L);
     }
 
     @Test

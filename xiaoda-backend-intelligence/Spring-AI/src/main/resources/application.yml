@@ -62,9 +62,18 @@ jwt:
 external-api:
   require-https: false
   trusted-proxies: []
+  authentication-failure-threshold: 5
+  authentication-failure-block-seconds: 60
+  authentication-failure-maximum-size: 20000
+  retrieval-timeout: 10s
+  retrieval-executor-threads: 16
+  retrieval-executor-queue-capacity: 64
   api-key:
     active-pepper-version: v1
     peppers:
       v1: ${RAG_API_KEY_PEPPER_V1:dev-only-rag-pepper-v1-change-me-32bytes}
     positive-cache-ttl: 60s
     negative-cache-ttl: 10s
+    positive-cache-maximum-size: 10000
+    negative-cache-maximum-size: 20000
+    max-knowledge-bases: 50

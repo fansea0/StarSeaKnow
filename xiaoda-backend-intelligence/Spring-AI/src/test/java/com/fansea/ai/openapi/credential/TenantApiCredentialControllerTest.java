@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -183,6 +184,38 @@ class TenantApiCredentialControllerTest {
                 .andExpect(status().isBadRequest());
 
         verify(service, never()).update(any(), any(), any());
+    }
+
+    @Test
+    void patchRejectsEveryUnknownField() throws Exception {
+        mockMvc.perform(patch("/tenant/api-credentials/{credentialId}", CREDENTIAL_ID)
+                        .contentType("application/json")
+                        .content("{\"unexpected\":true}"))
+                .andExpect(status().isBadRequest());
+
+        verify(service, never()).update(any(), any(), any());
+    }
+
+    @Test
+    void patchCarriesStatusAndExpiryPresenceWithoutAmbiguity() throws Exception {
+        when(service.update(any(), any(), any())).thenReturn(view());
+
+        mockMvc.perform(patch("/tenant/api-credentials/{credentialId}", CREDENTIAL_ID)
+                        .contentType("application/json")
+                        .content("{\"status\":\"disabled\"}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(patch("/tenant/api-credentials/{credentialId}", CREDENTIAL_ID)
+                        .contentType("application/json")
+                        .content("{\"expiresAt\":null}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ApiCredentialService.UpdateCredentialCommand> commands =
+                ArgumentCaptor.forClass(ApiCredentialService.UpdateCredentialCommand.class);
+        verify(service, org.mockito.Mockito.times(2)).update(any(), commands.capture(), any());
+        assertThat(commands.getAllValues().get(0).status()).isEqualTo("disabled");
+        assertThat(commands.getAllValues().get(0).expiresAtPresent()).isFalse();
+        assertThat(commands.getAllValues().get(1).expiresAtPresent()).isTrue();
+        assertThat(commands.getAllValues().get(1).expiresAt()).isNull();
     }
 
     private ApiCredentialService.ApiCredentialView view() {

@@ -32,6 +32,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 class ExternalApiKeyFilterTest {
 
@@ -257,6 +258,30 @@ class ExternalApiKeyFilterTest {
     }
 
     @Test
+    void repeatedAuthenticationFailuresFromTrustedResolvedClientIpStopDatabaseResolution() throws Exception {
+        ApiKeyCodec codec = mock(ApiKeyCodec.class);
+        ApiCredentialResolver resolver = mock(ApiCredentialResolver.class);
+        when(codec.parse(RAW_KEY)).thenReturn(parsedKey());
+        when(resolver.resolve(any())).thenThrow(new CredentialAuthenticationException("authentication_failed"));
+        ExternalApiTransportProperties properties = new ExternalApiTransportProperties();
+        properties.setTrustedProxies(List.of("10.0.0.0/8"));
+        ExternalApiKeyFilter filter = filter(codec, resolver, properties);
+
+        MockHttpServletResponse last = null;
+        for (int attempt = 0; attempt < 6; attempt++) {
+            MockHttpServletRequest request = request("/openapi/v1/retrieval", "10.0.0.4");
+            request.addHeader("X-Forwarded-For", "203.0.113.8");
+            request.addHeader("Authorization", "Bearer " + RAW_KEY);
+            last = new MockHttpServletResponse();
+            filter.doFilter(request, last, (req, res) -> { throw new AssertionError("chain must not run"); });
+        }
+
+        verify(resolver, times(5)).resolve(any());
+        assertThat(last.getStatus()).isEqualTo(429);
+        assertThat(last.getContentAsString()).contains("authentication_rate_limited");
+    }
+
+    @Test
     void externalErrorHandlerDoesNotReflectApiKeyLikeOrControlCharacterRequestIds() {
         ExternalApiExceptionHandler handler = new ExternalApiExceptionHandler();
         MockHttpServletRequest apiKeyRequest = request("/openapi/v1/retrieval", "127.0.0.1");
@@ -300,7 +325,8 @@ class ExternalApiKeyFilterTest {
     private ExternalApiKeyFilter filter(ApiKeyCodec codec, ApiCredentialResolver resolver,
                                         ExternalApiTransportProperties properties) {
         HandlerExceptionResolver exceptionResolver = (request, response, handler, exception) -> {
-            ExternalApiException external = (ExternalApiException) exception;
+            ExternalApiException external = exception instanceof ExternalApiException value ? value
+                    : new ExternalApiException(HttpStatus.UNAUTHORIZED, "authentication_failed", "Authentication failed.");
             response.setStatus(external.getStatus().value());
             response.setContentType("application/json");
             try {
@@ -310,7 +336,8 @@ class ExternalApiKeyFilterTest {
             }
             return new org.springframework.web.servlet.ModelAndView();
         };
-        return new ExternalApiKeyFilter(codec, resolver, new ClientIpResolver(properties), exceptionResolver);
+        return new ExternalApiKeyFilter(codec, resolver, new ClientIpResolver(properties),
+                new InMemoryAuthenticationAttemptLimiter(properties), exceptionResolver);
     }
 
     private MockHttpServletRequest request(String path, String remoteAddress) {

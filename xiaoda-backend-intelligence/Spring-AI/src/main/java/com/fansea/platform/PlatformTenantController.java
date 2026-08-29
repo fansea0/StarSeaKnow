@@ -8,7 +8,10 @@ import com.fansea.ai.auth.RequireRole;
 import com.fansea.ai.domain.Tenant;
 import com.fansea.ai.domain.dto.AjaxResult;
 import com.fansea.ai.mapper.TenantMapper;
+import com.fansea.ai.tenant.TenantStatusChangeNotifier;
 import lombok.RequiredArgsConstructor;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
@@ -20,6 +23,7 @@ import java.util.Map;
 public class PlatformTenantController {
 
     private final TenantMapper tenants;
+    private final ObjectProvider<TenantStatusChangeNotifier> tenantStatusChanges;
     public record UpdateRemarkReq(String remark) {}
 
     @GetMapping("/tenants")
@@ -46,6 +50,7 @@ public class PlatformTenantController {
 
     @PostMapping("/tenants/{id}/disable")
     @RequireRole("platform_admin")
+    @Transactional
     public AjaxResult disable(@PathVariable Long id) {
         Tenant t = tenants.selectById(id);
         if (t == null) {
@@ -53,6 +58,10 @@ public class PlatformTenantController {
         }
         t.setStatus(0);
         tenants.updateById(t);
+        TenantStatusChangeNotifier notifier = tenantStatusChanges.getIfAvailable();
+        if (notifier != null) {
+            notifier.statusChanged(id);
+        }
         return AjaxResult.success();
     }
 

@@ -54,6 +54,7 @@
         <header><div><span class="eyebrow">LIFECYCLE</span><h2 id="lifecycle-title">轮换与吊销</h2></div></header>
         <p class="card-copy">轮换会立即吊销当前 Key，并创建一把继承当前设置与范围的新凭证。</p>
         <div class="lifecycle-actions">
+          <button class="sea-button" data-testid="toggle-credential-status" type="button" :disabled="credential.status === 'revoked' || actionBlocked || savingStatus" @click="toggleCredentialStatus">{{ savingStatus ? '正在更新…' : credential.status === 'disabled' ? '启用凭证' : '停用凭证' }}</button>
           <button class="sea-button" data-testid="open-rotate-confirmation" type="button" :disabled="credential.status === 'revoked' || actionBlocked" @click="openRotateConfirmation">轮换 Key</button>
           <button class="sea-button sea-button--danger" data-testid="open-revoke-confirmation" type="button" :disabled="credential.status === 'revoked' || actionBlocked" @click="openRevokeConfirmation">吊销凭证</button>
         </div>
@@ -109,6 +110,8 @@ const saving = ref(false)
 const savingScope = ref(false)
 const rotating = ref(false)
 const revoking = ref(false)
+const savingStatus = ref(false)
+const loadedExpiresAt = ref('')
 const showScopeEditor = ref(false)
 const showRotateConfirmation = ref(false)
 const showRevokeConfirmation = ref(false)
@@ -122,7 +125,7 @@ let activeCredentialId = ''
 let knowledgeRequestToken = 0
 const pendingReplacementId = ref('')
 const activeDialog = computed(() => showScopeEditor.value || showRotateConfirmation.value || showRevokeConfirmation.value || Boolean(oneTimeKey.value))
-const actionBlocked = computed(() => rotating.value || activeDialog.value)
+const actionBlocked = computed(() => rotating.value || savingStatus.value || activeDialog.value)
 
 function safeCredential(source = {}) {
   return {
@@ -134,6 +137,7 @@ function safeCredential(source = {}) {
 function applyCredential(source) {
   Object.assign(credential, safeCredential(source))
   Object.assign(form, { name: credential.name, description: credential.description, allowedIpCidrs: credential.allowedIpCidrs.join('\n'), requestsPerMinute: credential.requestsPerMinute, burstCapacity: credential.burstCapacity, maxConcurrency: credential.maxConcurrency, expiresAt: credential.expiresAt || '' })
+  loadedExpiresAt.value = credential.expiresAt || ''
 }
 function parseCidrs(value) { return String(value || '').split(/[\n,]/).map((item) => item.trim()).filter(Boolean) }
 function displayKey(item) { return `${item.displayPrefix || '—'}••••${item.displayLastFour || '—'}` }
@@ -144,7 +148,7 @@ function isCurrentPage(generation, credentialId) { return generation === pageGen
 function resetForPageTransition() {
   showScopeEditor.value = false; showRotateConfirmation.value = false; showRevokeConfirmation.value = false
   oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false; pendingReplacementId.value = ''
-  scopeSelection.value = []; opener = null; saving.value = false; savingScope.value = false; rotating.value = false; revoking.value = false
+  scopeSelection.value = []; opener = null; saving.value = false; savingScope.value = false; rotating.value = false; revoking.value = false; savingStatus.value = false; loadedExpiresAt.value = ''
   knowledgeRequestToken += 1; knowledgeBases.value = []; knowledgeError.value = ''; knowledgeLoading.value = false
   Object.assign(credential, safeCredential()); Object.assign(form, { name: '', description: '', allowedIpCidrs: '', requestsPerMinute: 60, burstCapacity: 10, maxConcurrency: 5, expiresAt: '' })
 }
@@ -188,10 +192,28 @@ async function saveMetadata() {
   if (!isCurrentPage(generation, credentialId)) return
   saving.value = true
   try {
-    const response = await http.patch(`/tenant/api-credentials/${credentialId}`, { name: form.name, description: form.description || null, allowedIpCidrs: parseCidrs(form.allowedIpCidrs), requestsPerMinute: Number(form.requestsPerMinute), burstCapacity: Number(form.burstCapacity), maxConcurrency: Number(form.maxConcurrency), expiresAt: form.expiresAt || null })
+    const payload = { name: form.name, description: form.description || null, allowedIpCidrs: parseCidrs(form.allowedIpCidrs), requestsPerMinute: Number(form.requestsPerMinute), burstCapacity: Number(form.burstCapacity), maxConcurrency: Number(form.maxConcurrency) }
+    if ((form.expiresAt || '') !== loadedExpiresAt.value) payload.expiresAt = form.expiresAt || null
+    const response = await http.patch(`/tenant/api-credentials/${credentialId}`, payload)
     if (!isCurrentPage(generation, credentialId)) return
     applyCredential(response.data?.data); ElMessage.success('凭证设置已保存')
   } catch (cause) { if (isCurrentPage(generation, credentialId)) ElMessage.error(errorMessage(cause, '保存凭证设置失败')) } finally { if (isCurrentPage(generation, credentialId)) saving.value = false }
+}
+async function toggleCredentialStatus() {
+  const credentialId = credential.id, generation = pageGeneration
+  if (!isCurrentPage(generation, credentialId) || credential.status === 'revoked' || savingStatus.value) return
+  const status = credential.status === 'disabled' ? 'active' : 'disabled'
+  savingStatus.value = true
+  try {
+    const response = await http.patch(`/tenant/api-credentials/${credentialId}`, { status })
+    if (!isCurrentPage(generation, credentialId)) return
+    applyCredential(response.data?.data)
+    ElMessage.success(status === 'active' ? '凭证已启用' : '凭证已停用')
+  } catch (cause) {
+    if (isCurrentPage(generation, credentialId)) ElMessage.error(errorMessage(cause, '更新凭证状态失败'))
+  } finally {
+    if (isCurrentPage(generation, credentialId)) savingStatus.value = false
+  }
 }
 function captureOpener() { opener = document.activeElement }
 function restoreOpener() { const target = opener; opener = null; nextTick(() => target?.focus?.()) }

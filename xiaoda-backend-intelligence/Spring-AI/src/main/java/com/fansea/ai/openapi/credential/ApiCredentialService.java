@@ -11,6 +11,7 @@ import com.fansea.ai.openapi.auth.IpCidrMatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -39,17 +40,26 @@ public class ApiCredentialService {
     private final KnowledgeMapper knowledge;
     private final ApiCredentialCache cache;
     private final ApiKeyCodec codec;
+    private final int maxKnowledgeBases;
 
+    @Autowired
     public ApiCredentialService(ApiCredentialMapper credentials,
                                 ApiCredentialKnowledgeMapper credentialKnowledge,
                                 KnowledgeMapper knowledge,
                                 ApiCredentialCache cache,
-                                ApiKeyCodec codec) {
+                                ApiKeyCodec codec,
+                                ApiKeyProperties properties) {
         this.credentials = Objects.requireNonNull(credentials, "credentials");
         this.credentialKnowledge = Objects.requireNonNull(credentialKnowledge, "credentialKnowledge");
         this.knowledge = Objects.requireNonNull(knowledge, "knowledge");
         this.cache = Objects.requireNonNull(cache, "cache");
         this.codec = Objects.requireNonNull(codec, "codec");
+        this.maxKnowledgeBases = properties.getMaxKnowledgeBases();
+    }
+
+    ApiCredentialService(ApiCredentialMapper credentials, ApiCredentialKnowledgeMapper credentialKnowledge,
+                         KnowledgeMapper knowledge, ApiCredentialCache cache, ApiKeyCodec codec) {
+        this(credentials, credentialKnowledge, knowledge, cache, codec, defaultProperties());
     }
 
     @Transactional
@@ -108,6 +118,7 @@ public class ApiCredentialService {
         return toView(row, loadKnowledgePublicIds(row.getId()));
     }
 
+    @Transactional
     public ApiCredentialView update(UUID credentialId, UpdateCredentialCommand command, AuthContext context) {
         TenantActor actor = requireTenantAdmin(context);
         if (command == null) {
@@ -141,8 +152,11 @@ public class ApiCredentialService {
             validateLimit(command.maxConcurrency(), 10_000, "maxConcurrency");
             row.setMaxConcurrency(command.maxConcurrency());
         }
-        if (command.expiresAt() != null) {
+        if (command.expiresAtPresent()) {
             row.setExpiresAt(toOffsetDateTime(command.expiresAt()));
+        }
+        if (command.status() != null) {
+            updateStatus(row, command.status());
         }
         credentials.updateById(row);
         evictNowAndAfterCommit(row.getKeyId());
@@ -155,6 +169,7 @@ public class ApiCredentialService {
                                                    Set<UUID> knowledgeIds,
                                                    AuthContext context) {
         TenantActor actor = requireTenantAdmin(context);
+        validateKnowledgeCount(knowledgeIds);
         ApiCredential row = requireCredential(credentialId, actor.tenantId());
         requireRagType(row);
         Map<UUID, Knowledge> scope = resolveKnowledge(knowledgeIds, actor.tenantId());
@@ -300,6 +315,7 @@ public class ApiCredentialService {
 
     private Map<UUID, Knowledge> resolveKnowledge(Set<UUID> publicIds, long tenantId) {
         Set<UUID> requested = publicIds == null ? Set.of() : Set.copyOf(publicIds);
+        validateKnowledgeCount(requested);
         if (requested.isEmpty()) {
             return Map.of();
         }
@@ -322,6 +338,12 @@ public class ApiCredentialService {
         return resolved;
     }
 
+    private void validateKnowledgeCount(Set<UUID> publicIds) {
+        if (publicIds != null && Set.copyOf(publicIds).size() > maxKnowledgeBases) {
+            throw invalid("knowledgeIds supports at most " + maxKnowledgeBases + " distinct values");
+        }
+    }
+
     private ApiCredential requireCredential(UUID publicId, long tenantId) {
         if (publicId == null) {
             throw invalid("credential id is required");
@@ -340,6 +362,19 @@ public class ApiCredentialService {
         if (!RAG_RETRIEVAL.equals(row.getCredentialType())) {
             throw invalid("credential does not support RAG knowledge scope");
         }
+    }
+
+    private void updateStatus(ApiCredential row, String requestedStatus) {
+        if (!"active".equals(requestedStatus) && !"disabled".equals(requestedStatus)) {
+            throw invalid("status must be active or disabled");
+        }
+        if ("revoked".equals(row.getStatus())) {
+            throw invalid("revoked credential cannot be restored");
+        }
+        if (!"active".equals(row.getStatus()) && !"disabled".equals(row.getStatus())) {
+            throw invalid("credential status transition is not allowed");
+        }
+        row.setStatus(requestedStatus);
     }
 
     private TenantActor requireTenantAdmin(AuthContext context) {
@@ -427,6 +462,10 @@ public class ApiCredentialService {
         return new AuthException(AuthErrorCode.REGISTRATION_INVALID, message);
     }
 
+    private static ApiKeyProperties defaultProperties() {
+        return new ApiKeyProperties();
+    }
+
     private void evictNowAndAfterCommit(String... keyIds) {
         List<String> keys = java.util.Arrays.stream(keyIds)
                 .filter(Objects::nonNull)
@@ -463,7 +502,7 @@ public class ApiCredentialService {
     public record UpdateCredentialCommand(
             String name, String description, List<String> allowedIpCidrs,
             Integer requestsPerMinute, Integer burstCapacity, Integer maxConcurrency,
-            Instant expiresAt) {
+            boolean expiresAtPresent, Instant expiresAt, String status) {
     }
 
     public record ApiCredentialView(

@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -60,6 +61,39 @@ class CaffeineApiCredentialCacheTest {
         assertThat(cache.get("tenant-one")).isInstanceOf(CachedCredentialResult.NotCached.class);
         assertThat(cache.get("tenant-two")).isInstanceOf(CachedCredentialResult.Hit.class);
         assertThat(cache.get("missing")).isInstanceOf(CachedCredentialResult.Missing.class);
+    }
+
+    @Test
+    void usesConfiguredTtlsAndIndependentMaximumSizes() {
+        MutableTicker ticker = new MutableTicker();
+        ApiKeyProperties properties = properties(Duration.ofSeconds(2), Duration.ofSeconds(3), 2, 3);
+        CaffeineApiCredentialCache cache = new CaffeineApiCredentialCache(properties, ticker);
+
+        cache.putValid("p1", credential(1L));
+        cache.putValid("p2", credential(1L));
+        cache.putValid("p3", credential(1L));
+        cache.putMissing("n1");
+        cache.putMissing("n2");
+        cache.putMissing("n3");
+        cache.putMissing("n4");
+        cache.cleanUp();
+
+        assertThat(cache.positiveSize()).isLessThanOrEqualTo(2);
+        assertThat(cache.negativeSize()).isLessThanOrEqualTo(3);
+        ticker.advanceSeconds(2);
+        cache.cleanUp();
+        assertThat(cache.positiveSize()).isZero();
+        assertThat(cache.negativeSize()).isGreaterThan(0);
+    }
+
+    private ApiKeyProperties properties(Duration positiveTtl, Duration negativeTtl,
+                                         long positiveMaximum, long negativeMaximum) {
+        ApiKeyProperties properties = new ApiKeyProperties();
+        properties.setPositiveCacheTtl(positiveTtl);
+        properties.setNegativeCacheTtl(negativeTtl);
+        properties.setPositiveCacheMaximumSize(positiveMaximum);
+        properties.setNegativeCacheMaximumSize(negativeMaximum);
+        return properties;
     }
 
     private ApiCredentialResolver.CachedCredential credential(Long tenantId) {
