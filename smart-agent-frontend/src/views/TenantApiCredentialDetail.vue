@@ -14,7 +14,7 @@
     <div v-if="loading" class="page-state" aria-live="polite">正在载入凭证…</div>
     <div v-else-if="loadError" class="page-state page-state--error" role="alert">
       <strong>凭证未载入</strong><span>{{ loadError }}</span>
-      <button class="sea-button" type="button" @click="loadPage">重试</button>
+      <button class="sea-button" type="button" @click="reloadPage">重试</button>
     </div>
     <template v-else>
       <section class="credential-summary" aria-label="凭证身份">
@@ -43,7 +43,7 @@
         <header><div><span class="eyebrow">AUTHORIZATION</span><h2 id="scope-title">知识库范围</h2></div><button class="sea-button" data-testid="open-scope-editor" type="button" :disabled="knowledgeLoading || Boolean(knowledgeError) || actionBlocked" @click="openScopeEditor">编辑范围</button></header>
         <p class="card-copy">外部检索使用此完整授权集合。调用方不能通过请求体选择知识库。</p>
         <p v-if="knowledgeLoading" class="knowledge-warning" data-testid="knowledge-loading-state" role="status">正在载入可授权知识库…</p>
-        <p v-else-if="knowledgeError" class="knowledge-warning" data-testid="knowledge-load-warning" role="status">知识库范围暂不可编辑：{{ knowledgeError }} <button class="sea-button" data-testid="retry-knowledge-load" type="button" @click="loadKnowledgeBases">重试知识库</button></p>
+        <p v-else-if="knowledgeError" class="knowledge-warning" data-testid="knowledge-load-warning" role="status">知识库范围暂不可编辑：{{ knowledgeError }} <button class="sea-button" data-testid="retry-knowledge-load" type="button" @click="retryKnowledgeBases">重试知识库</button></p>
         <ul class="scope-list">
           <li v-for="id in credential.knowledgeIds" :key="id">{{ knowledgeName(id) }}<code>{{ id }}</code></li>
           <li v-if="!credential.knowledgeIds.length" class="scope-list__empty">尚未授权知识库；调用会返回空范围。</li>
@@ -83,7 +83,7 @@
         <span class="eyebrow">ONE TIME</span><h2 id="one-time-key-title">新的 API Key 已生成</h2><p>请立即复制并保存到服务端密钥管理工具。离开此页面后无法再次查看。</p>
         <div class="secret-box"><code data-testid="one-time-api-key">{{ oneTimeKey }}</code><button ref="secretCopyButton" class="sea-button" data-testid="copy-one-time-key" type="button" @click="copyKey">{{ copied ? '已复制' : '复制 Key' }}</button></div>
         <label class="save-confirmation"><input v-model="saveConfirmed" type="checkbox" /><span>我已将 Key 保存到安全位置</span></label>
-        <button class="sea-button sea-button--primary sea-button--full" data-testid="confirm-key-saved" type="button" :disabled="!saveConfirmed" @click="clearDisclosure">确认已保存并关闭</button>
+        <button class="sea-button sea-button--primary sea-button--full" data-testid="confirm-key-saved" type="button" :disabled="!saveConfirmed" @click="acknowledgeKey">确认已保存并关闭</button>
       </section>
     </div>
   </div>
@@ -117,7 +117,10 @@ const copied = ref(false)
 const saveConfirmed = ref(false)
 const scopeDialog = ref(null), rotateDialog = ref(null), revokeDialog = ref(null), secretDialog = ref(null), secretCopyButton = ref(null)
 let opener = null
-let lifecycleGeneration = 0
+let pageGeneration = 0
+let activeCredentialId = ''
+let knowledgeRequestToken = 0
+const pendingReplacementId = ref('')
 const activeDialog = computed(() => showScopeEditor.value || showRotateConfirmation.value || showRevokeConfirmation.value || Boolean(oneTimeKey.value))
 const actionBlocked = computed(() => rotating.value || activeDialog.value)
 
@@ -137,22 +140,58 @@ function displayKey(item) { return `${item.displayPrefix || '—'}••••${
 function displayStatus(status) { return { active: '启用', revoked: '已吊销', disabled: '已停用' }[status] || status || '未知' }
 function knowledgeName(id) { return knowledgeBases.value.find((item) => item.publicId === id)?.name || '已授权知识库' }
 function errorMessage(cause, fallback) { return cause.response?.data?.msg || fallback }
+function isCurrentPage(generation, credentialId) { return generation === pageGeneration && credentialId === activeCredentialId }
+function resetForPageTransition() {
+  showScopeEditor.value = false; showRotateConfirmation.value = false; showRevokeConfirmation.value = false
+  oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false; pendingReplacementId.value = ''
+  scopeSelection.value = []; opener = null; saving.value = false; savingScope.value = false; rotating.value = false; revoking.value = false
+  knowledgeRequestToken += 1; knowledgeBases.value = []; knowledgeError.value = ''; knowledgeLoading.value = false
+  Object.assign(credential, safeCredential()); Object.assign(form, { name: '', description: '', allowedIpCidrs: '', requestsPerMinute: 60, burstCapacity: 10, maxConcurrency: 5, expiresAt: '' })
+}
+function startPage(credentialId) {
+  pageGeneration += 1
+  activeCredentialId = credentialId || ''
+  const generation = pageGeneration
+  resetForPageTransition()
+  return loadPage(activeCredentialId, generation)
+}
 
-async function loadPage(credentialId = route.params.credentialId) {
+function reloadPage() {
+  return startPage(activeCredentialId)
+}
+
+async function loadPage(credentialId, generation) {
+  if (!isCurrentPage(generation, credentialId)) return
   loading.value = true; loadError.value = ''
   try {
-    void loadKnowledgeBases()
+    void loadKnowledgeBases(credentialId, generation)
     const credentialResponse = await http.get(`/tenant/api-credentials/${credentialId}`)
+    if (!isCurrentPage(generation, credentialId)) return
     applyCredential(credentialResponse.data?.data)
-  } catch (cause) { loadError.value = errorMessage(cause, '请检查网络后重试。') } finally { loading.value = false }
+  } catch (cause) { if (isCurrentPage(generation, credentialId)) loadError.value = errorMessage(cause, '请检查网络后重试。') } finally { if (isCurrentPage(generation, credentialId)) loading.value = false }
 }
-async function loadKnowledgeBases() { knowledgeLoading.value = true; knowledgeError.value = ''; try { const response = await http.get('/knowledge/list'); knowledgeBases.value = (response.data?.data || []).filter((item) => typeof item.publicId === 'string').map((item) => ({ publicId: item.publicId, name: item.name || '未命名知识库' })) } catch (cause) { knowledgeBases.value = []; knowledgeError.value = errorMessage(cause, '请检查知识库后重试。') } finally { knowledgeLoading.value = false } }
+async function loadKnowledgeBases(credentialId = activeCredentialId, generation = pageGeneration) {
+  if (!isCurrentPage(generation, credentialId)) return
+  const requestToken = ++knowledgeRequestToken
+  knowledgeLoading.value = true; knowledgeError.value = ''
+  try {
+    const response = await http.get('/knowledge/list')
+    if (!isCurrentPage(generation, credentialId) || requestToken !== knowledgeRequestToken) return
+    knowledgeBases.value = (response.data?.data || []).filter((item) => typeof item.publicId === 'string').map((item) => ({ publicId: item.publicId, name: item.name || '未命名知识库' }))
+  } catch (cause) { if (isCurrentPage(generation, credentialId) && requestToken === knowledgeRequestToken) { knowledgeBases.value = []; knowledgeError.value = errorMessage(cause, '请检查知识库后重试。') } } finally { if (isCurrentPage(generation, credentialId) && requestToken === knowledgeRequestToken) knowledgeLoading.value = false }
+}
+function retryKnowledgeBases() {
+  return loadKnowledgeBases(activeCredentialId, pageGeneration)
+}
 async function saveMetadata() {
+  const credentialId = credential.id, generation = pageGeneration
+  if (!isCurrentPage(generation, credentialId)) return
   saving.value = true
   try {
-    const response = await http.patch(`/tenant/api-credentials/${credential.id}`, { name: form.name, description: form.description || null, allowedIpCidrs: parseCidrs(form.allowedIpCidrs), requestsPerMinute: Number(form.requestsPerMinute), burstCapacity: Number(form.burstCapacity), maxConcurrency: Number(form.maxConcurrency), expiresAt: form.expiresAt || null })
+    const response = await http.patch(`/tenant/api-credentials/${credentialId}`, { name: form.name, description: form.description || null, allowedIpCidrs: parseCidrs(form.allowedIpCidrs), requestsPerMinute: Number(form.requestsPerMinute), burstCapacity: Number(form.burstCapacity), maxConcurrency: Number(form.maxConcurrency), expiresAt: form.expiresAt || null })
+    if (!isCurrentPage(generation, credentialId)) return
     applyCredential(response.data?.data); ElMessage.success('凭证设置已保存')
-  } catch (cause) { ElMessage.error(errorMessage(cause, '保存凭证设置失败')) } finally { saving.value = false }
+  } catch (cause) { if (isCurrentPage(generation, credentialId)) ElMessage.error(errorMessage(cause, '保存凭证设置失败')) } finally { if (isCurrentPage(generation, credentialId)) saving.value = false }
 }
 function captureOpener() { opener = document.activeElement }
 function restoreOpener() { const target = opener; opener = null; nextTick(() => target?.focus?.()) }
@@ -167,33 +206,39 @@ function closeScopeEditor() { showScopeEditor.value = false; restoreOpener() }
 function closeRotateConfirmation() { showRotateConfirmation.value = false; restoreOpener() }
 function closeRevokeConfirmation() { showRevokeConfirmation.value = false; restoreOpener() }
 async function saveScope() {
+  const credentialId = credential.id, generation = pageGeneration, selectedKnowledgeIds = [...scopeSelection.value]
+  if (!isCurrentPage(generation, credentialId)) return
   savingScope.value = true
-  try { const response = await http.put(`/tenant/api-credentials/${credential.id}/knowledge-bases`, { knowledgeIds: [...scopeSelection.value] }); applyCredential(response.data?.data); closeScopeEditor(); ElMessage.success('知识库范围已替换') } catch (cause) { ElMessage.error(errorMessage(cause, '替换知识库范围失败')) } finally { savingScope.value = false }
+  try { const response = await http.put(`/tenant/api-credentials/${credentialId}/knowledge-bases`, { knowledgeIds: selectedKnowledgeIds }); if (!isCurrentPage(generation, credentialId)) return; applyCredential(response.data?.data); closeScopeEditor(); ElMessage.success('知识库范围已替换') } catch (cause) { if (isCurrentPage(generation, credentialId)) ElMessage.error(errorMessage(cause, '替换知识库范围失败')) } finally { if (isCurrentPage(generation, credentialId)) savingScope.value = false }
 }
 async function rotateCredential() {
+  const credentialId = credential.id, generation = pageGeneration
+  if (!isCurrentPage(generation, credentialId)) return
   rotating.value = true
-  const generation = lifecycleGeneration
   try {
-    const response = await http.post(`/tenant/api-credentials/${credential.id}/rotate`)
-    if (generation !== lifecycleGeneration) return
+    const response = await http.post(`/tenant/api-credentials/${credentialId}/rotate`)
+    if (!isCurrentPage(generation, credentialId)) return
     const result = response.data?.data || {}; applyCredential(result.credential); closeDismissibleDialogs(false)
     oneTimeKey.value = typeof result.apiKey === 'string' ? result.apiKey : ''; copied.value = false; saveConfirmed.value = false
+    pendingReplacementId.value = result.credential?.id || ''
     nextTick(() => secretCopyButton.value?.focus())
-    router.replace(`/tenant/api-credentials/${credential.id}`)
-  } catch (cause) { ElMessage.error(errorMessage(cause, '轮换凭证失败')) } finally { rotating.value = false }
+  } catch (cause) { if (isCurrentPage(generation, credentialId)) ElMessage.error(errorMessage(cause, '轮换凭证失败')) } finally { if (isCurrentPage(generation, credentialId)) rotating.value = false }
 }
 async function revokeCredential() {
+  const credentialId = credential.id, generation = pageGeneration
+  if (!isCurrentPage(generation, credentialId)) return
   revoking.value = true
-  try { const response = await http.post(`/tenant/api-credentials/${credential.id}/revoke`); applyCredential(response.data?.data); closeRevokeConfirmation(); ElMessage.success('凭证已吊销') } catch (cause) { ElMessage.error(errorMessage(cause, '吊销凭证失败')) } finally { revoking.value = false }
+  try { const response = await http.post(`/tenant/api-credentials/${credentialId}/revoke`); if (!isCurrentPage(generation, credentialId)) return; applyCredential(response.data?.data); closeRevokeConfirmation(); ElMessage.success('凭证已吊销') } catch (cause) { if (isCurrentPage(generation, credentialId)) ElMessage.error(errorMessage(cause, '吊销凭证失败')) } finally { if (isCurrentPage(generation, credentialId)) revoking.value = false }
 }
 async function copyKey() { if (oneTimeKey.value && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(oneTimeKey.value); copied.value = true } }
-function clearDisclosure() { oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false; if (!showScopeEditor.value && !showRotateConfirmation.value && !showRevokeConfirmation.value) restoreOpener() }
-function invalidateDisclosureResponses() { lifecycleGeneration += 1; clearDisclosure() }
+function clearDisclosure() { oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false; const replacementId = pendingReplacementId.value; pendingReplacementId.value = ''; if (!showScopeEditor.value && !showRotateConfirmation.value && !showRevokeConfirmation.value) restoreOpener(); return replacementId }
+function acknowledgeKey() { if (!saveConfirmed.value) return; const replacementId = clearDisclosure(); if (replacementId) router.replace(`/tenant/api-credentials/${replacementId}`) }
+function invalidatePage() { pageGeneration += 1; activeCredentialId = ''; resetForPageTransition(); loading.value = false; loadError.value = '' }
 
-onMounted(loadPage)
-onBeforeRouteLeave(invalidateDisclosureResponses)
-onBeforeRouteUpdate((to) => { invalidateDisclosureResponses(); return loadPage(to.params.credentialId) })
-onBeforeUnmount(invalidateDisclosureResponses)
+onMounted(() => startPage(route.params.credentialId))
+onBeforeRouteLeave(invalidatePage)
+onBeforeRouteUpdate((to) => startPage(to.params.credentialId))
+onBeforeUnmount(invalidatePage)
 </script>
 
 <style scoped>

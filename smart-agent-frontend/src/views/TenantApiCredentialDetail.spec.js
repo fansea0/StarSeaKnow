@@ -47,6 +47,14 @@ const credential = {
   knowledgeIds: ['d3b4fe35-cdd9-4a4d-914f-984a80bfeb9b'],
 }
 
+const credentialB = {
+  ...credential,
+  id: '11111111-2222-4333-8444-555555555555',
+  name: 'B 租户检索 Agent',
+  displayPrefix: 'rag_test_k_BBBB',
+  displayLastFour: 'BBBB',
+}
+
 const knowledge = [
   { id: 9, publicId: 'd3b4fe35-cdd9-4a4d-914f-984a80bfeb9b', name: '产品与服务知识库' },
   { id: 10, publicId: 'a3e5987d-4125-469c-83be-d11f0f62a74d', name: '售后政策知识库' },
@@ -155,9 +163,10 @@ describe('tenant API credential detail', () => {
 
   it('keeps scope editing disabled while a failed knowledge request is retried', async () => {
     const retryKnowledge = deferred()
+    let knowledgeAttempts = 0
     get.mockImplementation((url) => {
       if (url === `/tenant/api-credentials/${credential.id}`) return Promise.resolve({ data: { code: 200, data: credential } })
-      if (url === '/knowledge/list') return get.mock.calls.filter(([path]) => path === '/knowledge/list').length === 1
+      if (url === '/knowledge/list') return ++knowledgeAttempts === 1
         ? Promise.reject({ response: { data: { msg: '稍后重试' } } })
         : retryKnowledge.promise
       return Promise.reject(new Error(`Unexpected GET ${url}`))
@@ -165,8 +174,9 @@ describe('tenant API credential detail', () => {
     const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
     await flushPromises()
     await wrapper.get('[data-testid="retry-knowledge-load"]').trigger('click')
-    await flushPromises()
+    await wrapper.vm.$nextTick()
     expect(wrapper.get('[data-testid="open-scope-editor"]').attributes('disabled')).toBeDefined()
+    expect(knowledgeAttempts).toBeGreaterThan(1)
     expect(wrapper.get('[data-testid="knowledge-loading-state"]').exists()).toBe(true)
     retryKnowledge.resolve({ data: { code: 200, data: knowledge } })
     await flushPromises()
@@ -230,7 +240,7 @@ describe('tenant API credential detail', () => {
     })
   })
 
-  it('rotates into the replacement credential, discloses the new Key once, and requires revoke confirmation', async () => {
+  it('rotates into the replacement credential and discloses the new Key until acknowledgement', async () => {
     const rawKey = 'rag_test_k_NEWKEY.new-raw-secret-value'
     const rotated = {
       ...credential,
@@ -249,7 +259,7 @@ describe('tenant API credential detail', () => {
     await flushPromises()
 
     expect(post).toHaveBeenNthCalledWith(1, `/tenant/api-credentials/${credential.id}/rotate`)
-    expect(replace).toHaveBeenCalledWith(`/tenant/api-credentials/${rotated.id}`)
+    expect(replace).not.toHaveBeenCalled()
     expect(wrapper.get('[role="dialog"][aria-labelledby="one-time-key-title"]').text()).toContain(rawKey)
     expect(wrapper.find('[aria-label="关闭一次性 API Key"]').exists()).toBe(false)
     expect(document.activeElement).toBe(wrapper.get('[data-testid="copy-one-time-key"]').element)
@@ -259,13 +269,7 @@ describe('tenant API credential detail', () => {
     await wrapper.get('.save-confirmation input').setValue(true)
     await wrapper.get('[data-testid="confirm-key-saved"]').trigger('click')
     expect(wrapper.text()).not.toContain(rawKey)
-
-    await wrapper.get('[data-testid="open-revoke-confirmation"]').trigger('click')
-    await wrapper.get('[data-testid="confirm-credential-revoke"]').trigger('click')
-    await flushPromises()
-
-    expect(post).toHaveBeenNthCalledWith(2, `/tenant/api-credentials/${rotated.id}/revoke`)
-    expect(wrapper.text()).toContain('已吊销')
+    expect(replace).toHaveBeenCalledWith(`/tenant/api-credentials/${rotated.id}`)
   })
 
   it('drops a late rotation response after route leave without navigating or disclosing the Key', async () => {
@@ -335,5 +339,102 @@ describe('tenant API credential detail', () => {
 
     expect(wrapper.text()).not.toContain(rawKey)
     expect(get).toHaveBeenCalledWith('/tenant/api-credentials/02e896a9-33b5-4f9e-b501-a843e6180a37')
+  })
+
+  it('does not let a late A detail load overwrite the B route', async () => {
+    const loadA = deferred()
+    const loadB = deferred()
+    get.mockImplementation((url) => {
+      if (url === `/tenant/api-credentials/${credential.id}`) return loadA.promise
+      if (url === `/tenant/api-credentials/${credentialB.id}`) return loadB.promise
+      if (url === '/knowledge/list') return Promise.resolve({ data: { code: 200, data: knowledge } })
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+    routeUpdateHandlers.forEach((handler) => handler({ params: { credentialId: credentialB.id } }))
+    loadB.resolve({ data: { code: 200, data: credentialB } })
+    await flushPromises()
+    loadA.resolve({ data: { code: 200, data: credential } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('B 租户检索 Agent')
+    expect(wrapper.text()).not.toContain('客服问答 Agent')
+  })
+
+  it('does not let a late A knowledge result replace B scope options', async () => {
+    const knowledgeA = deferred()
+    const knowledgeB = deferred()
+    let knowledgeCalls = 0
+    const bKnowledge = [{ id: 11, publicId: 'b3b4fe35-cdd9-4a4d-914f-984a80bfeb9b', name: 'B 知识库' }]
+    get.mockImplementation((url) => {
+      if (url === `/tenant/api-credentials/${credential.id}`) return Promise.resolve({ data: { code: 200, data: credential } })
+      if (url === `/tenant/api-credentials/${credentialB.id}`) return Promise.resolve({ data: { code: 200, data: credentialB } })
+      if (url === '/knowledge/list') return ++knowledgeCalls === 1 ? knowledgeA.promise : knowledgeB.promise
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+    routeUpdateHandlers.forEach((handler) => handler({ params: { credentialId: credentialB.id } }))
+    knowledgeB.resolve({ data: { code: 200, data: bKnowledge } })
+    await flushPromises()
+    knowledgeA.resolve({ data: { code: 200, data: knowledge } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-scope-editor"]').trigger('click')
+
+    expect(wrapper.find(`[value="${knowledge[0].publicId}"]`).exists()).toBe(false)
+    expect(wrapper.get(`[value="${bKnowledge[0].publicId}"]`).exists()).toBe(true)
+  })
+
+  it('closes A dialogs and ignores an A scope mutation after routing to B', async () => {
+    const scopeResponse = deferred()
+    put.mockReturnValueOnce(scopeResponse.promise)
+    get.mockImplementation((url) => {
+      if (url === `/tenant/api-credentials/${credential.id}`) return Promise.resolve({ data: { code: 200, data: credential } })
+      if (url === `/tenant/api-credentials/${credentialB.id}`) return Promise.resolve({ data: { code: 200, data: credentialB } })
+      if (url === '/knowledge/list') return Promise.resolve({ data: { code: 200, data: knowledge } })
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentialDetail, { attachTo: document.body, global: { stubs } })
+    await flushPromises()
+    const opener = wrapper.get('[data-testid="open-scope-editor"]')
+    opener.element.focus()
+    await opener.trigger('click')
+    await wrapper.get('[data-testid="save-credential-scope"]').trigger('click')
+    routeUpdateHandlers.forEach((handler) => handler({ params: { credentialId: credentialB.id } }))
+    await flushPromises()
+    scopeResponse.resolve({ data: { code: 200, data: { ...credential, name: 'A 的迟到范围' } } })
+    await flushPromises()
+
+    expect(wrapper.find('[role="dialog"][aria-labelledby="scope-editor-title"]').exists()).toBe(false)
+    expect(put).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('B 租户检索 Agent')
+    expect(wrapper.text()).not.toContain('A 的迟到范围')
+    expect(document.activeElement).not.toBe(opener.element)
+  })
+
+  it('drops a late A rotation after routing to B without opening a secret or navigating', async () => {
+    const rotateResponse = deferred()
+    post.mockReturnValueOnce(rotateResponse.promise)
+    get.mockImplementation((url) => {
+      if (url === `/tenant/api-credentials/${credential.id}`) return Promise.resolve({ data: { code: 200, data: credential } })
+      if (url === `/tenant/api-credentials/${credentialB.id}`) return Promise.resolve({ data: { code: 200, data: credentialB } })
+      if (url === '/knowledge/list') return Promise.resolve({ data: { code: 200, data: knowledge } })
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-rotate-confirmation"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-credential-rotation"]').trigger('click')
+    routeUpdateHandlers.forEach((handler) => handler({ params: { credentialId: credentialB.id } }))
+    await flushPromises()
+
+    rotateResponse.resolve({ data: { code: 200, data: { credential: { ...credential, id: '02e896a9-33b5-4f9e-b501-a843e6180a37' }, apiKey: 'rag_test_k_STALE-ROTATION.raw-secret' } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('B 租户检索 Agent')
+    expect(wrapper.text()).not.toContain('rag_test_k_STALE-ROTATION.raw-secret')
+    expect(wrapper.find('[role="dialog"][aria-labelledby="one-time-key-title"]').exists()).toBe(false)
+    expect(replace).not.toHaveBeenCalled()
   })
 })
