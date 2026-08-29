@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BACKEND_DIR="$ROOT_DIR/xiaoda-backend-intelligence/Spring-AI"
-FRONTEND_DIR="$ROOT_DIR/smart-agent-frontend"
+BACKEND_DIR="$ROOT_DIR/server/Spring-AI"
+FRONTEND_DIR="$ROOT_DIR/web"
 DRY_RUN=false
 KEEP_EXISTING=false
 MODE=all

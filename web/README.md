@@ -1,6 +1,10 @@
-# 小达智能体前端
+# 星海知源 · 前端
 
-Vue 3、Vite 和 Element Plus 实现的租户业务端与平台管理端。
+> StarSeaKnow / StarSea Web
+
+Vue 3、Vite 和 Element Plus 实现的租户业务端与平台管理端。`package.json` 中的项目名为 `star-sea-web`，浏览器 title 为「星海知源 · StarSeaKnow」。
+
+> 📦 顶层文档与启动方式见仓库根目录的 [`README.md`](../README.md)。本文件只覆盖前端特有的内容。
 
 ## 启动开发环境
 
@@ -17,7 +21,7 @@ Vue 3、Vite 和 Element Plus 实现的租户业务端与平台管理端。
 ./scripts/start.sh frontend
 ```
 
-默认地址：前端为 `http://127.0.0.1:5174`，后端为 `http://localhost:8090`。脚本会在启动前释放对应端口；若不希望结束已运行服务，请加 `--keep-existing`。
+默认地址：前端为 `http://127.0.0.1:5174`（`vite.config.js` 中显式设置了 `strictPort: true`，不会自动换端口），后端为 `http://localhost:8090`。脚本会在启动前释放对应端口；若不希望结束已运行服务，请加 `--keep-existing`。
 
 ## 平台管理员与首次登录
 
@@ -41,21 +45,21 @@ Vue 3、Vite 和 Element Plus 实现的租户业务端与平台管理端。
 ## 验证
 
 ```bash
-cd smart-agent-frontend
+cd web
 npm run test
 npm run build
 ```
 
-完整后端/前端启动与邀请码开户烟雾流程见仓库根目录的 `xiaoda-backend-intelligence/scripts/smoke-auth.sh`。该脚本会创建邀请码、租户和用户；若管理员仍处于首次登录状态，还会修改其密码。因此只能对**可丢弃的本地测试数据库**执行，并必须显式确认写入操作。脚本不会输出密码或访问令牌：
+完整后端/前端启动与邀请码开户烟雾流程见 `server/scripts/smoke-auth.sh`。该脚本会创建邀请码、租户和用户；若管理员仍处于首次登录状态，还会修改其密码。因此只能对**可丢弃的本地测试数据库**执行，并必须显式确认写入操作。脚本不会输出密码或访问令牌：
 
 ```bash
-SMOKE_ALLOW_MUTATION=1 BASE=http://localhost:8090 SU_PWD='已知平台密码' \\
-  ../xiaoda-backend-intelligence/scripts/smoke-auth.sh
+SMOKE_ALLOW_MUTATION=1 BASE=http://localhost:8090 SU_PWD='已知平台密码' \
+  ../server/scripts/smoke-auth.sh
 ```
 
 如果该账号仍处于首次改密状态，还需要一次性提供新的平台管理员密码：
 
 ```bash
-SMOKE_ALLOW_MUTATION=1 BASE=http://localhost:8090 SU_PWD='初始密码' SU_NEW_PWD='新的强密码' \\
-  ../xiaoda-backend-intelligence/scripts/smoke-auth.sh
+SMOKE_ALLOW_MUTATION=1 BASE=http://localhost:8090 SU_PWD='初始密码' SU_NEW_PWD='新的强密码' \
+  ../server/scripts/smoke-auth.sh
 ```

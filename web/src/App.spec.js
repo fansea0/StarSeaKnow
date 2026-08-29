@@ -11,7 +11,7 @@ const { auth } = vi.hoisted(() => ({
   auth: {
     ready: true,
     accessToken: 'tenant-token',
-    user: { role: 'tenant_admin', username: 'fansea' },
+    user: { role: 'tenant_admin', username: 'star-sea-admin' },
     bootstrap: vi.fn(),
     logout: vi.fn(),
   },
@@ -49,7 +49,7 @@ describe('workspace shell', () => {
   beforeEach(() => {
     auth.ready = true
     auth.accessToken = 'tenant-token'
-    auth.user = { role: 'tenant_admin', username: 'fansea' }
+    auth.user = { role: 'tenant_admin', username: 'star-sea-admin' }
     auth.bootstrap.mockReset()
   })
 

@@ -1,8 +1,12 @@
 
 
-# Xiaoda Backend Intelligent System
+# StarSeaKnow · Backend Service
 
-This is the Xiaoda Backend Intelligent System project, a backend service based on Spring Boot that integrates AI, RAG, file and knowledge base management to provide intelligent conversation and data processing capabilities.
+> 星海知源 / StarSea Server
+
+This is the backend service of the **StarSeaKnow (星海知源)** project, a Spring Boot based service that integrates AI, RAG, file and knowledge base management to provide intelligent conversation and data processing capabilities.
+
+> 📦 For the top-level documentation and unified startup commands, see the repository root [`README.md`](../README.md). This file only covers backend-specific details.
 
 ## 🧩 Features
 
@@ -16,7 +20,7 @@ This is the Xiaoda Backend Intelligent System project, a backend service based o
 
 ## 📁 Project Structure Overview
 
-- `SpringAiApplication.java`: Main Spring Boot startup class.
+- `SpringAiApplication.java`: Main Spring Boot startup class (package `com.starsea.ai.SpringAiApplication`, Maven artifactId `star-sea-server`).
 - `config/`: Contains global configurations, exception handling, cache, and CORS settings.
 - `controller/`: REST API controllers for various functionalities, including AI chat, file, knowledge base, and agent management.
 - `domain/`: Data model definitions, such as `Agent`, `File`, `Knowledge`, etc.

@@ -1,8 +1,12 @@
 
 
-# Xiaoda 后端智能系统
+# 星海知源 · 后端服务
 
-这是 Xiaoda 后端智能系统项目，一个基于 Spring Boot 的后端服务，结合 AI、RAG、文件和知识库管理，提供智能对话和数据处理能力。
+> StarSeaKnow / StarSea Server
+
+这是「星海知源」（StarSeaKnow）项目的后端服务，基于 Spring Boot + Spring AI 构建，结合 RAG、文件和知识库管理，提供智能对话和数据处理能力。
+
+> 📦 顶层文档与启动方式见仓库根目录的 [`README.md`](../README.md)。本文件只覆盖后端特有的内容。
 
 ## 🧩 功能特性
 
@@ -16,7 +20,7 @@
 
 ## 📁 项目结构简述
 
-- `SpringAiApplication.java`: Spring Boot 主启动类。
+- `SpringAiApplication.java`: Spring Boot 主启动类（包路径 `com.starsea.ai.SpringAiApplication`，Maven artifactId `star-sea-server`）。
 - `config/`: 包含全局配置、异常处理、缓存和跨域配置。
 - `controller/`: 各功能的 REST API 控制器，包括 AI 聊天、文件、知识库、代理等。
 - `domain/`: 数据模型定义，如 `Agent`, `File`, `Knowledge` 等。
