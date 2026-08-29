@@ -95,8 +95,8 @@ file:
 **路径替换示例（macOS / Linux）**：
 ```yaml
 file:
-  uploadPath: /Users/yourname/projects/rag_agent/server/Spring-AI/src/main/resources/file/
-  outputPath: /Users/yourname/projects/rag_agent/server/Spring-AI/src/main/resources/output/
+  uploadPath: /Users/yourname/projects/StarSeaKnow/server/Spring-AI/src/main/resources/file/
+  outputPath: /Users/yourname/projects/StarSeaKnow/server/Spring-AI/src/main/resources/output/
 ```
 
 **推荐配置**（避免硬编码个人路径，更适合团队协作）：用 `${user.dir}` 动态指向工程根目录：
