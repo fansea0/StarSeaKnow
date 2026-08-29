@@ -35,7 +35,7 @@
             <label class="form-field"><span>最大并发</span><input v-model.number="form.maxConcurrency" type="number" min="1" max="10000" required /></label>
           </div>
           <label class="form-field"><span>过期时间（可选，ISO 8601）</span><input v-model.trim="form.expiresAt" placeholder="2026-12-31T00:00:00Z" /></label>
-          <footer><button class="sea-button sea-button--primary" data-testid="save-credential-metadata" type="submit" :disabled="saving">{{ saving ? '正在保存…' : '保存设置' }}</button></footer>
+          <footer><button class="sea-button sea-button--primary" data-testid="save-credential-metadata" type="submit" :disabled="actionBlocked">{{ saving ? '正在保存…' : '保存设置' }}</button></footer>
         </form>
       </section>
 
@@ -190,7 +190,7 @@ function retryKnowledgeBases() {
 }
 async function saveMetadata() {
   const credentialId = credential.id, generation = pageGeneration
-  if (!isCurrentPage(generation, credentialId)) return
+  if (!isCurrentPage(generation, credentialId) || actionBlocked.value) return
   saving.value = true
   try {
     const payload = { name: form.name, description: form.description || null, allowedIpCidrs: parseCidrs(form.allowedIpCidrs), requestsPerMinute: Number(form.requestsPerMinute), burstCapacity: Number(form.burstCapacity), maxConcurrency: Number(form.maxConcurrency) }

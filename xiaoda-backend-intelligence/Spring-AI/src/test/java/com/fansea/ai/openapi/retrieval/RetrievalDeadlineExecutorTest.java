@@ -53,6 +53,49 @@ class RetrievalDeadlineExecutorTest {
     }
 
     @Test
+    void closeImmediatelyCancelsQueuedTaskButKeepsRunningLeaseUntilWorkerActuallyExits() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        RagService ragService = mock(RagService.class);
+        doAnswer(invocation -> {
+            entered.countDown();
+            while (release.getCount() > 0) {
+                try { release.await(); } catch (InterruptedException ignored) { }
+            }
+            return List.of();
+        }).when(ragService).retrieve(any());
+        RetrievalDeadlineExecutor executor = new RetrievalDeadlineExecutor(ragService, Duration.ofSeconds(30), 1, 1);
+        TrackingLease runningLease = new TrackingLease();
+        TrackingLease queuedLease = new TrackingLease();
+        AtomicReference<Throwable> runningFailure = new AtomicReference<>();
+        AtomicReference<Throwable> queuedFailure = new AtomicReference<>();
+        Thread runningCaller = caller(executor, "running", runningLease, runningFailure);
+        Thread queuedCaller = caller(executor, "queued", queuedLease, queuedFailure);
+
+        runningCaller.start();
+        assertThat(entered.await(1, TimeUnit.SECONDS)).isTrue();
+        queuedCaller.start();
+        awaitQueueSize(executor, 1);
+        executor.close();
+        executor.close();
+        queuedCaller.join(500);
+
+        try {
+            assertThat(queuedCaller.isAlive()).isFalse();
+            assertThat(queuedFailure.get()).isInstanceOf(java.util.concurrent.RejectedExecutionException.class);
+            assertThat(queuedLease.closeCount).hasValue(1);
+            assertThat(runningLease.closeCount).hasValue(0);
+        } finally {
+            if (queuedCaller.isAlive()) queuedCaller.interrupt();
+            release.countDown();
+            queuedCaller.join(1_000);
+            runningCaller.join(1_000);
+        }
+        assertThat(runningFailure.get()).isNull();
+        assertThat(runningLease.closeCount).hasValue(1);
+    }
+
+    @Test
     void timedOutQueuedTaskThatNeverStartsReleasesItsLeaseExactlyOnce() throws Exception {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -134,6 +177,25 @@ class RetrievalDeadlineExecutorTest {
         @Override public int remaining() { return 9; }
         @Override public long resetEpochSecond() { return 1; }
         @Override public void close() { closeCount.incrementAndGet(); closedLatch.countDown(); }
+    }
+
+    private Thread caller(RetrievalDeadlineExecutor executor, String query, TrackingLease lease,
+                          AtomicReference<Throwable> failure) {
+        return new Thread(() -> {
+            try {
+                executor.retrieve(new RetrievalQuery(query, Set.of(11L), 1, 0), externalContext(), lease);
+            } catch (Throwable thrown) {
+                failure.set(thrown);
+            }
+        });
+    }
+
+    private void awaitQueueSize(RetrievalDeadlineExecutor executor, int expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (executor.queuedTaskCount() != expected && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertThat(executor.queuedTaskCount()).isEqualTo(expected);
     }
 
     private AuthContext externalContext() {

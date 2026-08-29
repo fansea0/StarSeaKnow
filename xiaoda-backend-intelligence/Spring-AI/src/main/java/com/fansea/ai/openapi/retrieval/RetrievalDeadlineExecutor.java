@@ -11,8 +11,11 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -43,18 +46,9 @@ public final class RetrievalDeadlineExecutor implements AutoCloseable {
     public List<RetrievedChunk> retrieve(RetrievalQuery query, AuthContext context,
                                          CredentialRateLimiter.RateLimitLease lease) throws TimeoutException {
         LeaseHandoff handoff = new LeaseHandoff(lease);
-        Future<List<RetrievedChunk>> future;
+        RetrievalTask future = new RetrievalTask(query, context, handoff);
         try {
-            future = executor.submit(() -> {
-                if (!handoff.claimForWorker()) {
-                    throw new java.util.concurrent.CancellationException("retrieval cancelled before start");
-                }
-                try {
-                    return withContext(context, () -> ragService.retrieve(query));
-                } finally {
-                    handoff.releaseFromWorker();
-                }
-            });
+            executor.execute(future);
         } catch (RuntimeException exception) {
             handoff.releaseBeforeStart();
             throw exception;
@@ -71,11 +65,37 @@ public final class RetrievalDeadlineExecutor implements AutoCloseable {
             handoff.releaseBeforeStart();
             Thread.currentThread().interrupt();
             throw new IllegalStateException("retrieval interrupted", exception);
+        } catch (CancellationException exception) {
+            handoff.releaseBeforeStart();
+            throw new RejectedExecutionException("retrieval executor closed", exception);
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause();
             if (cause instanceof RuntimeException runtime) throw runtime;
             if (cause instanceof Error error) throw error;
             throw new IllegalStateException("retrieval failed", cause);
+        }
+    }
+
+    private final class RetrievalTask extends FutureTask<List<RetrievedChunk>> {
+        private final LeaseHandoff handoff;
+
+        private RetrievalTask(RetrievalQuery query, AuthContext context, LeaseHandoff handoff) {
+            super(() -> {
+                if (!handoff.claimForWorker()) {
+                    throw new CancellationException("retrieval cancelled before start");
+                }
+                try {
+                    return withContext(context, () -> ragService.retrieve(query));
+                } finally {
+                    handoff.releaseFromWorker();
+                }
+            });
+            this.handoff = handoff;
+        }
+
+        void cancelBeforeStart() {
+            handoff.releaseBeforeStart();
+            cancel(false);
         }
     }
 
@@ -102,6 +122,8 @@ public final class RetrievalDeadlineExecutor implements AutoCloseable {
         executor.submit(() -> withContext(null, () -> { probe.run(); return null; })).get(1, TimeUnit.SECONDS);
     }
 
+    int queuedTaskCount() { return executor.getQueue().size(); }
+
     private <T> T withContext(AuthContext context, java.util.concurrent.Callable<T> operation) throws Exception {
         AuthContext.clear();
         try {
@@ -124,6 +146,12 @@ public final class RetrievalDeadlineExecutor implements AutoCloseable {
     @Override
     @PreDestroy
     public void close() {
-        executor.shutdownNow();
+        for (Runnable queued : executor.shutdownNow()) {
+            if (queued instanceof RetrievalTask retrieval) {
+                retrieval.cancelBeforeStart();
+            } else if (queued instanceof Future<?> future) {
+                future.cancel(false);
+            }
+        }
     }
 }

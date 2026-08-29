@@ -259,6 +259,37 @@ describe('tenant API credential detail', () => {
     expect(wrapper.get('[data-testid="open-revoke-confirmation"]').attributes('disabled')).toBeUndefined()
   })
 
+  it('blocks metadata save UI and programmatic submit during another lifecycle action', async () => {
+    const statusUpdate = deferred()
+    patch.mockReturnValueOnce(statusUpdate.promise)
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="toggle-credential-status"]').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-testid="save-credential-metadata"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    expect(patch).toHaveBeenCalledTimes(1)
+
+    statusUpdate.resolve({ data: { code: 200, data: { ...credential, status: 'disabled' } } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="save-credential-metadata"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('ignores duplicate programmatic metadata submits while the first save is pending', async () => {
+    const metadataSave = deferred()
+    patch.mockReturnValueOnce(metadataSave.promise)
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+
+    await wrapper.get('form').trigger('submit')
+    await wrapper.get('form').trigger('submit')
+
+    expect(patch).toHaveBeenCalledTimes(1)
+    metadataSave.resolve({ data: { code: 200, data: credential } })
+    await flushPromises()
+  })
+
   it('explicitly disables and re-enables a non-revoked credential', async () => {
     patch
       .mockResolvedValueOnce({ data: { code: 200, data: { ...credential, status: 'disabled' } } })
