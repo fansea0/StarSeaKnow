@@ -124,6 +124,23 @@ describe('tenant API credential list and creation', () => {
     wrapper.unmount()
   })
 
+  it('keeps the active create dialog outside the hidden background and restores background semantics on close', async () => {
+    const wrapper = mount(TenantApiCredentials, { attachTo: document.body, global: { stubs: { 'router-link': routerLinkStub } } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-create-credential"]').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('[role="dialog"][aria-labelledby="create-credential-title"]')
+    const background = wrapper.get('[data-testid="credential-page-background"]')
+
+    expect(dialog.element.closest('[aria-hidden="true"]')).toBeNull()
+    expect(background.attributes('aria-hidden')).toBe('true')
+    expect(background.attributes()).toHaveProperty('inert')
+    await dialog.trigger('keydown', { key: 'Escape' })
+    expect(background.attributes('aria-hidden')).toBeUndefined()
+    expect(background.attributes()).not.toHaveProperty('inert')
+    wrapper.unmount()
+  })
+
   it('submits the exact create contract and keeps the returned Key in a non-dismissible result until saved', async () => {
     const rawKey = 'rag_test_k_7F3K9Q2M.xQ9vP3L2sK8mW5nR4tY7uA6bC1dE0fG'
     post.mockResolvedValueOnce({ data: { code: 200, data: { credential, apiKey: rawKey } } })

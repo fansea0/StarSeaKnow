@@ -1,5 +1,6 @@
 <template>
-  <main class="credential-page" aria-labelledby="credential-list-title" :aria-hidden="activeDialog ? 'true' : undefined">
+  <div class="credential-page">
+  <main data-testid="credential-page-background" aria-labelledby="credential-list-title" :aria-hidden="activeDialog ? 'true' : undefined" :inert="activeDialog ? '' : undefined">
     <header class="credential-page__heading">
       <div>
         <span class="credential-page__eyebrow">EXTERNAL ACCESS</span>
@@ -64,6 +65,7 @@
       <span>知识库范围暂不可编辑：{{ knowledgeError }}</span><button class="sea-button" data-testid="retry-knowledge-load" type="button" @click="loadKnowledgeBases">重试知识库</button>
     </aside>
 
+  </main>
     <div v-if="showCreate" class="modal-layer" role="presentation">
       <section ref="createDialog" class="sea-modal sea-modal--wide" role="dialog" aria-modal="true" aria-labelledby="create-credential-title" tabindex="-1" @keydown="handleDismissableDialogKey($event, closeCreate)">
         <header class="sea-modal__heading">
@@ -164,7 +166,7 @@
         >确认已保存并关闭</button>
       </section>
     </div>
-  </main>
+  </div>
 </template>
 
 <script setup>

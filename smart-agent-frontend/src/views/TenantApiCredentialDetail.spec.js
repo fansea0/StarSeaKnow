@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TenantApiCredentialDetail from './TenantApiCredentialDetail.vue'
 
-const { get, patch, put, post, replace, error, success, routeLeaveHandlers } = vi.hoisted(() => ({
+const { get, patch, put, post, replace, error, success, routeLeaveHandlers, routeUpdateHandlers } = vi.hoisted(() => ({
   get: vi.fn(),
   patch: vi.fn(),
   put: vi.fn(),
@@ -13,6 +13,7 @@ const { get, patch, put, post, replace, error, success, routeLeaveHandlers } = v
   error: vi.fn(),
   success: vi.fn(),
   routeLeaveHandlers: [],
+  routeUpdateHandlers: [],
 }))
 
 vi.mock('../api/http', () => ({ http: { get, patch, put, post } }))
@@ -20,6 +21,7 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { credentialId: '8797a05e-9d6c-4d47-a254-e648c8027ee9' } }),
   useRouter: () => ({ replace }),
   onBeforeRouteLeave: (handler) => routeLeaveHandlers.push(handler),
+  onBeforeRouteUpdate: (handler) => routeUpdateHandlers.push(handler),
 }))
 vi.mock('element-plus', () => ({ ElMessage: { error, success } }))
 
@@ -80,6 +82,7 @@ describe('tenant API credential detail', () => {
     error.mockReset()
     success.mockReset()
     routeLeaveHandlers.length = 0
+    routeUpdateHandlers.length = 0
     mockLoads()
   })
 
@@ -112,6 +115,78 @@ describe('tenant API credential detail', () => {
     await dialog.trigger('keydown', { key: 'Escape' })
     expect(wrapper.find('[role="dialog"][aria-labelledby="scope-editor-title"]').exists()).toBe(false)
     expect(document.activeElement).toBe(opener.element)
+    wrapper.unmount()
+  })
+
+  it('focuses a usable close control when the scope editor has no knowledge checkboxes', async () => {
+    get.mockImplementation((url) => {
+      if (url === `/tenant/api-credentials/${credential.id}`) return Promise.resolve({ data: { code: 200, data: credential } })
+      if (url === '/knowledge/list') return Promise.resolve({ data: { code: 200, data: [] } })
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentialDetail, { attachTo: document.body, global: { stubs } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-scope-editor"]').trigger('click')
+    await flushPromises()
+
+    expect(document.activeElement).toBe(wrapper.get('[aria-label="关闭范围编辑"]').element)
+    wrapper.unmount()
+  })
+
+  it('keeps management controls active while knowledge loads and enables scope editing only after resolution', async () => {
+    const initialKnowledge = deferred()
+    get.mockImplementation((url) => {
+      if (url === `/tenant/api-credentials/${credential.id}`) return Promise.resolve({ data: { code: 200, data: credential } })
+      if (url === '/knowledge/list') return initialKnowledge.promise
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+
+    expect(wrapper.get('[name="credentialName"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="open-rotate-confirmation"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="open-revoke-confirmation"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="open-scope-editor"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="knowledge-loading-state"]').exists()).toBe(true)
+    initialKnowledge.resolve({ data: { code: 200, data: knowledge } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="open-scope-editor"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('keeps scope editing disabled while a failed knowledge request is retried', async () => {
+    const retryKnowledge = deferred()
+    get.mockImplementation((url) => {
+      if (url === `/tenant/api-credentials/${credential.id}`) return Promise.resolve({ data: { code: 200, data: credential } })
+      if (url === '/knowledge/list') return get.mock.calls.filter(([path]) => path === '/knowledge/list').length === 1
+        ? Promise.reject({ response: { data: { msg: '稍后重试' } } })
+        : retryKnowledge.promise
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+    await wrapper.get('[data-testid="retry-knowledge-load"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="open-scope-editor"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="knowledge-loading-state"]').exists()).toBe(true)
+    retryKnowledge.resolve({ data: { code: 200, data: knowledge } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="open-scope-editor"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('keeps the active dialog outside the hidden background and restores background semantics when it closes', async () => {
+    const wrapper = mount(TenantApiCredentialDetail, { attachTo: document.body, global: { stubs } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-scope-editor"]').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('[role="dialog"][aria-labelledby="scope-editor-title"]')
+    const background = wrapper.get('[data-testid="credential-detail-background"]')
+
+    expect(dialog.element.closest('[aria-hidden="true"]')).toBeNull()
+    expect(background.attributes('aria-hidden')).toBe('true')
+    expect(background.attributes()).toHaveProperty('inert')
+    await dialog.trigger('keydown', { key: 'Escape' })
+    expect(background.attributes('aria-hidden')).toBeUndefined()
+    expect(background.attributes()).not.toHaveProperty('inert')
     wrapper.unmount()
   })
 
@@ -224,5 +299,41 @@ describe('tenant API credential detail', () => {
     await flushPromises()
 
     expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('prevents overlapping dialogs while rotation is pending or a secret is disclosed', async () => {
+    const rotateResponse = deferred()
+    post.mockReturnValueOnce(rotateResponse.promise)
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-rotate-confirmation"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-credential-rotation"]').trigger('click')
+    await wrapper.get('[data-testid="open-revoke-confirmation"]').trigger('click')
+    await wrapper.get('[data-testid="open-scope-editor"]').trigger('click')
+    expect(wrapper.find('[role="dialog"][aria-labelledby="revoke-title"]').exists()).toBe(false)
+    expect(wrapper.find('[role="dialog"][aria-labelledby="scope-editor-title"]').exists()).toBe(false)
+
+    rotateResponse.resolve({ data: { code: 200, data: { credential: { ...credential, id: '02e896a9-33b5-4f9e-b501-a843e6180a37' }, apiKey: 'rag_test_k_EXCLUSIVE.raw-secret-value' } } })
+    await flushPromises()
+    expect(wrapper.find('[role="dialog"][aria-labelledby="rotate-title"]').exists()).toBe(false)
+    expect(wrapper.find('[role="dialog"][aria-labelledby="revoke-title"]').exists()).toBe(false)
+    expect(wrapper.get('[role="dialog"][aria-labelledby="one-time-key-title"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="open-revoke-confirmation"]').trigger('click')
+    expect(wrapper.find('[role="dialog"][aria-labelledby="revoke-title"]').exists()).toBe(false)
+  })
+
+  it('clears a secret and reloads the detail when the credential route parameter updates', async () => {
+    const rawKey = 'rag_test_k_ROUTEUPDATE.raw-secret-value'
+    post.mockResolvedValueOnce({ data: { code: 200, data: { credential: { ...credential, id: '02e896a9-33b5-4f9e-b501-a843e6180a37' }, apiKey: rawKey } } })
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-rotate-confirmation"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-credential-rotation"]').trigger('click')
+    await flushPromises()
+    routeUpdateHandlers.forEach((handler) => handler({ params: { credentialId: '02e896a9-33b5-4f9e-b501-a843e6180a37' } }))
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain(rawKey)
+    expect(get).toHaveBeenCalledWith('/tenant/api-credentials/02e896a9-33b5-4f9e-b501-a843e6180a37')
   })
 })
