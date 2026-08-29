@@ -5,15 +5,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TenantApiCredentials from './TenantApiCredentials.vue'
 import TenantApiDocs from './TenantApiDocs.vue'
 
-const { get, post, error, success, routeLeaveHandlers } = vi.hoisted(() => ({
+const { get, post, patch, remove, error, success, routeLeaveHandlers } = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  patch: vi.fn(),
+  remove: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
   routeLeaveHandlers: [],
 }))
 
-vi.mock('../api/http', () => ({ http: { get, post } }))
+vi.mock('../api/http', () => ({ http: { get, post, patch, delete: remove } }))
 vi.mock('vue-router', () => ({ onBeforeRouteLeave: (handler) => routeLeaveHandlers.push(handler) }))
 vi.mock('element-plus', () => ({ ElMessage: { error, success } }))
 
@@ -71,6 +73,8 @@ describe('tenant API credential list and creation', () => {
   beforeEach(() => {
     get.mockReset()
     post.mockReset()
+    patch.mockReset()
+    remove.mockReset()
     error.mockReset()
     success.mockReset()
     routeLeaveHandlers.length = 0
@@ -87,6 +91,54 @@ describe('tenant API credential list and creation', () => {
     expect(wrapper.text()).toContain('rag_test_k_7F3K••••9vQ2')
     expect(wrapper.text()).toContain('启用')
     expect(wrapper.text()).not.toContain('must-never-render-from-a-list-response')
+  })
+
+  it('disables and re-enables a credential directly from its list row', async () => {
+    patch
+      .mockResolvedValueOnce({ data: { code: 200, data: { ...credential, status: 'disabled' } } })
+      .mockResolvedValueOnce({ data: { code: 200, data: { ...credential, status: 'active' } } })
+    const wrapper = mount(TenantApiCredentials, { global: { stubs: { 'router-link': routerLinkStub } } })
+    await flushPromises()
+
+    await wrapper.get(`[data-testid="toggle-credential-${credential.id}"]`).trigger('click')
+    await flushPromises()
+    expect(patch).toHaveBeenNthCalledWith(1, `/tenant/api-credentials/${credential.id}`, { status: 'disabled' })
+    expect(wrapper.text()).toContain('已停用')
+
+    await wrapper.get(`[data-testid="toggle-credential-${credential.id}"]`).trigger('click')
+    await flushPromises()
+    expect(patch).toHaveBeenNthCalledWith(2, `/tenant/api-credentials/${credential.id}`, { status: 'active' })
+    expect(wrapper.text()).toContain('启用')
+  })
+
+  it('removes a deleted credential from the list immediately after confirmation', async () => {
+    remove.mockResolvedValueOnce({ status: 204 })
+    const wrapper = mount(TenantApiCredentials, { attachTo: document.body, global: { stubs: { 'router-link': routerLinkStub } } })
+    await flushPromises()
+
+    await wrapper.get(`[data-testid="delete-credential-${credential.id}"]`).trigger('click')
+    expect(wrapper.get('[role="dialog"][aria-labelledby="delete-list-title"]').text()).toContain('删除后立即失效')
+    await wrapper.get('[data-testid="confirm-list-credential-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(remove).toHaveBeenCalledWith(`/tenant/api-credentials/${credential.id}`)
+    expect(wrapper.text()).not.toContain('客服问答 Agent')
+    expect(wrapper.text()).toContain('还没有 API 凭证')
+    expect(success).toHaveBeenCalledWith('凭证已删除')
+    wrapper.unmount()
+  })
+
+  it('keeps the credential visible when list deletion fails', async () => {
+    remove.mockRejectedValueOnce({ response: { data: { msg: '删除失败，请重试' } } })
+    const wrapper = mount(TenantApiCredentials, { global: { stubs: { 'router-link': routerLinkStub } } })
+    await flushPromises()
+
+    await wrapper.get(`[data-testid="delete-credential-${credential.id}"]`).trigger('click')
+    await wrapper.get('[data-testid="confirm-list-credential-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('客服问答 Agent')
+    expect(error).toHaveBeenCalledWith('删除失败，请重试')
   })
 
   it('keeps the credential list usable when knowledge loading fails', async () => {

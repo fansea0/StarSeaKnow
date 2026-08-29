@@ -109,6 +109,9 @@ public class ApiCredentialService {
         }
         List<ApiCredentialView> result = new ArrayList<>(rows.size());
         for (ApiCredential row : rows) {
+            if (row == null || row.getDeletedAt() != null) {
+                continue;
+            }
             result.add(toView(row, loadKnowledgePublicIds(row.getId())));
         }
         return List.copyOf(result);

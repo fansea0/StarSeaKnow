@@ -485,6 +485,18 @@ class ApiCredentialServiceTest {
         assertThat(query.getValue().getExpression().getSqlSegment()).contains("deleted_at");
     }
 
+    @Test
+    void listDefensivelyDropsDeletedRowsReturnedByTheMapper() {
+        ApiCredential deleted = credential(41L, "deleted-key-id", 7L);
+        deleted.setDeletedAt(OffsetDateTime.parse("2029-01-01T00:00:00Z"));
+        when(credentials.selectList(any())).thenReturn(List.of(deleted));
+
+        List<ApiCredentialService.ApiCredentialView> result = service.list(tenantAdminContext());
+
+        assertThat(result).isEmpty();
+        verify(credentialKnowledge, never()).selectList(any());
+    }
+
     private ApiCredentialService.CreateCredentialCommand createCommand(Set<UUID> scope) {
         return new ApiCredentialService.CreateCredentialCommand(
                 "客服检索", "RAG_RETRIEVAL", "test", scope, List.of("10.0.0.0/24", "2001:db8::/64"),

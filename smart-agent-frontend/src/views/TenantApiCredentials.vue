@@ -41,6 +41,7 @@
               <th scope="col">知识库范围</th>
               <th scope="col">状态</th>
               <th scope="col">最近使用</th>
+              <th scope="col">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -55,6 +56,14 @@
               <td>{{ item.knowledgeIds.length }} 个知识库</td>
               <td><span class="credential-status" :data-status="item.status">{{ displayStatus(item.status) }}</span></td>
               <td>{{ formatDate(item.lastUsedAt) }}</td>
+              <td>
+                <div class="credential-table__actions">
+                  <button class="sea-button sea-button--compact" :data-testid="`toggle-credential-${item.id}`" type="button" :disabled="item.status === 'revoked' || Boolean(actingCredentialId)" @click="toggleCredentialStatus(item)">
+                    {{ actingCredentialId === item.id ? '处理中…' : item.status === 'disabled' ? '启用' : item.status === 'revoked' ? '已吊销' : '停用' }}
+                  </button>
+                  <button class="sea-button sea-button--compact sea-button--danger" :data-testid="`delete-credential-${item.id}`" type="button" :disabled="Boolean(actingCredentialId)" @click="openDeleteConfirmation(item)">删除</button>
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -166,6 +175,22 @@
         >确认已保存并关闭</button>
       </section>
     </div>
+
+    <div v-if="deletingCredential" class="modal-layer" role="presentation">
+      <section ref="deleteDialog" class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="delete-list-title" tabindex="-1" @keydown="handleDismissableDialogKey($event, closeDeleteConfirmation)">
+        <header class="sea-modal__heading">
+          <div>
+            <h2 id="delete-list-title">删除 API 凭证</h2>
+            <p>“{{ deletingCredential.name }}”删除后立即失效并从列表隐藏，此操作不可撤销。</p>
+          </div>
+          <button class="icon-button" type="button" aria-label="关闭删除确认" :disabled="deleting" @click="closeDeleteConfirmation">×</button>
+        </header>
+        <footer class="sea-modal__actions">
+          <button class="sea-button" type="button" :disabled="deleting" @click="closeDeleteConfirmation">取消</button>
+          <button class="sea-button sea-button--danger" data-testid="confirm-list-credential-delete" type="button" :disabled="deleting" @click="deleteCredential">{{ deleting ? '正在删除…' : '确认删除' }}</button>
+        </footer>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -198,10 +223,14 @@ const saveConfirmed = ref(false)
 const createDialog = ref(null)
 const secretDialog = ref(null)
 const secretCopyButton = ref(null)
+const deleteDialog = ref(null)
+const deletingCredential = ref(null)
+const deleting = ref(false)
+const actingCredentialId = ref('')
 const createForm = reactive(defaultCreateForm())
 let opener = null
 let lifecycleGeneration = 0
-const activeDialog = computed(() => showCreate.value || Boolean(oneTimeKey.value))
+const activeDialog = computed(() => showCreate.value || Boolean(oneTimeKey.value) || Boolean(deletingCredential.value))
 
 const filteredCredentials = computed(() => {
   const query = searchQuery.value.toLocaleLowerCase()
@@ -269,6 +298,60 @@ function restoreOpener() { const target = opener; opener = null; nextTick(() => 
 function focusables(container) { return [...(container?.querySelectorAll('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') || [])] }
 function trapFocus(event) { if (event.key !== 'Tab') return; const items = focusables(event.currentTarget); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }; if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() } }
 function handleDismissableDialogKey(event, close) { if (event.key === 'Escape') { event.preventDefault(); close(); return }; trapFocus(event) }
+
+async function toggleCredentialStatus(item) {
+  if (!item?.id || item.status === 'revoked' || actingCredentialId.value) return
+  const status = item.status === 'disabled' ? 'active' : 'disabled'
+  const generation = lifecycleGeneration
+  actingCredentialId.value = item.id
+  try {
+    const response = await http.patch(`/tenant/api-credentials/${item.id}`, { status })
+    if (generation !== lifecycleGeneration) return
+    const updated = safeCredential(response.data?.data)
+    credentials.value = credentials.value.map((current) => current.id === item.id ? updated : current)
+    ElMessage.success(status === 'active' ? '凭证已启用' : '凭证已停用')
+  } catch (cause) {
+    if (generation === lifecycleGeneration) ElMessage.error(cause.response?.data?.msg || '更新凭证状态失败')
+  } finally {
+    if (generation === lifecycleGeneration) actingCredentialId.value = ''
+  }
+}
+
+function openDeleteConfirmation(item) {
+  if (!item?.id || actingCredentialId.value) return
+  opener = document.activeElement
+  deletingCredential.value = item
+  nextTick(() => deleteDialog.value?.querySelector('[data-testid="confirm-list-credential-delete"]')?.focus())
+}
+
+function closeDeleteConfirmation() {
+  if (deleting.value) return
+  deletingCredential.value = null
+  restoreOpener()
+}
+
+async function deleteCredential() {
+  const item = deletingCredential.value
+  if (!item?.id || deleting.value || actingCredentialId.value) return
+  const generation = lifecycleGeneration
+  deleting.value = true
+  actingCredentialId.value = item.id
+  try {
+    await http.delete(`/tenant/api-credentials/${item.id}`)
+    if (generation !== lifecycleGeneration) return
+    credentials.value = credentials.value.filter((current) => current.id !== item.id)
+    deletingCredential.value = null
+    opener = null
+    ElMessage.success('凭证已删除')
+  } catch (cause) {
+    if (generation === lifecycleGeneration) ElMessage.error(cause.response?.data?.msg || '删除凭证失败')
+  } finally {
+    if (generation === lifecycleGeneration) {
+      deleting.value = false
+      actingCredentialId.value = ''
+    }
+  }
+}
 
 function parseCidrs(value) {
   return String(value || '')
@@ -354,7 +437,14 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN', { hour12: false })
 }
 
-function invalidateDisclosureResponses() { lifecycleGeneration += 1; clearDisclosure() }
+function invalidateDisclosureResponses() {
+  lifecycleGeneration += 1
+  clearDisclosure()
+  deletingCredential.value = null
+  deleting.value = false
+  actingCredentialId.value = ''
+  opener = null
+}
 onMounted(loadPage)
 onBeforeRouteLeave(invalidateDisclosureResponses)
 onBeforeUnmount(invalidateDisclosureResponses)
@@ -372,13 +462,14 @@ onBeforeUnmount(invalidateDisclosureResponses)
 .credential-toolbar input, .form-field input, .form-field select, .form-field textarea { width: 100%; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--sea-muted) 32%, var(--sea-mist)); border-radius: 7px; background: var(--sea-paper); color: var(--sea-deep); font: inherit; }
 .credential-toolbar input { min-height: 38px; padding: 8px 11px; }
 .credential-table-wrap { overflow-x: auto; }
-.credential-table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.credential-table { width: 100%; min-width: 900px; border-collapse: collapse; }
 .credential-table th { padding: 12px 18px; background: color-mix(in srgb, var(--sea-mist) 55%, var(--sea-paper)); color: var(--sea-muted); font-size: 11px; font-weight: 700; letter-spacing: .03em; text-align: left; }
 .credential-table td { padding: 15px 18px; border-top: 1px solid color-mix(in srgb, var(--sea-muted) 13%, var(--sea-mist)); color: color-mix(in srgb, var(--sea-deep) 74%, var(--sea-muted)); font-size: 13px; }
 .credential-table tbody tr:hover { background: color-mix(in srgb, var(--sea-signal) 5%, var(--sea-paper)); }
 .credential-table__link { display: block; margin-bottom: 5px; color: var(--sea-deep); font-size: 14px; font-weight: 750; text-decoration: none; }
 .credential-table__link:hover { color: var(--sea-signal); }
 .credential-table code { color: var(--sea-muted); font-size: 11px; }
+.credential-table__actions { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
 .credential-tag, .credential-status { display: inline-flex; align-items: center; min-height: 23px; padding: 0 8px; border-radius: 999px; background: color-mix(in srgb, var(--sea-signal) 10%, var(--sea-paper)); color: color-mix(in srgb, var(--sea-deep) 68%, var(--sea-signal)); font-size: 11px; font-weight: 700; }
 .credential-status::before { width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; content: ''; }
 .credential-status[data-status='revoked'], .credential-status[data-status='disabled'] { background: color-mix(in srgb, var(--sea-sand) 25%, var(--sea-paper)); color: color-mix(in srgb, var(--sea-deep) 55%, var(--sea-muted)); }
@@ -392,6 +483,8 @@ onBeforeUnmount(invalidateDisclosureResponses)
 .sea-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid color-mix(in srgb, var(--sea-signal) 30%, transparent); outline-offset: 1px; }
 .sea-button:disabled { cursor: not-allowed; opacity: .48; }
 .sea-button--primary { border-color: var(--sea-signal); background: var(--sea-signal); color: var(--sea-paper); box-shadow: 0 8px 20px color-mix(in srgb, var(--sea-signal) 18%, transparent); }
+.sea-button--compact { min-height: 31px; padding: 5px 10px; font-size: 12px; }
+.sea-button--danger { border-color: color-mix(in srgb, var(--sea-sand) 62%, var(--sea-mist)); background: color-mix(in srgb, var(--sea-sand) 16%, var(--sea-paper)); }
 .sea-button--full { width: 100%; margin-top: 12px; }
 .modal-layer { position: fixed; z-index: 100; inset: 0; display: grid; overflow-y: auto; place-items: center; padding: 24px; background: color-mix(in srgb, var(--sea-deep) 48%, transparent); }
 .modal-layer--secret { z-index: 110; background: color-mix(in srgb, var(--sea-deep) 68%, transparent); }
