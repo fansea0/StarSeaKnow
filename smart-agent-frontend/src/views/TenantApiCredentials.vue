@@ -1,5 +1,5 @@
 <template>
-  <main class="credential-page" aria-labelledby="credential-list-title">
+  <main class="credential-page" aria-labelledby="credential-list-title" :aria-hidden="activeDialog ? 'true' : undefined">
     <header class="credential-page__heading">
       <div>
         <span class="credential-page__eyebrow">EXTERNAL ACCESS</span>
@@ -60,15 +60,18 @@
         <p v-if="!filteredCredentials.length" class="credential-table__empty">没有匹配的凭证。</p>
       </div>
     </section>
+    <aside v-if="knowledgeError && !loading" class="knowledge-warning" data-testid="knowledge-load-warning" role="status">
+      <span>知识库范围暂不可编辑：{{ knowledgeError }}</span><button class="sea-button" data-testid="retry-knowledge-load" type="button" @click="loadKnowledgeBases">重试知识库</button>
+    </aside>
 
     <div v-if="showCreate" class="modal-layer" role="presentation">
-      <section class="sea-modal sea-modal--wide" role="dialog" aria-modal="true" aria-labelledby="create-credential-title">
+      <section ref="createDialog" class="sea-modal sea-modal--wide" role="dialog" aria-modal="true" aria-labelledby="create-credential-title" tabindex="-1" @keydown="handleDismissableDialogKey($event, closeCreate)">
         <header class="sea-modal__heading">
           <div>
             <h2 id="create-credential-title">创建 API 凭证</h2>
             <p>当前版本仅创建 RAG 检索凭证。完整 Key 只会显示一次。</p>
           </div>
-          <button class="icon-button" type="button" aria-label="关闭创建凭证" @click="showCreate = false">×</button>
+          <button class="icon-button" type="button" aria-label="关闭创建凭证" @click="closeCreate">×</button>
         </header>
 
         <form class="credential-form" @submit.prevent="createCredential">
@@ -93,13 +96,13 @@
             </select>
           </label>
 
-          <fieldset class="form-field knowledge-options">
+          <fieldset class="form-field knowledge-options" :disabled="knowledgeLoading || Boolean(knowledgeError)">
             <legend>授权知识库</legend>
             <label v-for="item in knowledgeBases" :key="item.publicId">
               <input v-model="createForm.knowledgeIds" type="checkbox" :value="item.publicId" />
               <span><strong>{{ item.name }}</strong><small>{{ item.description || '暂无描述' }}</small></span>
             </label>
-            <p v-if="!knowledgeBases.length">当前租户没有可授权的知识库。</p>
+            <p v-if="knowledgeError" data-testid="knowledge-scope-unavailable">知识库暂不可用，请重试后编辑范围。</p><p v-else-if="!knowledgeBases.length">当前租户没有可授权的知识库。</p>
           </fieldset>
 
           <div class="form-grid">
@@ -128,7 +131,7 @@
           </label>
 
           <footer class="sea-modal__actions">
-            <button class="sea-button" type="button" @click="showCreate = false">取消</button>
+            <button class="sea-button" type="button" @click="closeCreate">取消</button>
             <button class="sea-button sea-button--primary" data-testid="submit-create-credential" type="submit" :disabled="creating">
               {{ creating ? '正在创建…' : '创建并显示 Key' }}
             </button>
@@ -138,14 +141,14 @@
     </div>
 
     <div v-if="oneTimeKey" class="modal-layer modal-layer--secret" role="presentation">
-      <section class="sea-modal secret-disclosure" role="dialog" aria-modal="true" aria-labelledby="one-time-key-title">
+      <section ref="secretDialog" class="sea-modal secret-disclosure" role="dialog" aria-modal="true" aria-labelledby="one-time-key-title" tabindex="-1" @keydown="trapFocus">
         <span class="secret-disclosure__signal" aria-hidden="true">ONE TIME</span>
         <h2 id="one-time-key-title">API Key 已创建</h2>
         <p>请立即复制并保存到服务端密钥管理工具。离开此页面后无法再次查看。</p>
         <div class="secret-box">
           <span>{{ disclosureCredential?.environment === 'live' ? '生产凭证' : '测试凭证' }}</span>
           <code data-testid="one-time-api-key">{{ oneTimeKey }}</code>
-          <button class="sea-button" type="button" @click="copyKey">{{ copied ? '已复制' : '复制 Key' }}</button>
+          <button ref="secretCopyButton" class="sea-button" data-testid="copy-one-time-key" type="button" @click="copyKey">{{ copied ? '已复制' : '复制 Key' }}</button>
         </div>
         <label class="save-confirmation">
           <input v-model="saveConfirmed" type="checkbox" />
@@ -166,6 +169,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { http } from '../api/http'
 
@@ -178,6 +182,8 @@ const SAFE_CREDENTIAL_FIELDS = [
 
 const credentials = ref([])
 const knowledgeBases = ref([])
+const knowledgeError = ref('')
+const knowledgeLoading = ref(false)
 const loading = ref(true)
 const loadError = ref('')
 const searchQuery = ref('')
@@ -187,8 +193,13 @@ const oneTimeKey = ref('')
 const disclosureCredential = ref(null)
 const copied = ref(false)
 const saveConfirmed = ref(false)
-const confirmKeyButton = ref(null)
+const createDialog = ref(null)
+const secretDialog = ref(null)
+const secretCopyButton = ref(null)
 const createForm = reactive(defaultCreateForm())
+let opener = null
+let lifecycleGeneration = 0
+const activeDialog = computed(() => showCreate.value || Boolean(oneTimeKey.value))
 
 const filteredCredentials = computed(() => {
   const query = searchQuery.value.toLocaleLowerCase()
@@ -223,16 +234,11 @@ async function loadPage() {
   loading.value = true
   loadError.value = ''
   try {
-    const [credentialResponse, knowledgeResponse] = await Promise.all([
-      http.get('/tenant/api-credentials'),
-      http.get('/knowledge/list'),
-    ])
+    void loadKnowledgeBases()
+    const credentialResponse = await http.get('/tenant/api-credentials')
     credentials.value = Array.isArray(credentialResponse.data?.data)
       ? credentialResponse.data.data.map(safeCredential)
       : []
-    knowledgeBases.value = (knowledgeResponse.data?.data || [])
-      .filter((item) => typeof item.publicId === 'string')
-      .map((item) => ({ publicId: item.publicId, name: item.name, description: item.description }))
   } catch (cause) {
     loadError.value = cause.response?.data?.msg || '请检查网络后重试。'
   } finally {
@@ -240,10 +246,27 @@ async function loadPage() {
   }
 }
 
+async function loadKnowledgeBases() {
+  knowledgeLoading.value = true
+  knowledgeError.value = ''
+  try {
+    const response = await http.get('/knowledge/list')
+    knowledgeBases.value = (response.data?.data || []).filter((item) => typeof item.publicId === 'string').map((item) => ({ publicId: item.publicId, name: item.name, description: item.description }))
+  } catch (cause) { knowledgeBases.value = []; knowledgeError.value = cause.response?.data?.msg || '请检查知识库后重试。' } finally { knowledgeLoading.value = false }
+}
+
 function openCreate() {
+  opener = document.activeElement
   Object.assign(createForm, defaultCreateForm())
   showCreate.value = true
+  nextTick(() => createDialog.value?.querySelector('[name="credentialName"]')?.focus())
 }
+
+function closeCreate() { showCreate.value = false; restoreOpener() }
+function restoreOpener() { const target = opener; opener = null; nextTick(() => target?.focus?.()) }
+function focusables(container) { return [...(container?.querySelectorAll('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') || [])] }
+function trapFocus(event) { if (event.key !== 'Tab') return; const items = focusables(event.currentTarget); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }; if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() } }
+function handleDismissableDialogKey(event, close) { if (event.key === 'Escape') { event.preventDefault(); close(); return }; trapFocus(event) }
 
 function parseCidrs(value) {
   return String(value || '')
@@ -258,6 +281,7 @@ async function createCredential() {
     return
   }
   creating.value = true
+  const generation = lifecycleGeneration
   try {
     const response = await http.post('/tenant/api-credentials', {
       name: createForm.name,
@@ -270,6 +294,7 @@ async function createCredential() {
       maxConcurrency: Number(createForm.maxConcurrency),
       expiresAt: createForm.expiresAt || null,
     })
+    if (generation !== lifecycleGeneration) return
     const result = response.data?.data || {}
     const created = safeCredential(result.credential)
     credentials.value = [created, ...credentials.value.filter((item) => item.id !== created.id)]
@@ -287,7 +312,7 @@ function discloseKey(apiKey, item) {
   disclosureCredential.value = item
   copied.value = false
   saveConfirmed.value = false
-  nextTick(() => confirmKeyButton.value?.focus())
+  nextTick(() => secretCopyButton.value?.focus())
 }
 
 async function copyKey() {
@@ -299,6 +324,7 @@ async function copyKey() {
 function acknowledgeKey() {
   if (!saveConfirmed.value) return
   clearDisclosure()
+  restoreOpener()
 }
 
 function clearDisclosure() {
@@ -326,8 +352,10 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN', { hour12: false })
 }
 
+function invalidateDisclosureResponses() { lifecycleGeneration += 1; clearDisclosure() }
 onMounted(loadPage)
-onBeforeUnmount(clearDisclosure)
+onBeforeRouteLeave(invalidateDisclosureResponses)
+onBeforeUnmount(invalidateDisclosureResponses)
 </script>
 
 <style scoped>
@@ -356,6 +384,7 @@ onBeforeUnmount(clearDisclosure)
 .credential-state { display: grid; justify-items: center; gap: 8px; min-height: 220px; box-sizing: border-box; align-content: center; padding: 28px; color: var(--sea-muted); text-align: center; }
 .credential-state strong { color: var(--sea-deep); font-size: 18px; }
 .credential-state--error strong { color: color-mix(in srgb, var(--sea-deep) 68%, var(--sea-sand)); }
+.knowledge-warning { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 11px 13px; border-left: 3px solid var(--sea-sand); border-radius: 7px; background: color-mix(in srgb, var(--sea-sand) 13%, var(--sea-paper)); color: var(--sea-muted); font-size: 13px; }
 .sea-button { min-height: 38px; padding: 8px 14px; border: 1px solid color-mix(in srgb, var(--sea-muted) 30%, var(--sea-mist)); border-radius: 7px; background: var(--sea-paper); color: var(--sea-deep); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
 .sea-button:hover { border-color: color-mix(in srgb, var(--sea-signal) 54%, var(--sea-mist)); }
 .sea-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid color-mix(in srgb, var(--sea-signal) 30%, transparent); outline-offset: 1px; }

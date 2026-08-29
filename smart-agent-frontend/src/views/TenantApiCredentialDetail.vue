@@ -1,5 +1,5 @@
 <template>
-  <main class="credential-detail" aria-labelledby="credential-detail-title">
+  <main class="credential-detail" aria-labelledby="credential-detail-title" :aria-hidden="activeDialog ? 'true' : undefined">
     <header class="credential-detail__heading">
       <div>
         <router-link class="back-link" to="/tenant/api-credentials">← API 凭证</router-link>
@@ -39,8 +39,9 @@
       </section>
 
       <section class="detail-card" aria-labelledby="scope-title">
-        <header><div><span class="eyebrow">AUTHORIZATION</span><h2 id="scope-title">知识库范围</h2></div><button class="sea-button" data-testid="open-scope-editor" type="button" @click="openScopeEditor">编辑范围</button></header>
+        <header><div><span class="eyebrow">AUTHORIZATION</span><h2 id="scope-title">知识库范围</h2></div><button class="sea-button" data-testid="open-scope-editor" type="button" :disabled="Boolean(knowledgeError)" @click="openScopeEditor">编辑范围</button></header>
         <p class="card-copy">外部检索使用此完整授权集合。调用方不能通过请求体选择知识库。</p>
+        <p v-if="knowledgeError" class="knowledge-warning" data-testid="knowledge-load-warning" role="status">知识库范围暂不可编辑：{{ knowledgeError }} <button class="sea-button" type="button" @click="loadKnowledgeBases">重试知识库</button></p>
         <ul class="scope-list">
           <li v-for="id in credential.knowledgeIds" :key="id">{{ knowledgeName(id) }}<code>{{ id }}</code></li>
           <li v-if="!credential.knowledgeIds.length" class="scope-list__empty">尚未授权知识库；调用会返回空范围。</li>
@@ -51,33 +52,33 @@
         <header><div><span class="eyebrow">LIFECYCLE</span><h2 id="lifecycle-title">轮换与吊销</h2></div></header>
         <p class="card-copy">轮换会立即吊销当前 Key，并创建一把继承当前设置与范围的新凭证。</p>
         <div class="lifecycle-actions">
-          <button class="sea-button" data-testid="open-rotate-confirmation" type="button" :disabled="credential.status === 'revoked'" @click="showRotateConfirmation = true">轮换 Key</button>
-          <button class="sea-button sea-button--danger" data-testid="open-revoke-confirmation" type="button" :disabled="credential.status === 'revoked'" @click="showRevokeConfirmation = true">吊销凭证</button>
+          <button class="sea-button" data-testid="open-rotate-confirmation" type="button" :disabled="credential.status === 'revoked'" @click="openRotateConfirmation">轮换 Key</button>
+          <button class="sea-button sea-button--danger" data-testid="open-revoke-confirmation" type="button" :disabled="credential.status === 'revoked'" @click="openRevokeConfirmation">吊销凭证</button>
         </div>
       </section>
     </template>
 
     <div v-if="showScopeEditor" class="modal-layer" role="presentation">
-      <section class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="scope-editor-title">
-        <header class="modal-heading"><h2 id="scope-editor-title">替换知识库范围</h2><button class="icon-button" type="button" aria-label="关闭范围编辑" @click="showScopeEditor = false">×</button></header>
+      <section ref="scopeDialog" class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="scope-editor-title" tabindex="-1" @keydown="handleDismissableDialogKey($event, closeScopeEditor)">
+        <header class="modal-heading"><h2 id="scope-editor-title">替换知识库范围</h2><button class="icon-button" type="button" aria-label="关闭范围编辑" @click="closeScopeEditor">×</button></header>
         <p class="card-copy">保存会以当前选择完整替换已有范围。</p>
         <fieldset class="knowledge-options"><legend>授权知识库</legend><label v-for="item in knowledgeBases" :key="item.publicId"><input v-model="scopeSelection" type="checkbox" :value="item.publicId" /><span><strong>{{ item.name }}</strong><small>{{ item.publicId }}</small></span></label><p v-if="!knowledgeBases.length">当前租户没有可授权的知识库。</p></fieldset>
-        <footer class="modal-actions"><button class="sea-button" type="button" @click="showScopeEditor = false">取消</button><button class="sea-button sea-button--primary" data-testid="save-credential-scope" type="button" :disabled="savingScope" @click="saveScope">{{ savingScope ? '正在保存…' : '替换范围' }}</button></footer>
+        <footer class="modal-actions"><button class="sea-button" type="button" @click="closeScopeEditor">取消</button><button class="sea-button sea-button--primary" data-testid="save-credential-scope" type="button" :disabled="savingScope" @click="saveScope">{{ savingScope ? '正在保存…' : '替换范围' }}</button></footer>
       </section>
     </div>
 
     <div v-if="showRotateConfirmation" class="modal-layer" role="presentation">
-      <section class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="rotate-title"><header class="modal-heading"><h2 id="rotate-title">轮换这把 Key？</h2></header><p class="card-copy">当前 Key 将立即失效，新 Key 仅显示一次。</p><footer class="modal-actions"><button class="sea-button" type="button" @click="showRotateConfirmation = false">取消</button><button class="sea-button sea-button--primary" data-testid="confirm-credential-rotation" type="button" :disabled="rotating" @click="rotateCredential">{{ rotating ? '正在轮换…' : '轮换并显示新 Key' }}</button></footer></section>
+      <section ref="rotateDialog" class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="rotate-title" tabindex="-1" @keydown="handleDismissableDialogKey($event, closeRotateConfirmation)"><header class="modal-heading"><h2 id="rotate-title">轮换这把 Key？</h2></header><p class="card-copy">当前 Key 将立即失效，新 Key 仅显示一次。</p><footer class="modal-actions"><button class="sea-button" type="button" @click="closeRotateConfirmation">取消</button><button class="sea-button sea-button--primary" data-testid="confirm-credential-rotation" type="button" :disabled="rotating" @click="rotateCredential">{{ rotating ? '正在轮换…' : '轮换并显示新 Key' }}</button></footer></section>
     </div>
 
     <div v-if="showRevokeConfirmation" class="modal-layer" role="presentation">
-      <section class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="revoke-title"><header class="modal-heading"><h2 id="revoke-title">吊销这把凭证？</h2></header><p class="card-copy">吊销后无法恢复；如仍需要访问，请创建或轮换新的凭证。</p><footer class="modal-actions"><button class="sea-button" type="button" @click="showRevokeConfirmation = false">取消</button><button class="sea-button sea-button--danger" data-testid="confirm-credential-revoke" type="button" :disabled="revoking" @click="revokeCredential">{{ revoking ? '正在吊销…' : '确认吊销' }}</button></footer></section>
+      <section ref="revokeDialog" class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="revoke-title" tabindex="-1" @keydown="handleDismissableDialogKey($event, closeRevokeConfirmation)"><header class="modal-heading"><h2 id="revoke-title">吊销这把凭证？</h2></header><p class="card-copy">吊销后无法恢复；如仍需要访问，请创建或轮换新的凭证。</p><footer class="modal-actions"><button class="sea-button" type="button" @click="closeRevokeConfirmation">取消</button><button class="sea-button sea-button--danger" data-testid="confirm-credential-revoke" type="button" :disabled="revoking" @click="revokeCredential">{{ revoking ? '正在吊销…' : '确认吊销' }}</button></footer></section>
     </div>
 
     <div v-if="oneTimeKey" class="modal-layer modal-layer--secret" role="presentation">
-      <section class="sea-modal secret-disclosure" role="dialog" aria-modal="true" aria-labelledby="one-time-key-title">
+      <section ref="secretDialog" class="sea-modal secret-disclosure" role="dialog" aria-modal="true" aria-labelledby="one-time-key-title" tabindex="-1" @keydown="trapFocus">
         <span class="eyebrow">ONE TIME</span><h2 id="one-time-key-title">新的 API Key 已生成</h2><p>请立即复制并保存到服务端密钥管理工具。离开此页面后无法再次查看。</p>
-        <div class="secret-box"><code data-testid="one-time-api-key">{{ oneTimeKey }}</code><button class="sea-button" type="button" @click="copyKey">{{ copied ? '已复制' : '复制 Key' }}</button></div>
+        <div class="secret-box"><code data-testid="one-time-api-key">{{ oneTimeKey }}</code><button ref="secretCopyButton" class="sea-button" data-testid="copy-one-time-key" type="button" @click="copyKey">{{ copied ? '已复制' : '复制 Key' }}</button></div>
         <label class="save-confirmation"><input v-model="saveConfirmed" type="checkbox" /><span>我已将 Key 保存到安全位置</span></label>
         <button class="sea-button sea-button--primary sea-button--full" data-testid="confirm-key-saved" type="button" :disabled="!saveConfirmed" @click="clearDisclosure">确认已保存并关闭</button>
       </section>
@@ -86,7 +87,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { http } from '../api/http'
@@ -96,6 +97,7 @@ const router = useRouter()
 const credential = reactive({ knowledgeIds: [], allowedIpCidrs: [] })
 const form = reactive({ name: '', description: '', allowedIpCidrs: '', requestsPerMinute: 60, burstCapacity: 10, maxConcurrency: 5, expiresAt: '' })
 const knowledgeBases = ref([])
+const knowledgeError = ref('')
 const scopeSelection = ref([])
 const loading = ref(true)
 const loadError = ref('')
@@ -109,6 +111,10 @@ const showRevokeConfirmation = ref(false)
 const oneTimeKey = ref('')
 const copied = ref(false)
 const saveConfirmed = ref(false)
+const scopeDialog = ref(null), rotateDialog = ref(null), revokeDialog = ref(null), secretDialog = ref(null), secretCopyButton = ref(null)
+let opener = null
+let lifecycleGeneration = 0
+const activeDialog = computed(() => showScopeEditor.value || showRotateConfirmation.value || showRevokeConfirmation.value || Boolean(oneTimeKey.value))
 
 function safeCredential(source = {}) {
   return {
@@ -130,11 +136,12 @@ function errorMessage(cause, fallback) { return cause.response?.data?.msg || fal
 async function loadPage() {
   loading.value = true; loadError.value = ''
   try {
-    const [credentialResponse, knowledgeResponse] = await Promise.all([http.get(`/tenant/api-credentials/${route.params.credentialId}`), http.get('/knowledge/list')])
+    void loadKnowledgeBases()
+    const credentialResponse = await http.get(`/tenant/api-credentials/${route.params.credentialId}`)
     applyCredential(credentialResponse.data?.data)
-    knowledgeBases.value = (knowledgeResponse.data?.data || []).filter((item) => typeof item.publicId === 'string').map((item) => ({ publicId: item.publicId, name: item.name || '未命名知识库' }))
   } catch (cause) { loadError.value = errorMessage(cause, '请检查网络后重试。') } finally { loading.value = false }
 }
+async function loadKnowledgeBases() { knowledgeError.value = ''; try { const response = await http.get('/knowledge/list'); knowledgeBases.value = (response.data?.data || []).filter((item) => typeof item.publicId === 'string').map((item) => ({ publicId: item.publicId, name: item.name || '未命名知识库' })) } catch (cause) { knowledgeBases.value = []; knowledgeError.value = errorMessage(cause, '请检查知识库后重试。') } }
 async function saveMetadata() {
   saving.value = true
   try {
@@ -142,30 +149,44 @@ async function saveMetadata() {
     applyCredential(response.data?.data); ElMessage.success('凭证设置已保存')
   } catch (cause) { ElMessage.error(errorMessage(cause, '保存凭证设置失败')) } finally { saving.value = false }
 }
-function openScopeEditor() { scopeSelection.value = [...credential.knowledgeIds]; showScopeEditor.value = true }
+function captureOpener() { opener = document.activeElement }
+function restoreOpener() { const target = opener; opener = null; nextTick(() => target?.focus?.()) }
+function focusables(container) { return [...(container?.querySelectorAll('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') || [])] }
+function trapFocus(event) { if (event.key !== 'Tab') return; const items = focusables(event.currentTarget); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }; if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() } }
+function handleDismissableDialogKey(event, close) { if (event.key === 'Escape') { event.preventDefault(); close(); return }; trapFocus(event) }
+function openScopeEditor() { captureOpener(); scopeSelection.value = [...credential.knowledgeIds]; showScopeEditor.value = true; nextTick(() => scopeDialog.value?.querySelector('input[type="checkbox"]')?.focus()) }
+function openRotateConfirmation() { captureOpener(); showRotateConfirmation.value = true; nextTick(() => rotateDialog.value?.querySelector('button:not(:disabled)')?.focus()) }
+function openRevokeConfirmation() { captureOpener(); showRevokeConfirmation.value = true; nextTick(() => revokeDialog.value?.querySelector('button:not(:disabled)')?.focus()) }
+function closeScopeEditor() { showScopeEditor.value = false; restoreOpener() }
+function closeRotateConfirmation() { showRotateConfirmation.value = false; restoreOpener() }
+function closeRevokeConfirmation() { showRevokeConfirmation.value = false; restoreOpener() }
 async function saveScope() {
   savingScope.value = true
-  try { const response = await http.put(`/tenant/api-credentials/${credential.id}/knowledge-bases`, { knowledgeIds: [...scopeSelection.value] }); applyCredential(response.data?.data); showScopeEditor.value = false; ElMessage.success('知识库范围已替换') } catch (cause) { ElMessage.error(errorMessage(cause, '替换知识库范围失败')) } finally { savingScope.value = false }
+  try { const response = await http.put(`/tenant/api-credentials/${credential.id}/knowledge-bases`, { knowledgeIds: [...scopeSelection.value] }); applyCredential(response.data?.data); closeScopeEditor(); ElMessage.success('知识库范围已替换') } catch (cause) { ElMessage.error(errorMessage(cause, '替换知识库范围失败')) } finally { savingScope.value = false }
 }
 async function rotateCredential() {
   rotating.value = true
+  const generation = lifecycleGeneration
   try {
     const response = await http.post(`/tenant/api-credentials/${credential.id}/rotate`)
+    if (generation !== lifecycleGeneration) return
     const result = response.data?.data || {}; applyCredential(result.credential); showRotateConfirmation.value = false
     oneTimeKey.value = typeof result.apiKey === 'string' ? result.apiKey : ''; copied.value = false; saveConfirmed.value = false
+    nextTick(() => secretCopyButton.value?.focus())
     router.replace(`/tenant/api-credentials/${credential.id}`)
   } catch (cause) { ElMessage.error(errorMessage(cause, '轮换凭证失败')) } finally { rotating.value = false }
 }
 async function revokeCredential() {
   revoking.value = true
-  try { const response = await http.post(`/tenant/api-credentials/${credential.id}/revoke`); applyCredential(response.data?.data); showRevokeConfirmation.value = false; ElMessage.success('凭证已吊销') } catch (cause) { ElMessage.error(errorMessage(cause, '吊销凭证失败')) } finally { revoking.value = false }
+  try { const response = await http.post(`/tenant/api-credentials/${credential.id}/revoke`); applyCredential(response.data?.data); closeRevokeConfirmation(); ElMessage.success('凭证已吊销') } catch (cause) { ElMessage.error(errorMessage(cause, '吊销凭证失败')) } finally { revoking.value = false }
 }
 async function copyKey() { if (oneTimeKey.value && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(oneTimeKey.value); copied.value = true } }
-function clearDisclosure() { oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false }
+function clearDisclosure() { oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false; restoreOpener() }
+function invalidateDisclosureResponses() { lifecycleGeneration += 1; clearDisclosure() }
 
 onMounted(loadPage)
-onBeforeRouteLeave(clearDisclosure)
-onBeforeUnmount(clearDisclosure)
+onBeforeRouteLeave(invalidateDisclosureResponses)
+onBeforeUnmount(invalidateDisclosureResponses)
 </script>
 
 <style scoped>

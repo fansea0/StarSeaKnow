@@ -5,14 +5,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TenantApiCredentials from './TenantApiCredentials.vue'
 import TenantApiDocs from './TenantApiDocs.vue'
 
-const { get, post, error, success } = vi.hoisted(() => ({
+const { get, post, error, success, routeLeaveHandlers } = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
+  routeLeaveHandlers: [],
 }))
 
 vi.mock('../api/http', () => ({ http: { get, post } }))
+vi.mock('vue-router', () => ({ onBeforeRouteLeave: (handler) => routeLeaveHandlers.push(handler) }))
 vi.mock('element-plus', () => ({ ElMessage: { error, success } }))
 
 const credential = {
@@ -59,12 +61,19 @@ function mockLoads(list = [credential]) {
   })
 }
 
+function deferred() {
+  let resolve
+  const promise = new Promise((next) => { resolve = next })
+  return { promise, resolve }
+}
+
 describe('tenant API credential list and creation', () => {
   beforeEach(() => {
     get.mockReset()
     post.mockReset()
     error.mockReset()
     success.mockReset()
+    routeLeaveHandlers.length = 0
     mockLoads([{ ...credential, apiKey: 'must-never-render-from-a-list-response' }])
   })
 
@@ -80,6 +89,41 @@ describe('tenant API credential list and creation', () => {
     expect(wrapper.text()).not.toContain('must-never-render-from-a-list-response')
   })
 
+  it('keeps the credential list usable when knowledge loading fails', async () => {
+    get.mockImplementation((url) => {
+      if (url === '/tenant/api-credentials') return Promise.resolve({ data: { code: 200, data: [credential] } })
+      if (url === '/knowledge/list') return Promise.reject({ response: { data: { msg: '知识库暂不可用' } } })
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentials, { global: { stubs: { 'router-link': routerLinkStub } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('客服问答 Agent')
+    expect(wrapper.get('[data-testid="knowledge-load-warning"]').text()).toContain('知识库暂不可用')
+    expect(wrapper.get('[data-testid="retry-knowledge-load"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="open-create-credential"]').trigger('click')
+    expect(wrapper.get('[data-testid="knowledge-scope-unavailable"]').exists()).toBe(true)
+  })
+
+  it('moves focus into the create dialog, traps tab navigation, and restores its opener on Escape', async () => {
+    const wrapper = mount(TenantApiCredentials, { attachTo: document.body, global: { stubs: { 'router-link': routerLinkStub } } })
+    await flushPromises()
+    const opener = wrapper.get('[data-testid="open-create-credential"]')
+    opener.element.focus()
+    await opener.trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('[role="dialog"][aria-labelledby="create-credential-title"]')
+
+    expect(document.activeElement).toBe(wrapper.get('[name="credentialName"]').element)
+    wrapper.get('[data-testid="submit-create-credential"]').element.focus()
+    await dialog.trigger('keydown', { key: 'Tab' })
+    expect(document.activeElement).toBe(wrapper.get('[aria-label="关闭创建凭证"]').element)
+    await dialog.trigger('keydown', { key: 'Escape' })
+    expect(wrapper.find('[role="dialog"][aria-labelledby="create-credential-title"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(opener.element)
+    wrapper.unmount()
+  })
+
   it('submits the exact create contract and keeps the returned Key in a non-dismissible result until saved', async () => {
     const rawKey = 'rag_test_k_7F3K9Q2M.xQ9vP3L2sK8mW5nR4tY7uA6bC1dE0fG'
     post.mockResolvedValueOnce({ data: { code: 200, data: { credential, apiKey: rawKey } } })
@@ -88,6 +132,7 @@ describe('tenant API credential list and creation', () => {
     await flushPromises()
 
     await wrapper.get('[data-testid="open-create-credential"]').trigger('click')
+    await flushPromises()
     await wrapper.get('[name="credentialName"]').setValue('客服问答 Agent')
     await wrapper.get(`[value="${knowledge[0].publicId}"]`).setValue(true)
     await wrapper.get('form').trigger('submit')
@@ -113,6 +158,24 @@ describe('tenant API credential list and creation', () => {
     expect(wrapper.text()).not.toContain(rawKey)
     storageSpy.mockRestore()
   })
+
+  it('drops a late create response after route leave so its raw Key is never disclosed', async () => {
+    const rawKey = 'rag_test_k_LATECREATE.raw-secret-value'
+    const createResponse = deferred()
+    post.mockReturnValueOnce(createResponse.promise)
+    const wrapper = mount(TenantApiCredentials, { global: { stubs: { 'router-link': routerLinkStub } } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-create-credential"]').trigger('click')
+    await wrapper.get('[name="credentialName"]').setValue('迟到响应')
+    await wrapper.get('form').trigger('submit')
+
+    routeLeaveHandlers.forEach((handler) => handler())
+    createResponse.resolve({ data: { code: 201, data: { credential, apiKey: rawKey } } })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain(rawKey)
+    expect(wrapper.find('[role="dialog"][aria-labelledby="one-time-key-title"]').exists()).toBe(false)
+  })
 })
 
 describe('tenant API calling guide', () => {
@@ -128,5 +191,6 @@ describe('tenant API calling guide', () => {
     expect(wrapper.text()).toContain('metadata_condition')
     expect(wrapper.text()).toContain('HTTP 仅限可信网络测试')
     expect(wrapper.text()).toContain('生产环境必须使用 HTTPS')
+    expect(wrapper.text()).toContain('/openapi/v1/retrieval')
   })
 })

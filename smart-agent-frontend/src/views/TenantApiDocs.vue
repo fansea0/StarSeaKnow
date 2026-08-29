@@ -9,7 +9,7 @@
     "score_threshold": 0.2
   }
 }</code></pre><p class="guide-callout"><strong>范围由凭证决定。</strong>不支持 <code>knowledge_id</code> 或 <code>metadata_condition</code>；服务会拒绝包含这些字段的外部请求。</p></section>
-    <section class="guide-card"><h2>3. 接收结果</h2><p>响应仅包含检索到的片段、得分与来源。RAG 检索凭证不会调用模型，也不会接受任意知识库标识。</p><pre><code>curl -X POST "$BASE_URL/openapi/retrieval" \
+    <section class="guide-card"><h2>3. 接收结果</h2><p>响应仅包含检索到的片段、得分与来源。RAG 检索凭证不会调用模型，也不会接受任意知识库标识。</p><pre><code>curl -X POST "$BASE_URL/openapi/v1/retrieval" \
   -H "Authorization: Bearer $RAG_API_KEY" \
   -H "Content-Type: application/json" \
   --data @request.json</code></pre></section>

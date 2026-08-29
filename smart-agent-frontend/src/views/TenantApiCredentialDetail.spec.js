@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TenantApiCredentialDetail from './TenantApiCredentialDetail.vue'
 
-const { get, patch, put, post, replace, error, success } = vi.hoisted(() => ({
+const { get, patch, put, post, replace, error, success, routeLeaveHandlers } = vi.hoisted(() => ({
   get: vi.fn(),
   patch: vi.fn(),
   put: vi.fn(),
@@ -12,13 +12,14 @@ const { get, patch, put, post, replace, error, success } = vi.hoisted(() => ({
   replace: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
+  routeLeaveHandlers: [],
 }))
 
 vi.mock('../api/http', () => ({ http: { get, patch, put, post } }))
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { credentialId: '8797a05e-9d6c-4d47-a254-e648c8027ee9' } }),
   useRouter: () => ({ replace }),
-  onBeforeRouteLeave: () => {},
+  onBeforeRouteLeave: (handler) => routeLeaveHandlers.push(handler),
 }))
 vi.mock('element-plus', () => ({ ElMessage: { error, success } }))
 
@@ -51,6 +52,12 @@ const knowledge = [
 
 const stubs = { 'router-link': { template: '<a><slot /></a>' } }
 
+function deferred() {
+  let resolve
+  const promise = new Promise((next) => { resolve = next })
+  return { promise, resolve }
+}
+
 function mockLoads() {
   get.mockImplementation((url) => {
     if (url === `/tenant/api-credentials/${credential.id}`) {
@@ -72,7 +79,40 @@ describe('tenant API credential detail', () => {
     replace.mockReset()
     error.mockReset()
     success.mockReset()
+    routeLeaveHandlers.length = 0
     mockLoads()
+  })
+
+  it('keeps metadata and lifecycle controls available when only knowledge loading fails', async () => {
+    get.mockImplementation((url) => {
+      if (url === `/tenant/api-credentials/${credential.id}`) return Promise.resolve({ data: { code: 200, data: credential } })
+      if (url === '/knowledge/list') return Promise.reject({ response: { data: { msg: '知识库暂不可用' } } })
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+    const wrapper = mount(TenantApiCredentialDetail, { attachTo: document.body, global: { stubs } })
+    await flushPromises()
+
+    expect(wrapper.get('[name="credentialName"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="open-rotate-confirmation"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="open-revoke-confirmation"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="knowledge-load-warning"]').text()).toContain('知识库暂不可用')
+    expect(wrapper.get('[data-testid="open-scope-editor"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('focuses the scope editor and restores its opener when Escape closes it', async () => {
+    const wrapper = mount(TenantApiCredentialDetail, { attachTo: document.body, global: { stubs } })
+    await flushPromises()
+    const opener = wrapper.get('[data-testid="open-scope-editor"]')
+    opener.element.focus()
+    await opener.trigger('click')
+    await flushPromises()
+    const dialog = wrapper.get('[role="dialog"][aria-labelledby="scope-editor-title"]')
+
+    expect(document.activeElement).toBe(wrapper.get('[role="dialog"][aria-labelledby="scope-editor-title"] input[type="checkbox"]').element)
+    await dialog.trigger('keydown', { key: 'Escape' })
+    expect(wrapper.find('[role="dialog"][aria-labelledby="scope-editor-title"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(opener.element)
+    wrapper.unmount()
   })
 
   it('updates mutable metadata and completely replaces the public-UUID knowledge scope', async () => {
@@ -126,7 +166,7 @@ describe('tenant API credential detail', () => {
     post
       .mockResolvedValueOnce({ data: { code: 200, data: { credential: rotated, apiKey: rawKey } } })
       .mockResolvedValueOnce({ data: { code: 200, data: { ...rotated, status: 'revoked' } } })
-    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    const wrapper = mount(TenantApiCredentialDetail, { attachTo: document.body, global: { stubs } })
     await flushPromises()
 
     await wrapper.get('[data-testid="open-rotate-confirmation"]').trigger('click')
@@ -137,6 +177,9 @@ describe('tenant API credential detail', () => {
     expect(replace).toHaveBeenCalledWith(`/tenant/api-credentials/${rotated.id}`)
     expect(wrapper.get('[role="dialog"][aria-labelledby="one-time-key-title"]').text()).toContain(rawKey)
     expect(wrapper.find('[aria-label="关闭一次性 API Key"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="copy-one-time-key"]').element)
+    await wrapper.get('[role="dialog"][aria-labelledby="one-time-key-title"]').trigger('keydown', { key: 'Escape' })
+    expect(wrapper.text()).toContain(rawKey)
 
     await wrapper.get('.save-confirmation input').setValue(true)
     await wrapper.get('[data-testid="confirm-key-saved"]').trigger('click')
@@ -148,5 +191,38 @@ describe('tenant API credential detail', () => {
 
     expect(post).toHaveBeenNthCalledWith(2, `/tenant/api-credentials/${rotated.id}/revoke`)
     expect(wrapper.text()).toContain('已吊销')
+  })
+
+  it('drops a late rotation response after route leave without navigating or disclosing the Key', async () => {
+    const rawKey = 'rag_test_k_LATEROTATE.raw-secret-value'
+    const rotateResponse = deferred()
+    post.mockReturnValueOnce(rotateResponse.promise)
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-rotate-confirmation"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-credential-rotation"]').trigger('click')
+
+    routeLeaveHandlers.forEach((handler) => handler())
+    rotateResponse.resolve({ data: { code: 200, data: { credential: { ...credential, id: '02e896a9-33b5-4f9e-b501-a843e6180a37' }, apiKey: rawKey } } })
+    await flushPromises()
+
+    expect(replace).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain(rawKey)
+    expect(wrapper.find('[role="dialog"][aria-labelledby="one-time-key-title"]').exists()).toBe(false)
+  })
+
+  it('also invalidates a late rotation response when the detail component unmounts', async () => {
+    const rotateResponse = deferred()
+    post.mockReturnValueOnce(rotateResponse.promise)
+    const wrapper = mount(TenantApiCredentialDetail, { global: { stubs } })
+    await flushPromises()
+    await wrapper.get('[data-testid="open-rotate-confirmation"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-credential-rotation"]').trigger('click')
+
+    wrapper.unmount()
+    rotateResponse.resolve({ data: { code: 200, data: { credential: { ...credential, id: '02e896a9-33b5-4f9e-b501-a843e6180a37' }, apiKey: 'rag_test_k_UNMOUNTED.raw-secret-value' } } })
+    await flushPromises()
+
+    expect(replace).not.toHaveBeenCalled()
   })
 })

@@ -97,7 +97,7 @@ describe('tenant administration routes', () => {
     auth.user = { role: 'tenant_member', username: 'member' }
   })
 
-  it('redirects a tenant member away from every credential route', async () => {
+  it('redirects a tenant member away from every tenant administration route', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes })
     installGuards(router)
 
@@ -106,5 +106,20 @@ describe('tenant administration routes', () => {
 
     await router.push('/tenant/api-credentials/8797a05e-9d6c-4d47-a254-e648c8027ee9')
     expect(router.currentRoute.value.path).toBe('/403')
+
+    await router.push('/tenant/api-docs')
+    expect(router.currentRoute.value.path).toBe('/403')
+
+    await router.push('/tenant')
+    expect(router.currentRoute.value.path).toBe('/403')
+  })
+
+  it('redirects a tenant administrator from the tenant root to members', async () => {
+    auth.user = { role: 'tenant_admin', username: 'admin' }
+    const router = createRouter({ history: createMemoryHistory(), routes })
+    installGuards(router)
+
+    await router.push('/tenant')
+    expect(router.currentRoute.value.path).toBe('/tenant/members')
   })
 })
