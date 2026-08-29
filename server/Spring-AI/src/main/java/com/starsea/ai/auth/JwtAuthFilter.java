@@ -1,7 +1,7 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.mapper.TenantMapper;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;

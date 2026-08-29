@@ -1,4 +1,4 @@
-package com.fansea.ai.util;
+package com.starsea.ai.util;
 
 import java.util.Objects;
 

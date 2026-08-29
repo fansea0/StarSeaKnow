@@ -1,4 +1,4 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -1,8 +1,8 @@
-package com.fansea.ai.openapi.credential;
+package com.starsea.ai.openapi.credential;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.mapper.TenantMapper;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;

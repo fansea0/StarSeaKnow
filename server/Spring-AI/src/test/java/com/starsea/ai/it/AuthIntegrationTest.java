@@ -1,4 +1,4 @@
-package com.fansea.ai.it;
+package com.starsea.ai.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,9 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
  * Sequence: register from a platform invitation -> /agent/list (scope check) ->
  *           /auth/me (roundtrip) -> /auth/refresh (cookie rotation).
  *
- * Note: package is the lowercase {@code fansea} legacy package (preserved per Task 6 ruling).
- * The brief originally said {@code com.fansea.ai.it} but that directory does not exist;
- * this test mirrors the existing {@code com.fansea.ai} test layout.
+ * Note: package is the {@code com.starsea.ai} test layout.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = "spring.main.banner-mode=off")
@@ -45,7 +43,7 @@ class AuthIntegrationTest {
     JdbcTemplate jdbc;
 
     @Autowired
-    com.fansea.ai.auth.PasswordEncoder encoder;
+    com.starsea.ai.auth.PasswordEncoder encoder;
 
     @BeforeEach
     void resetSu() {

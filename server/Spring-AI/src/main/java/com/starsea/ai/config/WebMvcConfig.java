@@ -1,4 +1,4 @@
-package com.fansea.ai.config;
+package com.starsea.ai.config;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -36,7 +36,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         // 注:JwtAuthFilter 通过 FilterRegistrationBean 注册(见 PasswordEncoderConfig),
         // 这里只注册 HandlerInterceptor
-        registry.addInterceptor(new com.fansea.ai.auth.TenantContextInterceptor())
+        registry.addInterceptor(new com.starsea.ai.auth.TenantContextInterceptor())
                 .addPathPatterns("/**");
     }
 }

@@ -1,16 +1,16 @@
-package com.fansea.ai.service.impl;
+package com.starsea.ai.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.auth.AuthErrorCode;
-import com.fansea.ai.auth.AuthException;
-import com.fansea.ai.domain.File;
-import com.fansea.ai.domain.KnowledgeFile;
-import com.fansea.ai.openapi.retrieval.RetrievalQuery;
-import com.fansea.ai.openapi.retrieval.RetrievedChunk;
-import com.fansea.ai.service.FileService;
-import com.fansea.ai.service.KnowledgeFileService;
-import com.fansea.ai.service.RagService;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.auth.AuthErrorCode;
+import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.domain.File;
+import com.starsea.ai.domain.KnowledgeFile;
+import com.starsea.ai.openapi.retrieval.RetrievalQuery;
+import com.starsea.ai.openapi.retrieval.RetrievedChunk;
+import com.starsea.ai.service.FileService;
+import com.starsea.ai.service.KnowledgeFileService;
+import com.starsea.ai.service.RagService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;

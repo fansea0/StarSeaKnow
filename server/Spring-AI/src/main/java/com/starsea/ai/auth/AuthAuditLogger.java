@@ -1,4 +1,4 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,7 +8,7 @@ import java.util.UUID;
 
 @Component
 public class AuthAuditLogger {
-    private static final Logger log = LoggerFactory.getLogger("com.fansea.ai.auth");
+    private static final Logger log = LoggerFactory.getLogger("com.starsea.ai.auth");
 
     public void login(long userId, Long tenantId, String ip, String ua) {
         log.info("AUTH_LOGIN user={} tenantId={} ip={} ua={}", userId, tenantId, ip, ua);

@@ -1,4 +1,4 @@
-package com.fansea.ai.tool;
+package com.starsea.ai.tool;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;

@@ -1,8 +1,8 @@
-package com.fansea.ai.controller;
+package com.starsea.ai.controller;
 
-import com.fansea.ai.auth.RequireLogin;
-import com.fansea.ai.auth.RequireRole;
-import com.fansea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.auth.RequireLogin;
+import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.domain.dto.AjaxResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.PostMapping;

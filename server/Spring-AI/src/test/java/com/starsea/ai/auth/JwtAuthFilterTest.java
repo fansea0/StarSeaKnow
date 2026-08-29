@@ -1,7 +1,7 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.mapper.TenantMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;

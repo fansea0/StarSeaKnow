@@ -1,4 +1,4 @@
-package com.fansea.ai.openapi.credential;
+package com.starsea.ai.openapi.credential;
 
 import com.github.benmanes.caffeine.cache.Ticker;
 import org.junit.jupiter.api.Test;

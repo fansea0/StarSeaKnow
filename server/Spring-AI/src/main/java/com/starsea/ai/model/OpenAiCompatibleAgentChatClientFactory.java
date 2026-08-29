@@ -1,6 +1,6 @@
-package com.fansea.ai.model;
+package com.starsea.ai.model;
 
-import com.fansea.ai.domain.Agent;
+import com.starsea.ai.domain.Agent;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;

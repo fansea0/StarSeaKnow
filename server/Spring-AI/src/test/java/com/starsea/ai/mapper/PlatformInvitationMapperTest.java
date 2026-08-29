@@ -1,6 +1,6 @@
-package com.fansea.ai.mapper;
+package com.starsea.ai.mapper;
 
-import com.fansea.ai.domain.PlatformInvitation;
+import com.starsea.ai.domain.PlatformInvitation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;

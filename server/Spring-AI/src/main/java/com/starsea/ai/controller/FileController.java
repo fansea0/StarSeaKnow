@@ -1,10 +1,10 @@
-package com.fansea.ai.controller;
+package com.starsea.ai.controller;
 
-import com.fansea.ai.auth.RequireLogin;
-import com.fansea.ai.auth.RequireRole;
-import com.fansea.ai.domain.File;
-import com.fansea.ai.domain.dto.AjaxResult;
-import com.fansea.ai.service.FileService;
+import com.starsea.ai.auth.RequireLogin;
+import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.domain.File;
+import com.starsea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.service.FileService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.web.bind.annotation.*;
@@ -49,7 +49,7 @@ public class FileController {
         if(delete){
             fileService.removeById(fileId);
             // 防御性:删除向量时也限定tenantId,避免误删其他租户的向量数据
-            com.fansea.ai.auth.AuthContext ctx = com.fansea.ai.auth.AuthContext.current();
+            com.starsea.ai.auth.AuthContext ctx = com.starsea.ai.auth.AuthContext.current();
             String tenantExpr = (ctx == null || ctx.getTenantId() == null)
                     ? "tenantId == -1"
                     : "tenantId == " + ctx.getTenantId();

@@ -1,13 +1,13 @@
-package com.fansea.ai.openapi.credential;
+package com.starsea.ai.openapi.credential;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.auth.AuthException;
-import com.fansea.ai.domain.Knowledge;
-import com.fansea.ai.mapper.KnowledgeMapper;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.domain.Knowledge;
+import com.starsea.ai.mapper.KnowledgeMapper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

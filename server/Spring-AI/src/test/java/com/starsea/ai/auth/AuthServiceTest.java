@@ -1,9 +1,9 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
-import com.fansea.ai.domain.AppUser;
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.mapper.AppUserMapper;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.domain.AppUser;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.mapper.AppUserMapper;
+import com.starsea.ai.mapper.TenantMapper;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;

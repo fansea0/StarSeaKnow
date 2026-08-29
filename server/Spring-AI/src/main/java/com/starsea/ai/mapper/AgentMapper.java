@@ -1,8 +1,8 @@
-package com.fansea.ai.mapper;
+package com.starsea.ai.mapper;
 
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.fansea.ai.domain.Agent;
+import com.starsea.ai.domain.Agent;
 import org.apache.ibatis.annotations.CacheNamespace;
 import org.apache.ibatis.annotations.Mapper;
 

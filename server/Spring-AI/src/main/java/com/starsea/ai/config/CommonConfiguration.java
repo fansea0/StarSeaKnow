@@ -1,4 +1,4 @@
-package com.fansea.ai.config;
+package com.starsea.ai.config;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;

@@ -1,6 +1,6 @@
-package com.fansea.ai.domain.dto;
+package com.starsea.ai.domain.dto;
 
-import com.fansea.ai.constant.HttpStatus;
+import com.starsea.ai.constant.HttpStatus;
 
 import java.util.HashMap;
 import java.util.Objects;

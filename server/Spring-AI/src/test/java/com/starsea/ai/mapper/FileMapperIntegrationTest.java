@@ -1,7 +1,7 @@
-package com.fansea.ai.mapper;
+package com.starsea.ai.mapper;
 
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.domain.File;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.domain.File;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

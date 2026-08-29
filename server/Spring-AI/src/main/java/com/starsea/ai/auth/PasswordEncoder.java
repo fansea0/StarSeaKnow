@@ -1,4 +1,4 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 public interface PasswordEncoder {
     String hash(String raw);

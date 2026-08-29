@@ -1,4 +1,4 @@
-package com.fansea.ai;
+package com.starsea.ai;
 
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Test;

@@ -1,13 +1,13 @@
-package com.fansea.ai.service.impl;
+package com.starsea.ai.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.fansea.ai.domain.File;
-import com.fansea.ai.domain.Knowledge;
-import com.fansea.ai.mapper.FileMapper;
-import com.fansea.ai.mapper.KnowledgeMapper;
-import com.fansea.ai.service.FileService;
-import com.fansea.ai.service.KnowledgeService;
-import com.fansea.ai.service.RagService;
+import com.starsea.ai.domain.File;
+import com.starsea.ai.domain.Knowledge;
+import com.starsea.ai.mapper.FileMapper;
+import com.starsea.ai.mapper.KnowledgeMapper;
+import com.starsea.ai.service.FileService;
+import com.starsea.ai.service.KnowledgeService;
+import com.starsea.ai.service.RagService;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 

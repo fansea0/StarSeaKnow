@@ -1,4 +1,4 @@
-package com.fansea.ai.domain;
+package com.starsea.ai.domain;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;

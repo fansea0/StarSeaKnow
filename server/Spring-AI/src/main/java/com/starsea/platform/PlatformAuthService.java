@@ -1,14 +1,14 @@
-package com.fansea.platform;
+package com.starsea.platform;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.fansea.ai.auth.AuthAuditLogger;
-import com.fansea.ai.auth.AuthErrorCode;
-import com.fansea.ai.auth.AuthException;
-import com.fansea.ai.auth.JwtService;
-import com.fansea.ai.auth.PasswordEncoder;
-import com.fansea.ai.auth.RefreshTokenService;
-import com.fansea.ai.domain.PlatformAdmin;
-import com.fansea.ai.mapper.PlatformAdminMapper;
+import com.starsea.ai.auth.AuthAuditLogger;
+import com.starsea.ai.auth.AuthErrorCode;
+import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.auth.JwtService;
+import com.starsea.ai.auth.PasswordEncoder;
+import com.starsea.ai.auth.RefreshTokenService;
+import com.starsea.ai.domain.PlatformAdmin;
+import com.starsea.ai.mapper.PlatformAdminMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;

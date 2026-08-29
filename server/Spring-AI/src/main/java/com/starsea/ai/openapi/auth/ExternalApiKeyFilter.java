@@ -1,10 +1,10 @@
-package com.fansea.ai.openapi.auth;
+package com.starsea.ai.openapi.auth;
 
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.openapi.credential.ApiCredentialResolver;
-import com.fansea.ai.openapi.credential.ApiKeyCodec;
-import com.fansea.ai.openapi.credential.CredentialAuthenticationException;
-import com.fansea.ai.openapi.error.ExternalApiException;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.openapi.credential.ApiCredentialResolver;
+import com.starsea.ai.openapi.credential.ApiKeyCodec;
+import com.starsea.ai.openapi.credential.CredentialAuthenticationException;
+import com.starsea.ai.openapi.error.ExternalApiException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

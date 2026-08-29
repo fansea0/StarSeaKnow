@@ -1,4 +1,4 @@
-package com.fansea.ai.openapi.retrieval;
+package com.starsea.ai.openapi.retrieval;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

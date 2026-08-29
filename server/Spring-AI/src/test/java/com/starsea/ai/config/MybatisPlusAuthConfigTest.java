@@ -1,4 +1,4 @@
-package com.fansea.ai.config;
+package com.starsea.ai.config;
 
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;

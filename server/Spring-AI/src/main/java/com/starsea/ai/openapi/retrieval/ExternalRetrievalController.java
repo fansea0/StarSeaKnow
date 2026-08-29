@@ -1,11 +1,11 @@
-package com.fansea.ai.openapi.retrieval;
+package com.starsea.ai.openapi.retrieval;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.openapi.credential.CredentialType;
-import com.fansea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
-import com.fansea.ai.openapi.error.ExternalApiException;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.openapi.credential.CredentialType;
+import com.starsea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
+import com.starsea.ai.openapi.error.ExternalApiException;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;

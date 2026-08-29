@@ -1,4 +1,4 @@
-package com.fansea.ai.constant;
+package com.starsea.ai.constant;
 
 /**
  * 返回状态码

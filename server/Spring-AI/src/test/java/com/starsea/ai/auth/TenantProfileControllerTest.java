@@ -1,9 +1,9 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
-import com.fansea.ai.config.GlobalExceptionHandler;
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.mapper.PlatformAdminMapper;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.config.GlobalExceptionHandler;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.mapper.PlatformAdminMapper;
+import com.starsea.ai.mapper.TenantMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

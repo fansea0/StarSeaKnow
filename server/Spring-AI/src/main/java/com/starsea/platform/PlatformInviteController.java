@@ -1,12 +1,12 @@
-package com.fansea.platform;
+package com.starsea.platform;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.fansea.ai.auth.RequireRole;
-import com.fansea.ai.domain.Invite;
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.domain.dto.AjaxResult;
-import com.fansea.ai.mapper.InviteMapper;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.domain.Invite;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.mapper.InviteMapper;
+import com.starsea.ai.mapper.TenantMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 

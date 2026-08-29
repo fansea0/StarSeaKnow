@@ -1,4 +1,4 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;

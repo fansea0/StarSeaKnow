@@ -8,11 +8,11 @@
 		<version>3.3.10</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
-	<groupId>com.fansea</groupId>
-	<artifactId>Spring-AI</artifactId>
+	<groupId>com.starsea</groupId>
+	<artifactId>star-sea-server</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name>Spring-AI</name>
-	<description>Spring AI , getting started example, using Open AI</description>
+	<name>star-sea-server</name>
+	<description>星海知源 (StarSeaKnow) - RAG 后端服务</description>
 	<url/>
 	<licenses>
 		<license/>

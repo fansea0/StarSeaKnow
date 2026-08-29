@@ -1,11 +1,11 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.fansea.ai.domain.AppUser;
-import com.fansea.ai.domain.Invite;
-import com.fansea.ai.mapper.AppUserMapper;
-import com.fansea.ai.mapper.InviteMapper;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.domain.AppUser;
+import com.starsea.ai.domain.Invite;
+import com.starsea.ai.mapper.AppUserMapper;
+import com.starsea.ai.mapper.InviteMapper;
+import com.starsea.ai.mapper.TenantMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 

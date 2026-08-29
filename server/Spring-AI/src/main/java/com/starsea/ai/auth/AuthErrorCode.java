@@ -1,4 +1,4 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 public enum AuthErrorCode {
     MISSING_TOKEN(40100),

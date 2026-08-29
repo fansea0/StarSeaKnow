@@ -1,4 +1,4 @@
-package com.fansea.ai.openapi.auth;
+package com.starsea.ai.openapi.auth;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Component;

@@ -1,10 +1,10 @@
-package com.fansea.ai.openapi.retrieval;
+package com.starsea.ai.openapi.retrieval;
 
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.domain.File;
-import com.fansea.ai.service.FileService;
-import com.fansea.ai.service.KnowledgeFileService;
-import com.fansea.ai.service.impl.PgVectorRagServiceImpl;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.domain.File;
+import com.starsea.ai.service.FileService;
+import com.starsea.ai.service.KnowledgeFileService;
+import com.starsea.ai.service.impl.PgVectorRagServiceImpl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

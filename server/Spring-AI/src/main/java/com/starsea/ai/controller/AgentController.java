@@ -1,15 +1,15 @@
-package com.fansea.ai.controller;
+package com.starsea.ai.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.fansea.ai.auth.RequireLogin;
-import com.fansea.ai.auth.RequireRole;
-import com.fansea.ai.domain.Agent;
-import com.fansea.ai.domain.AgentKnowledge;
-import com.fansea.ai.domain.Knowledge;
-import com.fansea.ai.domain.dto.AjaxResult;
-import com.fansea.ai.service.AgentKnowledgeService;
-import com.fansea.ai.service.AgentService;
-import com.fansea.ai.service.KnowledgeService;
+import com.starsea.ai.auth.RequireLogin;
+import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.domain.Agent;
+import com.starsea.ai.domain.AgentKnowledge;
+import com.starsea.ai.domain.Knowledge;
+import com.starsea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.service.AgentKnowledgeService;
+import com.starsea.ai.service.AgentService;
+import com.starsea.ai.service.KnowledgeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 

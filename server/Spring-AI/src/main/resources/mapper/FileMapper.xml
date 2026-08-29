@@ -2,9 +2,9 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.fansea.ai.mapper.FileMapper">
+<mapper namespace="com.starsea.ai.mapper.FileMapper">
 
-    <resultMap id="BaseResultMap" type="com.fansea.ai.domain.File">
+    <resultMap id="BaseResultMap" type="com.starsea.ai.domain.File">
             <id property="id" column="id" jdbcType="BIGINT"/>
             <result property="publicId" column="public_id"
                     typeHandler="org.apache.ibatis.type.ObjectTypeHandler"/>
@@ -24,7 +24,7 @@
         embedding_status,create_time,update_time
     </sql>
 
-    <select id="selectByFileId" resultType="com.fansea.ai.domain.File">
+    <select id="selectByFileId" resultType="com.starsea.ai.domain.File">
         select * from file where id = #{id}
     </select>
 

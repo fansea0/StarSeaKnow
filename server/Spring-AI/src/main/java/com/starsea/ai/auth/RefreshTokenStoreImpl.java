@@ -1,7 +1,7 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
-import com.fansea.ai.domain.RefreshToken;
-import com.fansea.ai.mapper.RefreshTokenMapper;
+import com.starsea.ai.domain.RefreshToken;
+import com.starsea.ai.mapper.RefreshTokenMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 

@@ -1,4 +1,4 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 public class AuthException extends RuntimeException {
     private final int code;

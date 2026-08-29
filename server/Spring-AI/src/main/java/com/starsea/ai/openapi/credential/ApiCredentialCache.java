@@ -1,4 +1,4 @@
-package com.fansea.ai.openapi.credential;
+package com.starsea.ai.openapi.credential;
 
 public interface ApiCredentialCache {
 

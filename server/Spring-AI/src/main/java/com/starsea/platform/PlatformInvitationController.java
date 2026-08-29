@@ -1,17 +1,17 @@
-package com.fansea.platform;
+package com.starsea.platform;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.auth.AuthErrorCode;
-import com.fansea.ai.auth.AuthException;
-import com.fansea.ai.auth.RequireRole;
-import com.fansea.ai.domain.PlatformInvitation;
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.domain.dto.AjaxResult;
-import com.fansea.ai.mapper.PlatformInvitationMapper;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.auth.AuthErrorCode;
+import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.domain.PlatformInvitation;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.mapper.PlatformInvitationMapper;
+import com.starsea.ai.mapper.TenantMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.web.bind.annotation.GetMapping;

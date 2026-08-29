@@ -1,4 +1,4 @@
-package com.fansea.ai.openapi.retrieval;
+package com.starsea.ai.openapi.retrieval;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;

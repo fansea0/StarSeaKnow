@@ -1,4 +1,4 @@
-package com.fansea.ai.openapi.error;
+package com.starsea.ai.openapi.error;
 
 import org.springframework.http.HttpStatus;
 

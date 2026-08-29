@@ -1,10 +1,10 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
-import com.fansea.ai.domain.PlatformAdmin;
-import com.fansea.ai.mapper.PlatformAdminMapper;
+import com.starsea.ai.domain.PlatformAdmin;
+import com.starsea.ai.mapper.PlatformAdminMapper;
 import org.springframework.stereotype.Component;
 
 @Aspect
@@ -17,7 +17,7 @@ public class AuthAspect {
         this.platformAdmins = platformAdmins;
     }
 
-    @Around("@annotation(com.fansea.ai.auth.RequireRole) || @within(com.fansea.ai.auth.RequireRole)")
+    @Around("@annotation(com.starsea.ai.auth.RequireRole) || @within(com.starsea.ai.auth.RequireRole)")
     public Object requireRole(ProceedingJoinPoint pjp) throws Throwable {
         checkAuth();
         AuthContext ctx = AuthContext.current();
@@ -32,7 +32,7 @@ public class AuthAspect {
         return pjp.proceed();
     }
 
-    @Around("@annotation(com.fansea.ai.auth.RequireLogin) || @within(com.fansea.ai.auth.RequireLogin)")
+    @Around("@annotation(com.starsea.ai.auth.RequireLogin) || @within(com.starsea.ai.auth.RequireLogin)")
     public Object requireLogin(ProceedingJoinPoint pjp) throws Throwable {
         checkAuth();
         if (AuthContext.current().getKind() == AuthContext.Kind.PLATFORM) {

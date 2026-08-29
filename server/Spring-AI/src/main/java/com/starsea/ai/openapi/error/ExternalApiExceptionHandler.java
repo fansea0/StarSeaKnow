@@ -1,6 +1,6 @@
-package com.fansea.ai.openapi.error;
+package com.starsea.ai.openapi.error;
 
-import com.fansea.ai.openapi.credential.CredentialAuthenticationException;
+import com.starsea.ai.openapi.credential.CredentialAuthenticationException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;

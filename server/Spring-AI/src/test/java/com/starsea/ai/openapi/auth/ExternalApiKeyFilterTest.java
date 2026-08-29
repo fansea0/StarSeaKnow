@@ -1,17 +1,17 @@
-package com.fansea.ai.openapi.auth;
+package com.starsea.ai.openapi.auth;
 
-import com.fansea.ai.auth.AuthAspect;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.auth.AuthException;
-import com.fansea.ai.mapper.PlatformAdminMapper;
-import com.fansea.ai.openapi.credential.ApiCredentialResolver;
-import com.fansea.ai.openapi.credential.ApiKeyCodec;
-import com.fansea.ai.openapi.credential.CredentialScopeSnapshot;
-import com.fansea.ai.openapi.credential.CredentialAuthenticationException;
-import com.fansea.ai.openapi.credential.CredentialType;
-import com.fansea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
-import com.fansea.ai.openapi.error.ExternalApiException;
-import com.fansea.ai.openapi.error.ExternalApiExceptionHandler;
+import com.starsea.ai.auth.AuthAspect;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.mapper.PlatformAdminMapper;
+import com.starsea.ai.openapi.credential.ApiCredentialResolver;
+import com.starsea.ai.openapi.credential.ApiKeyCodec;
+import com.starsea.ai.openapi.credential.CredentialScopeSnapshot;
+import com.starsea.ai.openapi.credential.CredentialAuthenticationException;
+import com.starsea.ai.openapi.credential.CredentialType;
+import com.starsea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
+import com.starsea.ai.openapi.error.ExternalApiException;
+import com.starsea.ai.openapi.error.ExternalApiExceptionHandler;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -167,7 +167,7 @@ class ExternalApiKeyFilterTest {
     @Test
     void jwtFilterSkipsExternalRoutes() {
         ExposedJwtAuthFilter filter = new ExposedJwtAuthFilter(
-                mock(com.fansea.ai.auth.JwtService.class), mock(com.fansea.ai.mapper.TenantMapper.class));
+                mock(com.starsea.ai.auth.JwtService.class), mock(com.starsea.ai.mapper.TenantMapper.class));
 
         assertThat(filter.skips(request("/openapi/v1/retrieval", "127.0.0.1"))).isTrue();
     }
@@ -409,9 +409,9 @@ class ExternalApiKeyFilterTest {
                 "active", null, allowedIpCidrs, 60, 10, 2, 1L, scope);
     }
 
-    private static final class ExposedJwtAuthFilter extends com.fansea.ai.auth.JwtAuthFilter {
-        private ExposedJwtAuthFilter(com.fansea.ai.auth.JwtService jwtService,
-                                     com.fansea.ai.mapper.TenantMapper tenants) {
+    private static final class ExposedJwtAuthFilter extends com.starsea.ai.auth.JwtAuthFilter {
+        private ExposedJwtAuthFilter(com.starsea.ai.auth.JwtService jwtService,
+                                     com.starsea.ai.mapper.TenantMapper tenants) {
             super(jwtService, tenants);
         }
 

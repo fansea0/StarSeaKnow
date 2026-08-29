@@ -1,14 +1,14 @@
-package com.fansea.ai.openapi.credential;
+package com.starsea.ai.openapi.credential;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.auth.AuthErrorCode;
-import com.fansea.ai.auth.AuthException;
-import com.fansea.ai.domain.Knowledge;
-import com.fansea.ai.mapper.KnowledgeMapper;
-import com.fansea.ai.openapi.auth.IpCidrMatcher;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.auth.AuthErrorCode;
+import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.domain.Knowledge;
+import com.starsea.ai.mapper.KnowledgeMapper;
+import com.starsea.ai.openapi.auth.IpCidrMatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;

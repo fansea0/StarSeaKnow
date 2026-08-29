@@ -1,8 +1,8 @@
-package com.fansea.ai.openapi.auth;
+package com.starsea.ai.openapi.auth;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.fansea.ai.openapi.error.ExternalApiException;
+import com.starsea.ai.openapi.error.ExternalApiException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 

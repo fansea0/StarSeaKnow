@@ -1,10 +1,10 @@
-package com.fansea.ai.openapi.retrieval;
+package com.starsea.ai.openapi.retrieval;
 
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.openapi.credential.ApiCredentialResolver;
-import com.fansea.ai.openapi.credential.CredentialType;
-import com.fansea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
-import com.fansea.ai.service.RagService;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.openapi.credential.ApiCredentialResolver;
+import com.starsea.ai.openapi.credential.CredentialType;
+import com.starsea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
+import com.starsea.ai.service.RagService;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

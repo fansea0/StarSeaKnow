@@ -1,8 +1,8 @@
-package com.fansea.ai.service;
+package com.starsea.ai.service;
 
-import com.fansea.ai.domain.File;
-import com.fansea.ai.openapi.retrieval.RetrievalQuery;
-import com.fansea.ai.openapi.retrieval.RetrievedChunk;
+import com.starsea.ai.domain.File;
+import com.starsea.ai.openapi.retrieval.RetrievalQuery;
+import com.starsea.ai.openapi.retrieval.RetrievedChunk;
 import org.springframework.ai.document.Document;
 
 import java.util.List;

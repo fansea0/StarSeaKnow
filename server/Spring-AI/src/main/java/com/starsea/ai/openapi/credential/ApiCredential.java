@@ -1,10 +1,10 @@
-package com.fansea.ai.openapi.credential;
+package com.starsea.ai.openapi.credential;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.fansea.ai.auth.UuidTypeHandler;
+import com.starsea.ai.auth.UuidTypeHandler;
 import lombok.Data;
 import org.apache.ibatis.type.JdbcType;
 

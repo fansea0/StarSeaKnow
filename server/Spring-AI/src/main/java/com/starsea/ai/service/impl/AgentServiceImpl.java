@@ -1,10 +1,10 @@
-package com.fansea.ai.service.impl;
+package com.starsea.ai.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
-import com.fansea.ai.domain.Agent;
-import com.fansea.ai.mapper.AgentMapper;
-import com.fansea.ai.service.AgentService;
+import com.starsea.ai.domain.Agent;
+import com.starsea.ai.mapper.AgentMapper;
+import com.starsea.ai.service.AgentService;
 import org.springframework.stereotype.Service;
 
 /**

@@ -1,13 +1,13 @@
-package com.fansea.ai.service.impl;
+package com.starsea.ai.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.fansea.ai.domain.Knowledge;
-import com.fansea.ai.domain.KnowledgeFile;
-import com.fansea.ai.mapper.FileMapper;
-import com.fansea.ai.service.FileService;
-import com.fansea.ai.service.KnowledgeFileService;
-import com.fansea.ai.service.KnowledgeService;
+import com.starsea.ai.domain.Knowledge;
+import com.starsea.ai.domain.KnowledgeFile;
+import com.starsea.ai.mapper.FileMapper;
+import com.starsea.ai.service.FileService;
+import com.starsea.ai.service.KnowledgeFileService;
+import com.starsea.ai.service.KnowledgeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,7 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.util.List;
 import java.util.Set;
-import static com.fansea.ai.util.FileUtil.getFileTypeByExtension;
+import static com.starsea.ai.util.FileUtil.getFileTypeByExtension;
 
 /**
  * @Projectname: Spring-AI
@@ -28,7 +28,7 @@ import static com.fansea.ai.util.FileUtil.getFileTypeByExtension;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class FileServiceImpl extends ServiceImpl<FileMapper, com.fansea.ai.domain.File> implements FileService {
+public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.domain.File> implements FileService {
     
     @Value("${file.uploadPath}")
     private String path;
@@ -54,7 +54,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.fansea.ai.domai
             e.printStackTrace();
         }
         String fileType = getFileTypeByExtension(fileName);
-        com.fansea.ai.domain.File documentFile = new com.fansea.ai.domain.File(fileName,file.getSize(),fileType,filepath);
+        com.starsea.ai.domain.File documentFile = new com.starsea.ai.domain.File(fileName,file.getSize(),fileType,filepath);
         save(documentFile);
         return documentFile.getId();
     }
@@ -71,7 +71,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.fansea.ai.domai
     }
 
     @Override
-    public List<com.fansea.ai.domain.File> listEnabledByKnowledgeIds(Long tenantId, Set<Long> knowledgeIds) {
+    public List<com.starsea.ai.domain.File> listEnabledByKnowledgeIds(Long tenantId, Set<Long> knowledgeIds) {
         return baseMapper.selectEnabledByKnowledgeIds(tenantId, knowledgeIds);
     }
 }

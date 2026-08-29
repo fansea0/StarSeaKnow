@@ -1,7 +1,7 @@
-package com.fansea.ai.service;
+package com.starsea.ai.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
-import com.fansea.ai.domain.Knowledge;
+import com.starsea.ai.domain.Knowledge;
 
 /**
 * @author ASUS

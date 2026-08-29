@@ -1,9 +1,9 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
-import com.fansea.ai.domain.PlatformInvitation;
-import com.fansea.ai.mapper.AppUserMapper;
-import com.fansea.ai.mapper.PlatformInvitationMapper;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.domain.PlatformInvitation;
+import com.starsea.ai.mapper.AppUserMapper;
+import com.starsea.ai.mapper.PlatformInvitationMapper;
+import com.starsea.ai.mapper.TenantMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 
@@ -35,7 +35,7 @@ class TenantRegistrationServiceTest {
         when(invitations.selectOne(any())).thenReturn(invitation);
         when(tenants.selectCount(any())).thenReturn(0L);
         doAnswer(call -> {
-            call.<com.fansea.ai.domain.Tenant>getArgument(0).setId(2L);
+            call.<com.starsea.ai.domain.Tenant>getArgument(0).setId(2L);
             return 1;
         }).when(tenants).insert(any());
         when(users.insert(any())).thenThrow(new DuplicateKeyException("uq_app_user_username"));

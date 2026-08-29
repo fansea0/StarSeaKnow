@@ -1,12 +1,12 @@
-package com.fansea.ai.openapi.credential;
+package com.starsea.ai.openapi.credential;
 
 import com.fasterxml.jackson.annotation.JsonAnySetter;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.auth.AuthErrorCode;
-import com.fansea.ai.auth.AuthException;
-import com.fansea.ai.auth.RequireLogin;
-import com.fansea.ai.auth.RequireRole;
-import com.fansea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.auth.AuthErrorCode;
+import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.auth.RequireLogin;
+import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.domain.dto.AjaxResult;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

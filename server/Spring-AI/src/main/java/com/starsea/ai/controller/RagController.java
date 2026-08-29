@@ -1,10 +1,10 @@
-package com.fansea.ai.controller;
+package com.starsea.ai.controller;
 
-import com.fansea.ai.auth.RequireLogin;
-import com.fansea.ai.auth.RequireRole;
-import com.fansea.ai.domain.dto.AjaxResult;
-import com.fansea.ai.service.FileService;
-import com.fansea.ai.service.RagService;
+import com.starsea.ai.auth.RequireLogin;
+import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.service.FileService;
+import com.starsea.ai.service.RagService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

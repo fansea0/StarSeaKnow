@@ -1,8 +1,8 @@
-package com.fansea.ai.openapi.retrieval;
+package com.starsea.ai.openapi.retrieval;
 
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.openapi.auth.ExternalApiTransportProperties;
-import com.fansea.ai.service.RagService;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.openapi.auth.ExternalApiTransportProperties;
+import com.starsea.ai.service.RagService;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;

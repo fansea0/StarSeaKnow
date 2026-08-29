@@ -1,7 +1,7 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
-import com.fansea.ai.openapi.credential.ApiCredentialResolver;
-import com.fansea.ai.openapi.credential.CredentialScopeSnapshot;
+import com.starsea.ai.openapi.credential.ApiCredentialResolver;
+import com.starsea.ai.openapi.credential.CredentialScopeSnapshot;
 
 public class AuthContext {
     public enum Kind { BUSINESS, PLATFORM, EXTERNAL_API }

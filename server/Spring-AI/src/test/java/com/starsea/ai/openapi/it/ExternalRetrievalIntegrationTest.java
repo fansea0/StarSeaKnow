@@ -1,12 +1,12 @@
-package com.fansea.ai.openapi.it;
+package com.starsea.ai.openapi.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fansea.ai.auth.PasswordEncoder;
-import com.fansea.ai.openapi.credential.ApiKeyCodec;
-import com.fansea.ai.openapi.credential.CredentialType;
+import com.starsea.ai.auth.PasswordEncoder;
+import com.starsea.ai.openapi.credential.ApiKeyCodec;
+import com.starsea.ai.openapi.credential.CredentialType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

@@ -1,7 +1,7 @@
-package com.fansea.ai.openapi.auth;
+package com.starsea.ai.openapi.auth;
 
-import com.fansea.ai.openapi.credential.ApiCredentialResolver;
-import com.fansea.ai.openapi.credential.ApiKeyCodec;
+import com.starsea.ai.openapi.credential.ApiCredentialResolver;
+import com.starsea.ai.openapi.credential.ApiKeyCodec;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;

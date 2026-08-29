@@ -1,6 +1,6 @@
-package com.fansea.ai.openapi.credential;
+package com.starsea.ai.openapi.credential;
 
-import com.fansea.ai.tenant.TenantStatusChangeNotifier;
+import com.starsea.ai.tenant.TenantStatusChangeNotifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

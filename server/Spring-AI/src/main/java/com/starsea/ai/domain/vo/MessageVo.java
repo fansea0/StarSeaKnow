@@ -1,4 +1,4 @@
-package com.fansea.ai.domain.vo;
+package com.starsea.ai.domain.vo;
 
 import lombok.Data;
 import org.springframework.ai.chat.messages.Message;

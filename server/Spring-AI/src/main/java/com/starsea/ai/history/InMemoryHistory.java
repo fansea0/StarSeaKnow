@@ -1,4 +1,4 @@
-package com.fansea.ai.history;
+package com.starsea.ai.history;
 
 import org.springframework.stereotype.Component;
 

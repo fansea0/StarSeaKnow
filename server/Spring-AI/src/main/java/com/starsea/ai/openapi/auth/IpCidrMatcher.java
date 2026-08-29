@@ -1,4 +1,4 @@
-package com.fansea.ai.openapi.auth;
+package com.starsea.ai.openapi.auth;
 
 import java.util.ArrayList;
 import java.util.List;

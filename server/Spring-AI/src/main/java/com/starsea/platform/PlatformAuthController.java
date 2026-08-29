@@ -1,10 +1,10 @@
-package com.fansea.platform;
+package com.starsea.platform;
 
-import com.fansea.ai.auth.RefreshCookie;
-import com.fansea.ai.auth.AllowInitialPasswordChange;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.auth.RequireRole;
-import com.fansea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.auth.RefreshCookie;
+import com.starsea.ai.auth.AllowInitialPasswordChange;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.domain.dto.AjaxResult;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;

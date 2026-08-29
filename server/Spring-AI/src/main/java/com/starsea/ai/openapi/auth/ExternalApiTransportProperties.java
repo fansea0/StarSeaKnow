@@ -1,4 +1,4 @@
-package com.fansea.ai.openapi.auth;
+package com.starsea.ai.openapi.auth;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;

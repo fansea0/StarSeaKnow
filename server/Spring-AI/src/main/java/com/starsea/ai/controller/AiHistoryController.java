@@ -1,7 +1,7 @@
-package com.fansea.ai.controller;
+package com.starsea.ai.controller;
 
-import com.fansea.ai.auth.RequireLogin;
-import com.fansea.ai.domain.vo.MessageVo;
+import com.starsea.ai.auth.RequireLogin;
+import com.starsea.ai.domain.vo.MessageVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;

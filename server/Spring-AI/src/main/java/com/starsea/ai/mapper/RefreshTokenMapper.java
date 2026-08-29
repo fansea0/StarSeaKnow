@@ -1,7 +1,7 @@
-package com.fansea.ai.mapper;
+package com.starsea.ai.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.fansea.ai.domain.RefreshToken;
+import com.starsea.ai.domain.RefreshToken;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 

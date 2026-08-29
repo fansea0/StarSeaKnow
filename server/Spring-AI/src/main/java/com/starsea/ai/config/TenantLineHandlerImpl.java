@@ -1,7 +1,7 @@
-package com.fansea.ai.config;
+package com.starsea.ai.config;
 
 import com.baomidou.mybatisplus.extension.plugins.handler.TenantLineHandler;
-import com.fansea.ai.auth.AuthContext;
+import com.starsea.ai.auth.AuthContext;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.LongValue;
 import org.springframework.stereotype.Component;

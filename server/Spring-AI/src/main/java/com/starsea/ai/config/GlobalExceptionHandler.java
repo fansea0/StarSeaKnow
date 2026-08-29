@@ -1,7 +1,7 @@
-package com.fansea.ai.config;
+package com.starsea.ai.config;
 
-import com.fansea.ai.auth.AuthException;
-import com.fansea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.domain.dto.AjaxResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

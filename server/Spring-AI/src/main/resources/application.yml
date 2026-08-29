@@ -45,7 +45,7 @@ spring:
 logging:
   level: # 配置启动查看对话日志
     org.springframework.ai.chat.client.advisor: debug
-    com.fansea.ai: debug
+    com.starsea.ai: debug
 mybatis-plus:
   configuration:
     cache-enabled: true

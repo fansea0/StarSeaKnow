@@ -1,4 +1,4 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

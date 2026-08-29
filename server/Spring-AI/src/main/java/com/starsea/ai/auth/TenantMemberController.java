@@ -1,9 +1,9 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.fansea.ai.domain.AppUser;
-import com.fansea.ai.domain.dto.AjaxResult;
-import com.fansea.ai.mapper.AppUserMapper;
+import com.starsea.ai.domain.AppUser;
+import com.starsea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.mapper.AppUserMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 

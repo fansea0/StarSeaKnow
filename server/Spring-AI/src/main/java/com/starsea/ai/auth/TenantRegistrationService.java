@@ -1,12 +1,12 @@
-package com.fansea.ai.auth;
+package com.starsea.ai.auth;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.fansea.ai.domain.AppUser;
-import com.fansea.ai.domain.PlatformInvitation;
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.mapper.AppUserMapper;
-import com.fansea.ai.mapper.PlatformInvitationMapper;
-import com.fansea.ai.mapper.TenantMapper;
+import com.starsea.ai.domain.AppUser;
+import com.starsea.ai.domain.PlatformInvitation;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.mapper.AppUserMapper;
+import com.starsea.ai.mapper.PlatformInvitationMapper;
+import com.starsea.ai.mapper.TenantMapper;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

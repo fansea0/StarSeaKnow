@@ -1,13 +1,13 @@
-package com.fansea.platform;
+package com.starsea.platform;
 
-import com.fansea.ai.auth.AuthAspect;
-import com.fansea.ai.auth.AuthContext;
-import com.fansea.ai.config.GlobalExceptionHandler;
-import com.fansea.ai.auth.AuthAuditLogger;
-import com.fansea.ai.domain.Tenant;
-import com.fansea.ai.mapper.AppUserMapper;
-import com.fansea.ai.mapper.TenantMapper;
-import com.fansea.ai.tenant.TenantStatusChangeNotifier;
+import com.starsea.ai.auth.AuthAspect;
+import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.config.GlobalExceptionHandler;
+import com.starsea.ai.auth.AuthAuditLogger;
+import com.starsea.ai.domain.Tenant;
+import com.starsea.ai.mapper.AppUserMapper;
+import com.starsea.ai.mapper.TenantMapper;
+import com.starsea.ai.tenant.TenantStatusChangeNotifier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,12 +51,12 @@ class PlatformManagementControllerTest {
     private TenantStatusChangeNotifier tenantStatusChanges;
 
     @MockBean
-    private com.fansea.ai.mapper.PlatformAdminMapper platformAdmins;
+    private com.starsea.ai.mapper.PlatformAdminMapper platformAdmins;
 
     @BeforeEach
     void setPlatformAdminContext() {
         AuthContext.set(new AuthContext(AuthContext.Kind.PLATFORM, 1L, null, "platform_admin", "test-jti"));
-        com.fansea.ai.domain.PlatformAdmin admin = new com.fansea.ai.domain.PlatformAdmin();
+        com.starsea.ai.domain.PlatformAdmin admin = new com.starsea.ai.domain.PlatformAdmin();
         admin.setId(1L);
         admin.setMustChangePassword(false);
         when(platformAdmins.selectById(1L)).thenReturn(admin);

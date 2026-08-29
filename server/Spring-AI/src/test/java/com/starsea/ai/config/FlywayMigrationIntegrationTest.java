@@ -1,4 +1,4 @@
-package com.fansea.ai.config;
+package com.starsea.ai.config;
 
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;

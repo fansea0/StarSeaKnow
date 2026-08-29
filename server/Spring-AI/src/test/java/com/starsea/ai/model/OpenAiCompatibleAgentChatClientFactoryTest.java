@@ -1,6 +1,6 @@
-package com.fansea.ai.model;
+package com.starsea.ai.model;
 
-import com.fansea.ai.domain.Agent;
+import com.starsea.ai.domain.Agent;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.memory.InMemoryChatMemory;
 import org.springframework.ai.openai.api.OpenAiApi;
