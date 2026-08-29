@@ -47,4 +47,5 @@ public class ApiCredential {
     private OffsetDateTime revokedAt;
     private OffsetDateTime lastUsedAt;
     private String lastUsedIp;
+    private OffsetDateTime deletedAt;
 }

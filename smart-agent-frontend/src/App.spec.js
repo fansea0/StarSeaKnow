@@ -39,7 +39,7 @@ function createShellRouter(initialPath = '/agent') {
       { path: '/tenant/profile', component: Placeholder },
       { path: '/tenant/api-credentials', component: Placeholder },
       { path: '/tenant/api-credentials/:credentialId', component: Placeholder },
-      { path: '/tenant/api-docs', component: Placeholder },
+      { path: '/tenant/api-docs', component: Placeholder, meta: { public: true } },
     ],
   })
   return router.push(initialPath).then(() => router)
@@ -88,6 +88,18 @@ describe('workspace shell', () => {
     expect(wrapper.text()).not.toContain('租户管理')
     expect(wrapper.find('[aria-label="租户管理导航"]').exists()).toBe(false)
   })
+
+  it('renders the public API guide without the authenticated workspace shell', async () => {
+    auth.ready = false
+    auth.accessToken = null
+    auth.user = null
+    const router = await createShellRouter('/tenant/api-docs')
+    const wrapper = mount(App, { global: { plugins: [router], stubs } })
+
+    expect(wrapper.find('.workspace-shell').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="route-view"]').exists()).toBe(true)
+    expect(auth.bootstrap).not.toHaveBeenCalled()
+  })
 })
 
 describe('tenant administration routes', () => {
@@ -97,7 +109,7 @@ describe('tenant administration routes', () => {
     auth.user = { role: 'tenant_member', username: 'member' }
   })
 
-  it('redirects a tenant member away from every tenant administration route', async () => {
+  it('protects credential management while keeping the API guide public', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes })
     installGuards(router)
 
@@ -108,7 +120,7 @@ describe('tenant administration routes', () => {
     expect(router.currentRoute.value.path).toBe('/403')
 
     await router.push('/tenant/api-docs')
-    expect(router.currentRoute.value.path).toBe('/403')
+    expect(router.currentRoute.value.path).toBe('/tenant/api-docs')
 
     await router.push('/tenant')
     expect(router.currentRoute.value.path).toBe('/403')

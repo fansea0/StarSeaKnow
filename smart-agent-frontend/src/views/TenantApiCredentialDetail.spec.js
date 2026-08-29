@@ -4,11 +4,12 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TenantApiCredentialDetail from './TenantApiCredentialDetail.vue'
 
-const { get, patch, put, post, replace, error, success, routeLeaveHandlers, routeUpdateHandlers } = vi.hoisted(() => ({
+const { get, patch, put, post, remove, replace, error, success, routeLeaveHandlers, routeUpdateHandlers } = vi.hoisted(() => ({
   get: vi.fn(),
   patch: vi.fn(),
   put: vi.fn(),
   post: vi.fn(),
+  remove: vi.fn(),
   replace: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
@@ -16,7 +17,7 @@ const { get, patch, put, post, replace, error, success, routeLeaveHandlers, rout
   routeUpdateHandlers: [],
 }))
 
-vi.mock('../api/http', () => ({ http: { get, patch, put, post } }))
+vi.mock('../api/http', () => ({ http: { get, patch, put, post, delete: remove } }))
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { credentialId: '8797a05e-9d6c-4d47-a254-e648c8027ee9' } }),
   useRouter: () => ({ replace }),
@@ -86,6 +87,7 @@ describe('tenant API credential detail', () => {
     patch.mockReset()
     put.mockReset()
     post.mockReset()
+    remove.mockReset()
     replace.mockReset()
     error.mockReset()
     success.mockReset()
@@ -305,6 +307,23 @@ describe('tenant API credential detail', () => {
     await wrapper.get('[data-testid="toggle-credential-status"]').trigger('click')
     await flushPromises()
     expect(patch).toHaveBeenNthCalledWith(2, `/tenant/api-credentials/${credential.id}`, { status: 'active' })
+  })
+
+  it('soft deletes a credential only after confirmation and returns to the list', async () => {
+    remove.mockResolvedValueOnce({ status: 204 })
+    const wrapper = mount(TenantApiCredentialDetail, { attachTo: document.body, global: { stubs } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="open-delete-confirmation"]').trigger('click')
+    expect(wrapper.get('[role="dialog"][aria-labelledby="delete-title"]').text()).toContain('删除后立即失效')
+    expect(remove).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="confirm-credential-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(remove).toHaveBeenCalledWith(`/tenant/api-credentials/${credential.id}`)
+    expect(replace).toHaveBeenCalledWith('/tenant/api-credentials')
+    expect(success).toHaveBeenCalledWith('凭证已删除')
+    wrapper.unmount()
   })
 
   it('omits unchanged expiry but sends explicit null when the user clears it', async () => {

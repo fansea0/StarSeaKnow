@@ -103,7 +103,7 @@ export const routes = [
     path: '/tenant/api-docs',
     name: 'TenantApiDocs',
     component: () => import('../views/TenantApiDocs.vue'),
-    meta: { requiresAdmin: true },
+    meta: { public: true },
   }
 ]
 

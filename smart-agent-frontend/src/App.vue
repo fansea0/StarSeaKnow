@@ -121,7 +121,7 @@ watch(
 )
 
 onMounted(() => {
-  auth.bootstrap()
+  if (!isPublicPage.value) auth.bootstrap()
 })
 </script>
 

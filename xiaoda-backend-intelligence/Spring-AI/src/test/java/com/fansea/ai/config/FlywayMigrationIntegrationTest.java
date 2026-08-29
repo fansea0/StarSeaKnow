@@ -48,9 +48,9 @@ class FlywayMigrationIntegrationTest {
                 .baselineVersion("1")
                 .load();
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(6);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + schema + ".flyway_schema_history WHERE success", Integer.class))
-                .isEqualTo(5);
+                .isEqualTo(6);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + schema + ".platform_invitation", Integer.class))
                 .isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'agent' AND column_name IN ('model_url', 'model_api_key', 'model_id')", Integer.class, schema))
@@ -59,8 +59,8 @@ class FlywayMigrationIntegrationTest {
                 .isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns "
                 + "WHERE table_schema=? AND table_name='api_credential' "
-                + "AND column_name IN ('credential_type','secret_digest','pepper_version')",
-                Integer.class, schema)).isEqualTo(3);
+                + "AND column_name IN ('credential_type','secret_digest','pepper_version','deleted_at')",
+                Integer.class, schema)).isEqualTo(4);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns "
                 + "WHERE table_schema=? AND table_name IN ('knowledge','file') "
                 + "AND column_name='public_id'", Integer.class, schema)).isEqualTo(2);

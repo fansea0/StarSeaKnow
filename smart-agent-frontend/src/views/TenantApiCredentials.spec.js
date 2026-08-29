@@ -210,4 +210,16 @@ describe('tenant API calling guide', () => {
     expect(wrapper.text()).toContain('生产环境必须使用 HTTPS')
     expect(wrapper.text()).toContain('/openapi/v1/retrieval')
   })
+
+  it('shows successful, empty, and error response formats with stable fields', () => {
+    const wrapper = mount(TenantApiDocs)
+
+    expect(wrapper.get('[data-testid="retrieval-success-response"]').text()).toContain('"records"')
+    expect(wrapper.get('[data-testid="retrieval-success-response"]').text()).toContain('"document_id"')
+    expect(wrapper.get('[data-testid="retrieval-success-response"]').text()).toContain('"chunk_id"')
+    expect(wrapper.get('[data-testid="retrieval-empty-response"]').text()).toContain('"records": []')
+    expect(wrapper.get('[data-testid="retrieval-error-response"]').text()).toContain('"request_id"')
+    expect(wrapper.get('[data-testid="retrieval-error-response"]').text()).toContain('"error"')
+    expect(wrapper.text()).toContain('X-Request-ID')
+  })
 })

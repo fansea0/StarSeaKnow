@@ -444,6 +444,47 @@ class ApiCredentialServiceTest {
         verify(cache, times(2)).evict("old-key-id");
     }
 
+    @Test
+    void softDeleteRevokesAndHidesCredentialWhileEvictingItsKey() {
+        ApiCredential active = credential(41L, "delete-key-id", 7L);
+        when(credentials.selectOne(any())).thenReturn(active);
+
+        service.delete(CREDENTIAL_PUBLIC_ID, tenantAdminContext());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.Wrapper<ApiCredential>> update =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(credentials).update(isNull(), update.capture());
+        assertThat(update.getValue().getSqlSet()).contains("status", "deleted_at", "revoked_at");
+        verify(cache).evict("delete-key-id");
+    }
+
+    @Test
+    void repeatedSoftDeleteIsIdempotentAndStillEvictsTheKey() {
+        ApiCredential deleted = credential(41L, "deleted-key-id", 7L);
+        deleted.setStatus("revoked");
+        deleted.setDeletedAt(OffsetDateTime.parse("2029-01-01T00:00:00Z"));
+        when(credentials.selectOne(any())).thenReturn(deleted);
+
+        service.delete(CREDENTIAL_PUBLIC_ID, tenantAdminContext());
+
+        verify(credentials, never()).update(isNull(), any());
+        verify(cache).evict("deleted-key-id");
+    }
+
+    @Test
+    void listFiltersSoftDeletedCredentialsAtTheDatabaseBoundary() {
+        when(credentials.selectList(any())).thenReturn(List.of());
+
+        service.list(tenantAdminContext());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.Wrapper<ApiCredential>> query =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(credentials).selectList(query.capture());
+        assertThat(query.getValue().getExpression().getSqlSegment()).contains("deleted_at");
+    }
+
     private ApiCredentialService.CreateCredentialCommand createCommand(Set<UUID> scope) {
         return new ApiCredentialService.CreateCredentialCommand(
                 "客服检索", "RAG_RETRIEVAL", "test", scope, List.of("10.0.0.0/24", "2001:db8::/64"),

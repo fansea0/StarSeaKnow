@@ -28,6 +28,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.ArgumentCaptor;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -174,6 +175,14 @@ class TenantApiCredentialControllerTest {
 
         assertThat(listBody).doesNotContain("secretDigest", "pepperVersion", "apiKey", RAW_KEY);
         assertThat(detailBody).doesNotContain("secretDigest", "pepperVersion", "apiKey", RAW_KEY);
+    }
+
+    @Test
+    void tenantAdminCanIdempotentlySoftDeleteCredential() throws Exception {
+        mockMvc.perform(delete("/tenant/api-credentials/{credentialId}", CREDENTIAL_ID))
+                .andExpect(status().isNoContent());
+
+        verify(service).delete(CREDENTIAL_ID, AuthContext.current());
     }
 
     @Test

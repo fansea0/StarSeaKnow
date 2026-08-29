@@ -102,6 +102,7 @@ public class ApiCredentialService {
         TenantActor actor = requireTenantAdmin(context);
         List<ApiCredential> rows = credentials.selectList(new LambdaQueryWrapper<ApiCredential>()
                 .eq(ApiCredential::getTenantId, actor.tenantId())
+                .isNull(ApiCredential::getDeletedAt)
                 .orderByDesc(ApiCredential::getCreatedAt));
         if (rows == null || rows.isEmpty()) {
             return List.of();
@@ -129,6 +130,7 @@ public class ApiCredentialService {
         LambdaUpdateWrapper<ApiCredential> update = new LambdaUpdateWrapper<ApiCredential>()
                 .eq(ApiCredential::getId, row.getId())
                 .eq(ApiCredential::getTenantId, actor.tenantId())
+                .isNull(ApiCredential::getDeletedAt)
                 .ne(ApiCredential::getStatus, "revoked");
         boolean changed = false;
         if (command.name() != null) {
@@ -206,6 +208,7 @@ public class ApiCredentialService {
         int affected = credentials.update(null, new LambdaUpdateWrapper<ApiCredential>()
                 .eq(ApiCredential::getId, row.getId())
                 .eq(ApiCredential::getTenantId, actor.tenantId())
+                .isNull(ApiCredential::getDeletedAt)
                 .ne(ApiCredential::getStatus, "revoked")
                 .eq(previousAuthorizationVersion != null, ApiCredential::getAuthorizationVersion,
                         previousAuthorizationVersion)
@@ -234,6 +237,7 @@ public class ApiCredentialService {
         int revoked = credentials.update(null, new LambdaUpdateWrapper<ApiCredential>()
                 .eq(ApiCredential::getId, old.getId())
                 .eq(ApiCredential::getTenantId, actor.tenantId())
+                .isNull(ApiCredential::getDeletedAt)
                 .in(ApiCredential::getStatus, "active", "disabled")
                 .eq(ApiCredential::getAuthorizationVersion, old.getAuthorizationVersion())
                 .set(ApiCredential::getStatus, "revoked")
@@ -270,6 +274,7 @@ public class ApiCredentialService {
             int affected = credentials.update(null, new LambdaUpdateWrapper<ApiCredential>()
                     .eq(ApiCredential::getId, row.getId())
                     .eq(ApiCredential::getTenantId, actor.tenantId())
+                    .isNull(ApiCredential::getDeletedAt)
                     .in(ApiCredential::getStatus, "active", "disabled")
                     .set(ApiCredential::getStatus, "revoked")
                     .set(ApiCredential::getRevokedAt, revokedAt));
@@ -287,6 +292,35 @@ public class ApiCredentialService {
         }
         evictNowAndAfterCommit(row.getKeyId());
         return toView(row, loadKnowledgePublicIds(row.getId()));
+    }
+
+    @Transactional
+    public void delete(UUID credentialId, AuthContext context) {
+        TenantActor actor = requireTenantAdmin(context);
+        ApiCredential row = requireCredentialIncludingDeleted(credentialId, actor.tenantId());
+        if (row.getDeletedAt() == null) {
+            OffsetDateTime deletedAt = OffsetDateTime.now(ZoneOffset.UTC);
+            int affected = credentials.update(null, new LambdaUpdateWrapper<ApiCredential>()
+                    .eq(ApiCredential::getId, row.getId())
+                    .eq(ApiCredential::getTenantId, actor.tenantId())
+                    .isNull(ApiCredential::getDeletedAt)
+                    .set(ApiCredential::getStatus, "revoked")
+                    .set(ApiCredential::getRevokedAt, deletedAt)
+                    .set(ApiCredential::getDeletedAt, deletedAt));
+            if (affected != 1) {
+                ApiCredential current = requireCredentialIncludingDeleted(credentialId, actor.tenantId());
+                if (current.getDeletedAt() == null) {
+                    throw invalid("credential changed concurrently");
+                }
+                row = current;
+            } else {
+                row.setStatus("revoked");
+                row.setRevokedAt(deletedAt);
+                row.setDeletedAt(deletedAt);
+            }
+            lifecycleLog("deleted", actor.tenantId(), row.getPublicId());
+        }
+        evictNowAndAfterCommit(row.getKeyId());
     }
 
     private ApiCredential copyForRotation(ApiCredential old,
@@ -402,6 +436,15 @@ public class ApiCredentialService {
     }
 
     private ApiCredential requireCredential(UUID publicId, long tenantId) {
+        ApiCredential row = requireCredentialIncludingDeleted(publicId, tenantId);
+        if (row.getDeletedAt() != null) {
+            throw new AuthException(AuthErrorCode.CROSS_TENANT,
+                    "credential is outside the authenticated tenant");
+        }
+        return row;
+    }
+
+    private ApiCredential requireCredentialIncludingDeleted(UUID publicId, long tenantId) {
         if (publicId == null) {
             throw invalid("credential id is required");
         }

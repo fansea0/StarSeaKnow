@@ -78,6 +78,17 @@ describe('platform management route guard', () => {
     await expect(guard({ meta: { requiresPlatformAdmin: true } })).resolves.toBe(true)
   })
 
+  it('allows the public API guide without bootstrapping a login session', async () => {
+    auth.ready = false
+    auth.accessToken = null
+    auth.bootstrap.mockReset()
+    const guard = installTestGuard()
+
+    await expect(guard({ path: '/tenant/api-docs', fullPath: '/tenant/api-docs', meta: { public: true } }))
+      .resolves.toBe(true)
+    expect(auth.bootstrap).not.toHaveBeenCalled()
+  })
+
   it('allows platform_admin to navigate to /system/overview', async () => {
     auth.accessToken = 'platform-token'
     auth.user = { role: 'platform_admin' }

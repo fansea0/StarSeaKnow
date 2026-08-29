@@ -56,7 +56,8 @@ public class ApiCredentialResolver {
     private ResolvedCredential loadAndResolve(ApiKeyCodec.ParsedKey parsedKey) {
         ApiCredentialCache.LoadToken loadToken = cache.beginLoad(parsedKey.keyId());
         ApiCredential credential = credentials.selectOne(new LambdaQueryWrapper<ApiCredential>()
-                .eq(ApiCredential::getKeyId, parsedKey.keyId()));
+                .eq(ApiCredential::getKeyId, parsedKey.keyId())
+                .isNull(ApiCredential::getDeletedAt));
         if (credential == null) {
             cache.publishMissing(loadToken);
             throw failure(AUTHENTICATION_FAILED);
@@ -64,7 +65,7 @@ public class ApiCredentialResolver {
 
         CredentialType credentialType = storedCredentialType(credential);
         verifyParsedIdentity(parsedKey, credentialType, credential.getEnvironment());
-        verifyCredentialIsActive(credential.getStatus(), credential.getExpiresAt());
+        verifyCredentialIsActive(credential.getStatus(), credential.getExpiresAt(), credential.getDeletedAt());
         verifyTenantIsEnabled(credential.getTenantId());
         verifySecret(parsedKey, credential.getSecretDigest(), credential.getPepperVersion());
 
@@ -84,7 +85,7 @@ public class ApiCredentialResolver {
     private ResolvedCredential resolveCached(ApiKeyCodec.ParsedKey parsedKey, CachedCredential credential) {
         verifyParsedIdentity(parsedKey, credential.credentialType(), credential.environment());
         verifySecret(parsedKey, credential.secretDigest(), credential.pepperVersion());
-        verifyCredentialIsActive(credential.status(), credential.expiresAt());
+        verifyCredentialIsActive(credential.status(), credential.expiresAt(), null);
         return resolved(credential);
     }
 
@@ -104,7 +105,10 @@ public class ApiCredentialResolver {
         }
     }
 
-    private void verifyCredentialIsActive(String status, OffsetDateTime expiresAt) {
+    private void verifyCredentialIsActive(String status, OffsetDateTime expiresAt, OffsetDateTime deletedAt) {
+        if (deletedAt != null) {
+            throw failure(AUTHENTICATION_FAILED);
+        }
         if ("disabled".equals(status)) {
             throw failure(CREDENTIAL_DISABLED);
         }

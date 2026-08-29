@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -99,6 +100,12 @@ public class TenantApiCredentialController {
     @PostMapping("/{credentialId}/revoke")
     public AjaxResult revoke(@PathVariable UUID credentialId) {
         return AjaxResult.success(service.revoke(credentialId, AuthContext.current()));
+    }
+
+    @DeleteMapping("/{credentialId}")
+    public ResponseEntity<Void> delete(@PathVariable UUID credentialId) {
+        service.delete(credentialId, AuthContext.current());
+        return ResponseEntity.noContent().build();
     }
 
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})

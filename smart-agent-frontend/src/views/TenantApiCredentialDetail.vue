@@ -57,6 +57,7 @@
           <button class="sea-button" data-testid="toggle-credential-status" type="button" :disabled="credential.status === 'revoked' || actionBlocked || savingStatus" @click="toggleCredentialStatus">{{ savingStatus ? '正在更新…' : credential.status === 'disabled' ? '启用凭证' : '停用凭证' }}</button>
           <button class="sea-button" data-testid="open-rotate-confirmation" type="button" :disabled="credential.status === 'revoked' || actionBlocked" @click="openRotateConfirmation">轮换 Key</button>
           <button class="sea-button sea-button--danger" data-testid="open-revoke-confirmation" type="button" :disabled="credential.status === 'revoked' || actionBlocked" @click="openRevokeConfirmation">吊销凭证</button>
+          <button class="sea-button sea-button--danger" data-testid="open-delete-confirmation" type="button" :disabled="actionBlocked" @click="openDeleteConfirmation">删除凭证</button>
         </div>
       </section>
     </template>
@@ -77,6 +78,10 @@
 
     <div v-if="showRevokeConfirmation" class="modal-layer" role="presentation">
       <section ref="revokeDialog" class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="revoke-title" tabindex="-1" @keydown="handleDismissableDialogKey($event, closeRevokeConfirmation)"><header class="modal-heading"><h2 id="revoke-title">吊销这把凭证？</h2></header><p class="card-copy">吊销后无法恢复；如仍需要访问，请创建或轮换新的凭证。</p><footer class="modal-actions"><button class="sea-button" type="button" @click="closeRevokeConfirmation">取消</button><button class="sea-button sea-button--danger" data-testid="confirm-credential-revoke" type="button" :disabled="revoking" @click="revokeCredential">{{ revoking ? '正在吊销…' : '确认吊销' }}</button></footer></section>
+    </div>
+
+    <div v-if="showDeleteConfirmation" class="modal-layer" role="presentation">
+      <section ref="deleteDialog" class="sea-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" tabindex="-1" @keydown="handleDismissableDialogKey($event, closeDeleteConfirmation)"><header class="modal-heading"><h2 id="delete-title">删除这把凭证？</h2></header><p class="card-copy">删除后立即失效并从凭证列表隐藏，且无法恢复。历史记录和轮换关系仍会安全保留。</p><footer class="modal-actions"><button class="sea-button" type="button" @click="closeDeleteConfirmation">取消</button><button class="sea-button sea-button--danger" data-testid="confirm-credential-delete" type="button" :disabled="deleting" @click="deleteCredential">{{ deleting ? '正在删除…' : '确认删除' }}</button></footer></section>
     </div>
 
     <div v-if="oneTimeKey" class="modal-layer modal-layer--secret" role="presentation">
@@ -110,22 +115,24 @@ const saving = ref(false)
 const savingScope = ref(false)
 const rotating = ref(false)
 const revoking = ref(false)
+const deleting = ref(false)
 const savingStatus = ref(false)
 const loadedExpiresAt = ref('')
 const showScopeEditor = ref(false)
 const showRotateConfirmation = ref(false)
 const showRevokeConfirmation = ref(false)
+const showDeleteConfirmation = ref(false)
 const oneTimeKey = ref('')
 const copied = ref(false)
 const saveConfirmed = ref(false)
-const scopeDialog = ref(null), rotateDialog = ref(null), revokeDialog = ref(null), secretDialog = ref(null), secretCopyButton = ref(null)
+const scopeDialog = ref(null), rotateDialog = ref(null), revokeDialog = ref(null), deleteDialog = ref(null), secretDialog = ref(null), secretCopyButton = ref(null)
 let opener = null
 let pageGeneration = 0
 let activeCredentialId = ''
 let knowledgeRequestToken = 0
 const pendingReplacementId = ref('')
-const activeDialog = computed(() => showScopeEditor.value || showRotateConfirmation.value || showRevokeConfirmation.value || Boolean(oneTimeKey.value))
-const actionBlocked = computed(() => saving.value || savingScope.value || rotating.value || revoking.value
+const activeDialog = computed(() => showScopeEditor.value || showRotateConfirmation.value || showRevokeConfirmation.value || showDeleteConfirmation.value || Boolean(oneTimeKey.value))
+const actionBlocked = computed(() => saving.value || savingScope.value || rotating.value || revoking.value || deleting.value
   || savingStatus.value || activeDialog.value)
 
 function safeCredential(source = {}) {
@@ -147,9 +154,9 @@ function knowledgeName(id) { return knowledgeBases.value.find((item) => item.pub
 function errorMessage(cause, fallback) { return cause.response?.data?.msg || fallback }
 function isCurrentPage(generation, credentialId) { return generation === pageGeneration && credentialId === activeCredentialId }
 function resetForPageTransition() {
-  showScopeEditor.value = false; showRotateConfirmation.value = false; showRevokeConfirmation.value = false
+  showScopeEditor.value = false; showRotateConfirmation.value = false; showRevokeConfirmation.value = false; showDeleteConfirmation.value = false
   oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false; pendingReplacementId.value = ''
-  scopeSelection.value = []; opener = null; saving.value = false; savingScope.value = false; rotating.value = false; revoking.value = false; savingStatus.value = false; loadedExpiresAt.value = ''
+  scopeSelection.value = []; opener = null; saving.value = false; savingScope.value = false; rotating.value = false; revoking.value = false; deleting.value = false; savingStatus.value = false; loadedExpiresAt.value = ''
   knowledgeRequestToken += 1; knowledgeBases.value = []; knowledgeError.value = ''; knowledgeLoading.value = false
   Object.assign(credential, safeCredential()); Object.assign(form, { name: '', description: '', allowedIpCidrs: '', requestsPerMinute: 60, burstCapacity: 10, maxConcurrency: 5, expiresAt: '' })
 }
@@ -221,13 +228,15 @@ function restoreOpener() { const target = opener; opener = null; nextTick(() => 
 function focusables(container) { return [...(container?.querySelectorAll('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') || [])] }
 function trapFocus(event) { if (event.key !== 'Tab') return; const items = focusables(event.currentTarget); if (!items.length) return; const first = items[0], last = items[items.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }; if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() } }
 function handleDismissableDialogKey(event, close) { if (event.key === 'Escape') { event.preventDefault(); close(); return }; trapFocus(event) }
-function closeDismissibleDialogs(restore = false) { showScopeEditor.value = false; showRotateConfirmation.value = false; showRevokeConfirmation.value = false; if (restore && !oneTimeKey.value) restoreOpener() }
+function closeDismissibleDialogs(restore = false) { showScopeEditor.value = false; showRotateConfirmation.value = false; showRevokeConfirmation.value = false; showDeleteConfirmation.value = false; if (restore && !oneTimeKey.value) restoreOpener() }
 function openScopeEditor() { if (actionBlocked.value || knowledgeLoading.value || knowledgeError.value) return; captureOpener(); closeDismissibleDialogs(false); scopeSelection.value = [...credential.knowledgeIds]; showScopeEditor.value = true; nextTick(() => (scopeDialog.value?.querySelector('input[type="checkbox"]') || scopeDialog.value?.querySelector('[aria-label="关闭范围编辑"]'))?.focus()) }
 function openRotateConfirmation() { if (actionBlocked.value) return; captureOpener(); closeDismissibleDialogs(false); showRotateConfirmation.value = true; nextTick(() => rotateDialog.value?.querySelector('button:not(:disabled)')?.focus()) }
 function openRevokeConfirmation() { if (actionBlocked.value) return; captureOpener(); closeDismissibleDialogs(false); showRevokeConfirmation.value = true; nextTick(() => revokeDialog.value?.querySelector('button:not(:disabled)')?.focus()) }
+function openDeleteConfirmation() { if (actionBlocked.value) return; captureOpener(); closeDismissibleDialogs(false); showDeleteConfirmation.value = true; nextTick(() => deleteDialog.value?.querySelector('button:not(:disabled)')?.focus()) }
 function closeScopeEditor() { showScopeEditor.value = false; restoreOpener() }
 function closeRotateConfirmation() { showRotateConfirmation.value = false; restoreOpener() }
 function closeRevokeConfirmation() { showRevokeConfirmation.value = false; restoreOpener() }
+function closeDeleteConfirmation() { showDeleteConfirmation.value = false; restoreOpener() }
 async function saveScope() {
   const credentialId = credential.id, generation = pageGeneration, selectedKnowledgeIds = [...scopeSelection.value]
   if (!isCurrentPage(generation, credentialId)) return
@@ -253,8 +262,24 @@ async function revokeCredential() {
   revoking.value = true
   try { const response = await http.post(`/tenant/api-credentials/${credentialId}/revoke`); if (!isCurrentPage(generation, credentialId)) return; applyCredential(response.data?.data); closeRevokeConfirmation(); ElMessage.success('凭证已吊销') } catch (cause) { if (isCurrentPage(generation, credentialId)) ElMessage.error(errorMessage(cause, '吊销凭证失败')) } finally { if (isCurrentPage(generation, credentialId)) revoking.value = false }
 }
+async function deleteCredential() {
+  const credentialId = credential.id, generation = pageGeneration
+  if (!isCurrentPage(generation, credentialId) || deleting.value) return
+  deleting.value = true
+  try {
+    await http.delete(`/tenant/api-credentials/${credentialId}`)
+    if (!isCurrentPage(generation, credentialId)) return
+    showDeleteConfirmation.value = false
+    ElMessage.success('凭证已删除')
+    router.replace('/tenant/api-credentials')
+  } catch (cause) {
+    if (isCurrentPage(generation, credentialId)) ElMessage.error(errorMessage(cause, '删除凭证失败'))
+  } finally {
+    if (isCurrentPage(generation, credentialId)) deleting.value = false
+  }
+}
 async function copyKey() { if (oneTimeKey.value && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(oneTimeKey.value); copied.value = true } }
-function clearDisclosure() { oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false; const replacementId = pendingReplacementId.value; pendingReplacementId.value = ''; if (!showScopeEditor.value && !showRotateConfirmation.value && !showRevokeConfirmation.value) restoreOpener(); return replacementId }
+function clearDisclosure() { oneTimeKey.value = ''; copied.value = false; saveConfirmed.value = false; const replacementId = pendingReplacementId.value; pendingReplacementId.value = ''; if (!showScopeEditor.value && !showRotateConfirmation.value && !showRevokeConfirmation.value && !showDeleteConfirmation.value) restoreOpener(); return replacementId }
 function acknowledgeKey() { if (!saveConfirmed.value) return; const replacementId = clearDisclosure(); if (replacementId) router.replace(`/tenant/api-credentials/${replacementId}`) }
 function invalidatePage() { pageGeneration += 1; activeCredentialId = ''; resetForPageTransition(); loading.value = false; loadError.value = '' }
 
