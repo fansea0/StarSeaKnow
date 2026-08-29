@@ -11,22 +11,22 @@ Thumbs.db
 .settings/
 
 # Build artifacts
-target/
-build/
-out/
+**/target/
+**/build/
+**/out/
 *.class
 *.jar
 *.war
 *.log
 
 # Frontend
-node_modules/
-dist/
-dist-ssr/
+**/node_modules/
+**/dist/
+**/dist-ssr/
 *.local
 
 # Misc
 *.sw?
 .env
 .env.local
-.superpowers/
+**/.superpowers/
