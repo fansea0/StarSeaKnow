@@ -20,8 +20,7 @@
               <el-menu-item index="/knowledge">知识库</el-menu-item>
               <el-menu-item index="/tools">工具</el-menu-item>
             </template>
-            <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/members">成员</el-menu-item>
-            <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/profile">租户设置</el-menu-item>
+            <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/tenant/members">租户管理</el-menu-item>
             <el-menu-item v-if="auth.user?.role === 'platform_admin'" index="/system">系统管理</el-menu-item>
           </el-menu>
         </nav>
@@ -36,6 +35,28 @@
         <div class="tide-line" :data-section="activeSection" :aria-label="`当前工作区：${activeSectionLabel}`">
           <span aria-hidden="true"></span>
         </div>
+        <nav v-if="isTenantWorkspace" class="tenant-secondary-nav" aria-label="租户管理导航">
+          <router-link
+            to="/tenant/members"
+            :class="{ 'tenant-secondary-nav__link--active': tenantSection === 'members' }"
+            :aria-current="tenantSection === 'members' ? 'page' : undefined"
+          >成员管理</router-link>
+          <router-link
+            to="/tenant/profile"
+            :class="{ 'tenant-secondary-nav__link--active': tenantSection === 'profile' }"
+            :aria-current="tenantSection === 'profile' ? 'page' : undefined"
+          >租户设置</router-link>
+          <router-link
+            to="/tenant/api-credentials"
+            :class="{ 'tenant-secondary-nav__link--active': tenantSection === 'credentials' }"
+            :aria-current="tenantSection === 'credentials' ? 'page' : undefined"
+          >API 凭证</router-link>
+          <router-link
+            to="/tenant/api-docs"
+            :class="{ 'tenant-secondary-nav__link--active': tenantSection === 'docs' }"
+            :aria-current="tenantSection === 'docs' ? 'page' : undefined"
+          >调用文档</router-link>
+        </nav>
         <router-view />
       </main>
     </div>
@@ -50,7 +71,7 @@ import brandOtter from './assets/brand-otter.png'
 
 const auth = useAuthStore()
 const route = useRoute()
-const activeMenu = ref(route.path)
+const activeMenu = ref(primaryMenuPath(route.path))
 const publicPaths = new Set(['/login', '/register', '/403', '/change-initial-password'])
 
 const isPublicPage = computed(() => (
@@ -78,11 +99,24 @@ const sectionLabels = {
 }
 
 const activeSectionLabel = computed(() => sectionLabels[activeSection.value])
+const isTenantWorkspace = computed(() => (
+  auth.user?.role === 'tenant_admin' && route.path.startsWith('/tenant')
+))
+const tenantSection = computed(() => {
+  if (route.path.startsWith('/tenant/api-credentials')) return 'credentials'
+  if (route.path.startsWith('/tenant/api-docs')) return 'docs'
+  if (route.path.startsWith('/tenant/profile')) return 'profile'
+  return 'members'
+})
+
+function primaryMenuPath(path) {
+  return path.startsWith('/tenant') ? '/tenant/members' : path
+}
 
 watch(
   () => route.path,
   (to) => {
-    activeMenu.value = to
+    activeMenu.value = primaryMenuPath(to)
   }
 )
 
@@ -254,6 +288,47 @@ onMounted(() => {
 .tide-line[data-section='tenant'] span { width: 104px; }
 .tide-line[data-section='system'] span { width: 112px; }
 
+.tenant-secondary-nav {
+  display: flex;
+  gap: 6px;
+  margin: -2px 0 18px;
+  overflow-x: auto;
+  padding: 2px 0 4px;
+  scrollbar-width: thin;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tenant-secondary-nav a {
+  flex: 0 0 auto;
+  padding: 8px 13px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--sea-muted);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-decoration: none;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.tenant-secondary-nav a:hover {
+  border-color: color-mix(in srgb, var(--sea-signal) 22%, var(--sea-mist));
+  background: color-mix(in srgb, var(--sea-paper) 76%, var(--sea-mist));
+  color: var(--sea-deep);
+}
+
+.tenant-secondary-nav a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--sea-signal) 34%, transparent);
+  outline-offset: 1px;
+}
+
+.tenant-secondary-nav .tenant-secondary-nav__link--active {
+  border-color: color-mix(in srgb, var(--sea-signal) 32%, var(--sea-mist));
+  background: color-mix(in srgb, var(--sea-signal) 11%, var(--sea-paper));
+  color: var(--sea-deep);
+}
+
 @media (max-width: 1024px) and (min-width: 721px) {
   .workspace-shell { grid-template-columns: 196px minmax(0, 1fr); }
   .workspace-sidebar { padding-right: 12px; padding-left: 12px; }
@@ -314,6 +389,17 @@ onMounted(() => {
   .tide-line {
     height: 38px;
     margin-bottom: 8px;
+  }
+
+  .tenant-secondary-nav {
+    margin-bottom: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tide-line span,
+  .tenant-secondary-nav a {
+    transition: none;
   }
 }
 </style>
