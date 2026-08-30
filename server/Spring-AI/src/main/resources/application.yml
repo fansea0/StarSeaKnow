@@ -39,7 +39,7 @@ spring:
       chat:
         enabled: false  # 关闭Ollama的chat自动配置，防止与openai的chat冲突
       embedding:
-        model: modelscope.cn/VBNn0x/Dmeta-embedding-zh-gguf:latest
+        model: quentinz/bge-base-zh-v1.5:latest
 
 
 logging:

@@ -8,7 +8,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -31,6 +33,22 @@ public class GlobalExceptionHandler
         String requestURI = request.getRequestURI();
         log.error("请求地址'{}',不支持'{}'请求", requestURI, e.getMethod());
         return AjaxResult.error(e.getMessage());
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<AjaxResult> handleMethodArgumentNotValid(MethodArgumentNotValidException e)
+    {
+        String message = e.getBindingResult().getFieldErrors().stream()
+                .findFirst()
+                .map(error -> error.getField() + " " + error.getDefaultMessage())
+                .orElse("request validation failed");
+        return ResponseEntity.badRequest().body(AjaxResult.error(message));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<AjaxResult> handleHttpMessageNotReadable()
+    {
+        return ResponseEntity.badRequest().body(AjaxResult.error("request body must be valid JSON"));
     }
 
 

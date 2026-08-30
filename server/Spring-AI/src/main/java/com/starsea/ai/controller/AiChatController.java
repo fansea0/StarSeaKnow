@@ -1,14 +1,14 @@
 package com.starsea.ai.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.starsea.ai.auth.RequireLogin;
 import com.starsea.ai.domain.Agent;
-import com.starsea.ai.domain.AgentKnowledge;
 import com.starsea.ai.history.RepositoryHistory;
 import com.starsea.ai.model.AgentChatClientFactory;
-import com.starsea.ai.service.AgentKnowledgeService;
+import com.starsea.ai.service.AgentRagContextService;
 import com.starsea.ai.service.AgentService;
 import com.starsea.ai.service.RagService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.document.Document;
@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -40,7 +39,7 @@ public class AiChatController {
     private final ChatClient chatClient;
     private final RagService ragService;
     private final AgentService agentService;
-    private final AgentKnowledgeService agentKnowledgeService;
+    private final AgentRagContextService agentRagContextService;
     private final AgentChatClientFactory agentChatClientFactory;
 
 
@@ -73,24 +72,18 @@ public class AiChatController {
 
     // 指定智能体回复
     @PostMapping(value = "/agent/chat",produces = "text/html;charset=utf-8")
-    public Flux<String> agentChat(@RequestBody String prompt, String chatId, Long agentId){
+    public Flux<String> agentChat(@Valid @RequestBody AgentChatRequest request, String chatId, Long agentId){
         Agent agent = agentService.getById(agentId);
-        List<Long> knowledgeIds = agentKnowledgeService.list(new LambdaQueryWrapper<AgentKnowledge>().eq(AgentKnowledge::getAgentId, agentId))
-                .stream().map(AgentKnowledge::getKnowledgeId).toList();
-        List<Document> documents = knowledgeIds.stream()
-                .map(id -> ragService.searchByFile(prompt, id))
-                .flatMap(Collection::stream) // 将所有列表合并为一个流
-                .toList();
-        //提取文本内容
-        String content = documents.stream()
-                .map(Document::getText)
-                .collect(Collectors.joining("n"));
+        String content = agentRagContextService.retrieveContext(agentId, request.prompt());
         return agentChatClientFactory.create(agent).prompt()
                 .system(agent.getRoleDescription())
-                .user(getChatPrompt2String(prompt, content))
+                .user(getChatPrompt2String(request.prompt(), content))
                 .advisors(a -> a.param(CHAT_MEMORY_CONVERSATION_ID_KEY,chatId))
                 .stream()
                 .content();
+    }
+
+    public record AgentChatRequest(@NotBlank String prompt) {
     }
 
     private String getChatPrompt2String(String message, String context) {
