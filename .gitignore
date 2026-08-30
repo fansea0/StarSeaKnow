@@ -10,6 +10,14 @@ Thumbs.db
 .classpath
 .settings/
 
+# Local agent tooling
+.claude/
+.codex/
+.agents/
+**/.claude/
+**/.codex/
+**/.agents/
+
 # Build artifacts
 **/target/
 **/build/
@@ -24,6 +32,27 @@ Thumbs.db
 **/dist/
 **/dist-ssr/
 *.local
+
+# Coverage and caches
+**/coverage/
+**/.coverage/
+**/.vite/
+**/.cache/
+
+# Temporary and process files
+*.tmp
+*.temp
+*.bak
+*.pid
+*.pid.lock
+
+# Local databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
 
 # Misc
 *.sw?
