@@ -1,7 +1,7 @@
 # Markdown 自适应分块与人工调整设计
 
 日期：2026-08-31
-状态：已完成方案对齐，待实现计划评审
+状态：已按第二轮评审修订，待书面规格确认
 
 ## 1. 背景
 
@@ -11,7 +11,7 @@
 2. 分块结果不可见，用户无法在向量化前发现标题丢失、上下文错位、内容归属错误等问题。
 3. 分块和向量化是一次性过程，用户不能保存调整结果并在下次继续。
 
-本次只改造 Markdown，PDF 继续使用现有链路，后续可复用本设计中的流程管理和 Chunk 管理能力。
+本次只实现 Markdown 自适应分块，但流程、数据表和公共接口按文件类型无关的方式设计。后续接入 PDF 时只新增 PDF 结构解析与规划策略，不改流程状态机、Chunk 生命周期和向量化主链路。
 
 ## 2. 目标与非目标
 
@@ -23,6 +23,8 @@
 - 预览页只提供智能分段，用户可以编辑正文和删除 Chunk。
 - 编辑结果实时保存，用户离开后可以继续处理。
 - 用户确认后，向量输入固定由“文档名 + 完整标题路径 + 合法 overlap + 编辑后的正文”组成。
+- 预览态必须展示最终会参与向量化的 overlap，保证用户看到的上下文与实际索引输入一致。
+- `maxTokens` 和 `overlapTokens` 可以在智能分段设置中修改；完整索引输入不得超过 Embedding 模型的 512 token 硬限制。
 - 已向量化的单个 Chunk 支持编辑、删除和重新向量化。
 - 分块、编辑、向量化和失败重试具有明确、可恢复的状态。
 - 检索结果能通过 Chunk 定位到文件、标题路径和源文件位置。
@@ -30,7 +32,7 @@
 ### 2.2 非目标
 
 - 本期不实现 PDF 自适应分块。
-- 不提供高级分段、手工设置分隔符或公开分块参数。
+- 不提供高级分段或手工设置分隔符；只开放 `maxTokens` 和 `overlapTokens` 两个智能分段参数。
 - 不提供合并、拆分、拖动边界等交互；用户通过直接编辑相邻 Chunk 完成内容归位。
 - 不提供“分段标题作为关联问题”开关；标题默认参与向量计算。
 - 不提供 Chunk 启用/停用。
@@ -43,13 +45,13 @@
 新增四个职责清晰的层次：
 
 ```text
-Markdown 原文件
+原文件（本期 Markdown，后续 PDF）
     │
     ▼
-结构解析层 MarkdownStructureParser
-    │  MarkdownBlock + 标题树
+结构解析策略 DocumentStructureParser
+    │  StructuredBlock + 标题/章节结构
     ▼
-自适应规划层 AdaptiveChunkPlanner
+自适应规划策略 AdaptiveChunkPlanner
     │  ChunkDraft
     ▼
 持久化预览层 document_chunk（DRAFT）
@@ -63,16 +65,16 @@ Markdown 原文件
 
 各组件职责如下：
 
-- `MarkdownStructureParser`：只负责将 Markdown 解析成带源位置的结构化块，不决定最终 Chunk 边界。
-- `MarkdownSemanticUnitBuilder`：将必须保持在一起的相邻块组合成语义单元，例如“引导段 + 列表”。
-- `AdaptiveChunkPlanner`：根据结构边界、长度和不可拆约束规划 Chunk。
+- `DocumentStructureParser`：文件结构解析策略接口，只负责输出通用结构块，不决定最终 Chunk 边界。本期实现 `MarkdownStructureParser`，后续增加 `PdfStructureParser`。
+- `SemanticUnitBuilder`：将必须保持在一起的相邻块组合成语义单元，例如 Markdown 的“引导段 + 列表”；不同文件类型可以提供自己的组合规则。
+- `AdaptiveChunkPlanner`：规划策略接口，根据结构边界、完整索引 token 预算和不可拆约束规划 Chunk。本期注册 Markdown 策略，后续注册 PDF 策略。
 - `ChunkPreviewService`：生成预览并将当前 Chunk 写入数据库。
 - `FileProcessingService`：集中维护文件处理状态，禁止 Controller 或异步任务随意写状态值。
 - `ChunkCommandService`：处理 Chunk 编辑、删除、确认和单 Chunk 重新向量化。
 - `ChunkIndexContentBuilder`：每次向量化前，根据数据库中的最新正文重新生成实际索引文本。
 - `ChunkVectorService`：封装向量写入、删除、补偿和状态更新。
 
-本期不再引入 `file_chunk`。解析产生的 `MarkdownBlock`、语义单元和 `ChunkDraft` 都是内存中的中间模型；一旦预览生成，直接持久化为 `document_chunk`。
+策略通过 `file.type` 路由，公共主流程只依赖统一的 `StructuredBlock` 和 `ChunkDraft`。本期不再引入 `file_chunk`。解析产生的结构块、语义单元和 `ChunkDraft` 都是内存中的中间模型；一旦预览生成，直接持久化为 `document_chunk`。
 
 ## 4. Markdown 结构感知
 
@@ -83,21 +85,20 @@ Markdown 原文件
 解析结果统一转换为内部模型：
 
 ```java
-record MarkdownBlock(
+record StructuredBlock(
     String blockId,
     BlockType type,
     String rawText,
     String plainText,
-    int startOffset,
-    int endOffset,
-    int startLine,
-    int endLine,
     Integer headingLevel,
     List<String> sectionPath,
     int tokenCount,
+    SourceLocator sourceLocator,
     Map<String, Object> attributes
 ) {}
 ```
+
+Markdown 实现的 `sourceLocator` 填充行号和字符偏移；未来 PDF 实现填充页码和版面区域，并可在 `attributes` 中提供字体、坐标和目录层级特征。两者通过同一个来源定位接口交给后续规划器。
 
 支持的块类型：
 
@@ -164,18 +165,35 @@ record MarkdownBlock(
 
 如果某个语义单元自身超过最大长度，再按其类型递归拆分，而不是在任意字符位置截断。
 
-### 5.2 内部默认长度
+### 5.2 Token 预算
 
-本期 UI 不展示参数，使用服务端版本化策略：
+智能分段只开放两个用户参数，其余参数由服务端策略控制：
 
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
 | `minTokens` | 100 | 低于该值时优先与同章节相邻内容合并 |
-| `targetTokens` | 400 | 规划器期望的 Chunk 长度 |
-| `maxTokens` | 650 | 常规 Chunk 上限 |
-| `indexOverlapTokens` | 40 | 允许加入索引文本的最大 overlap |
+| `targetTokens` | 400 | 完整索引输入的内部目标上限；实际取 `min(400, floor(maxTokens × 0.8))` |
+| `maxTokens` | 512 | 用户可调；完整索引输入的硬上限，后端禁止设置为大于 512 |
+| `overlapTokens` | 40 | 用户可调；完整句 overlap 的最大 token 预算 |
 
-这些值属于 `plannerVersion` 对应的系统策略，不是用户配置。生成预览时在 `file_processing.policy_snapshot` 中保存策略快照，便于定位质量问题和后续灰度调整。
+`maxTokens` 不是正文长度，而是一次真正送入 Embedding 模型的全部文本长度：
+
+```text
+token(文档名 + 完整标题路径 + overlap + 编辑后的正文 + 固定格式符) <= maxTokens <= 512
+```
+
+规划器对每个 Chunk 动态计算正文预算：
+
+```text
+bodyBudget = maxTokens - documentNameTokens - titlePathTokens
+             - actualOverlapTokens - formatTokens
+```
+
+因此标题路径较长或存在 overlap 时，正文会相应变短。规划和向量化必须使用与当前 Embedding 模型一致的 tokenizer；不能用字符数或另一个模型的 token 估算替代最终校验。
+
+自动生成内容超过预算时，规划器按结构递归拆分。用户编辑后超过预算时不允许静默截断，保存接口返回 422，并给出文档名、标题、overlap、正文各自的 token 数。固定的文档名和完整标题路径本身已经达到 512 时，文件无法安全向量化，返回明确错误并要求用户缩短源文件名或标题。
+
+生成预览时在 `file_processing.policy_snapshot` 中保存实际生效参数；参数含义和版本作用见 7.2。
 
 ### 5.3 边界评分
 
@@ -208,7 +226,7 @@ record MarkdownBlock(
 1. 从当前章节开始累积语义单元。
 2. 达到 `minTokens` 后开始评估候选边界。
 3. 接近 `targetTokens` 时优先选择高分边界结束当前 Chunk。
-4. 即将超过 `maxTokens` 时，回退到当前 Chunk 内最后一个合法边界。
+4. 预计完整索引输入即将超过 `maxTokens` 时，回退到当前 Chunk 内最后一个合法边界。
 5. 如果没有合法块边界，则对超长语义单元递归拆分。
 6. 处理短尾：只允许在同一标题路径内与前一个 Chunk 合并，不能跨 H1/H2、分隔线或同级标签边界。
 7. 输出 Chunk 的正文所有权、完整标题路径、源块集合和边界原因。
@@ -245,9 +263,17 @@ record MarkdownBlock(
 
 ## 6. Overlap 规则
 
-Overlap 只进入向量输入，不写入 Chunk 的 `content`，也不在检索结果正文中重复展示。这样相邻 Chunk 对原文的内容所有权保持唯一，用户编辑时不会看到重复正文。
+Overlap 参与 Embedding 向量计算，不是只在检索后临时补给 LLM。它不属于当前 Chunk 的正文所有权，因此不写入 `content`，检索返回给 LLM 的正式正文也不重复携带 overlap；但预览态必须把它作为独立的“上文”区域展示。
 
-仅在以下条件全部成立时，从前一个 Chunk 的编辑后正文尾部抽取最多 40 tokens 的完整句子：
+`overlapTokens` 默认 40，用户可以在智能分段设置中修改。从前一个 Chunk 的编辑后正文末尾向前选取完整句子，实际 overlap 必须同时满足：
+
+- 不超过用户设置的 `overlapTokens`；
+- 加入文档名、标题路径和当前正文后，总长度不超过 `maxTokens`；
+- 不截断句子。
+
+抽取算法使用支持中英文标点的句子边界识别，从最后一个完整句子开始向前累积，加入下一句会超出任一预算时停止。因此配置 40 表示“最多 40 tokens”，实际可能是 36、18 或 0；如果最后一个完整句子自身超过预算，则不添加 overlap，不能截取半句凑满 40。
+
+仅在以下条件全部成立时生成 overlap：
 
 - 两个 Chunk 在源顺序上相邻；
 - 标题路径相同；
@@ -264,13 +290,17 @@ Overlap 只进入向量输入，不写入 Chunk 的 `content`，也不在检索�
 - 用户删除内容后形成的非连续边界；
 - 添加 overlap 会明显重复一个完整独立语义单元。
 
-Overlap 在向量化前实时计算，来源是前一个 Chunk 当前保存的 `content`，不是原始 Markdown。编辑前一个 Chunk 后，如果右侧相邻 Chunk 实际使用了它的 overlap，则右侧 Chunk 的索引内容也已经失效，必须一起变为 `DRAFT`。这是内部一致性处理，不新增合并或边界调整操作。
+Overlap 在生成预览时计算并保存，预览卡片直接展示保存后的 `overlap_content`。最终向量化读取同一个字段，不允许到向量化阶段再生成另一份用户没有见过的 overlap。
+
+用户编辑的是 Chunk 正文 `content`，保存后该正文直接替换自动分块正文进入 Embedding 输入，不再使用原始 Markdown 正文。若它是下一 Chunk 的 overlap 来源，系统立即从编辑后的正文重新提取完整句子，更新下一 Chunk 的 `overlap_content` 和预览显示，并将下一 Chunk 置为 `DRAFT`。用户调整 `overlapTokens` 并重新生成预览时，也按同一规则重新计算所有 overlap。
+
+本期不单独编辑 overlap 文本；“overlap 可修改”指修改 `overlapTokens` 参数。这样 overlap 始终可由相邻正文和策略确定，避免出现无法解释的手写上文。如果后续确认需要手工编辑 overlap，可在不改变向量流程的情况下开放 `overlap_content` 编辑并增加来源标记。
 
 ## 7. 数据模型
 
 ### 7.1 为什么使用独立的 `file_processing`
 
-`file` 表表示上传后的物理文件和文件级可用性；分块流程还包含异步进度、失败阶段、策略快照、错误信息和并发锁。将这些字段全部加入 `file` 会混合两类不同生命周期的数据，并使未来 PDF 接入时继续膨胀。
+`file` 表表示上传后的物理文件和文件级可用性；分块流程还包含异步进度、失败阶段、分块参数、策略版本、错误信息和并发锁。将这些字段全部加入 `file` 会混合两类不同生命周期的数据，并使未来 PDF 接入时继续膨胀。
 
 因此新增 `file_processing`，但它不是流程历史表，也不是版本表：
 
@@ -294,9 +324,8 @@ Overlap 在向量化前实时计算，来源是前一个 Chunk 当前保存的 `
 | `failed_from_state` | smallint nullable | 失败前所在阶段，用于决定重试入口 |
 | `progress` | smallint | 0～100，仅供异步任务展示 |
 | `source_hash` | varchar | 分块时的源文件哈希，防止源文件被替换后继续使用旧预览 |
-| `planner_version` | varchar | 自适应规划器版本 |
-| `policy_snapshot` | jsonb | 生成本次预览时使用的系统策略 |
-| `legacy_vector_present` | boolean | 兼容上线前已存在的 Markdown 向量 |
+| `planner_version` | varchar | 生成当前预览的规划算法版本，如 `markdown-adaptive-v1`、未来的 `pdf-layout-v1` |
+| `policy_snapshot` | jsonb | 生成当前预览时实际生效的参数和 tokenizer 信息 |
 | `last_error` | text nullable | 最近一次失败的可读摘要，不存堆栈和敏感信息 |
 | `lock_version` | integer | 乐观锁，仅用于并发控制，不是业务历史版本 |
 | `create_time` / `update_time` | timestamp | 时间字段 |
@@ -307,6 +336,22 @@ Overlap 在向量化前实时计算，来源是前一个 Chunk 当前保存的 `
 - `(tenant_id, knowledge_id, pipeline_state)` 建普通索引，支持知识库文件列表展示状态。
 - 所有查询同时校验 `tenant_id`、`knowledge_id` 和 `file_id`，不能只凭 Chunk ID 操作。
 
+`policy_snapshot` 不是历史记录。它保存当前这套预览真正使用的参数，例如：
+
+```json
+{
+  "maxTokens": 512,
+  "overlapTokens": 40,
+  "minTokens": 100,
+  "targetTokens": 400,
+  "tokenizer": "当前 Embedding 模型 tokenizer"
+}
+```
+
+它有三个作用：用户下次打开时恢复本次智能分段设置；向量化时继续使用与预览相同的 512/overlap 预算；系统默认值变化后，已经生成的预览不会悄悄改变。重新生成预览时直接覆盖该字段，不产生历史版本。
+
+`planner_version` 标识“是哪套代码规则生成了当前边界”，用于问题定位、测试样例和未来策略升级。它与 Chunk 修改版本无关，也不保存历史。PDF 接入后写入自己的规划器版本，公共流程不需要新增字段。
+
 ### 7.3 `document_chunk`
 
 `document_chunk` 表只保存当前可编辑/可检索的 Chunk，不保存历史版本：
@@ -314,17 +359,18 @@ Overlap 在向量化前实时计算，来源是前一个 Chunk 当前保存的 `
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | bigint PK | 数据库主键 |
-| `public_id` | uuid UNIQUE | 稳定 Chunk ID，同时作为向量记录 ID |
+| `public_id` | uuid UNIQUE | Chunk 对外稳定 ID，同时作为向量记录 ID |
 | `tenant_id` | bigint | 租户隔离 |
 | `knowledge_id` | bigint | 所属知识库 |
 | `file_id` | bigint FK | 来源文件，文件删除时级联删除 |
 | `position` | integer | 当前展示顺序 |
 | `content` | text | 用户可编辑的当前正文，不包含标题路径和 overlap |
+| `overlap_content` | text nullable | 预览中展示并实际参与向量化的上文完整句 |
+| `overlap_source_chunk_id` | bigint nullable | overlap 来源 Chunk；删除来源后用于清空和重新计算 |
+| `overlap_token_count` | integer | 当前 overlap 的实际 token 数 |
 | `index_content` | text nullable | 最近一次成功向量化使用的完整文本；DRAFT 时置空 |
 | `section_path` | jsonb | 有序标题数组 |
-| `source_block_ids` | jsonb | 自动分块时包含的源块 ID |
-| `source_start_offset` / `source_end_offset` | integer | 原 Markdown 字符范围 |
-| `source_start_line` / `source_end_line` | integer | 原 Markdown 行范围 |
+| `source_locator` | jsonb | 文件类型无关的来源定位信息 |
 | `token_count` | integer | 当前正文 token 数 |
 | `content_hash` | varchar | 当前正文摘要 |
 | `boundary_reason` | jsonb | 自动规划边界原因，只读 |
@@ -341,6 +387,34 @@ Overlap 在向量化前实时计算，来源是前一个 Chunk 当前保存的 `
 - `content` 不能为空白；编辑为空等同于删除，但 API 要求用户明确调用删除，避免误操作。
 - 不保存 `original_content`、`chunk_version`、`enabled`、`deleted` 或 revision 表。
 - 删除是物理删除；数据库不会提供恢复能力。
+
+`source_locator` 使用按文件类型区分的 JSON 结构，避免 PDF 接入时修改表结构：
+
+```json
+// Markdown
+{
+  "type": "markdown",
+  "blockIds": ["b12", "b13"],
+  "startOffset": 320,
+  "endOffset": 680,
+  "startLine": 18,
+  "endLine": 31
+}
+
+// 后续 PDF
+{
+  "type": "pdf",
+  "startPage": 3,
+  "endPage": 4,
+  "regions": []
+}
+```
+
+`file.public_id` 和 `document_chunk.public_id` 的映射范围不同：
+
+- `file.public_id` 表示一次上传形成的整份文件，是 API、检索来源中的文档公开 ID，对应向量 metadata 的 `documentPublicId`。
+- `document_chunk.public_id` 表示这份文件中的一个 Chunk，对应向量 metadata 的 `documentChunkId`，并直接作为向量记录 ID。Chunk 编辑后该 UUID 不变，因此可以精确覆盖或删除同一条向量。
+- 两者都使用公开 UUID，是为了不把数据库递增主键暴露到 API 和向量 metadata；Chunk 与文件的真实归属仍通过 `document_chunk.file_id → file.id` 外键维护，它们的 UUID 不互相映射。
 
 ## 8. 状态机
 
@@ -419,10 +493,10 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 
 ### 9.2 生成预览
 
-1. API 校验文件属于当前租户和知识库，且扩展名为 `.md` 或 `.markdown`。
+1. API 校验文件属于当前租户和知识库，且扩展名为 `.md` 或 `.markdown`；校验 `maxTokens <= 512`、`overlapTokens >= 0`，并确保参数组合给正文保留有效预算。
 2. 原子转换 `UPLOADED/FAILED → CHUNKING`，提交异步任务。
-3. 异步任务计算源文件哈希，解析 AST、构建标题树、语义单元和 ChunkDraft。
-4. 在单个数据库事务中删除该文件尚未发布的旧 DRAFT Chunk，并批量插入新 `document_chunk`，状态均为 `DRAFT`。
+3. 异步任务计算源文件哈希，解析 AST、构建标题树、语义单元和 ChunkDraft，并使用 Embedding tokenizer 校验完整索引预算。
+4. 规划结束后按相邻关系抽取完整句 overlap；在单个数据库事务中删除该文件尚未发布的旧 DRAFT Chunk，并批量插入带 `overlap_content` 的新 `document_chunk`，状态均为 `DRAFT`。
 5. 更新策略快照、质量统计日志和状态 `CHUNKED`。
 6. 失败时事务回滚，状态转为 `FAILED`，不会留下半套预览。
 
@@ -441,10 +515,10 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 ### 9.4 编辑 Chunk
 
 1. 前端发送 `content + lockVersion`，采用失焦保存或短防抖自动保存。
-2. 后端拒绝空白内容、超出安全长度的内容和过期 `lockVersion`。
+2. 后端使用真实索引格式重新计算 token，拒绝空白内容、完整输入超过当前 `maxTokens` 的内容和过期 `lockVersion`。
 3. 更新正文、token 数、hash、`is_modified=true`、`status=DRAFT`、`index_content=null`。
 4. 如果原状态是 ACTIVE，先使数据库状态失效，再尽快删除旧向量。数据库状态先提交，因此即使向量删除失败，检索后置校验也不会返回旧内容。
-5. 如果右侧相邻 Chunk 的 overlap 依赖当前 Chunk，则同样将右侧 Chunk 标为 DRAFT、清空 `index_content` 并删除其旧向量。
+5. 如果右侧相邻 Chunk 的 overlap 依赖当前 Chunk，则从编辑后的正文重新提取完整句，更新右侧的 `overlap_content`；内容发生变化时将右侧 Chunk 标为 DRAFT、清空 `index_content` 并删除其旧向量。
 6. 文件状态变为 `ADJUSTING`。
 
 标题路径在本期为只读结构信息，用户只编辑正文。这样避免正文与源标题树产生无法解释的映射；若源标题本身错误，用户可以把需要检索的说明补入正文，或重新上传修正后的 Markdown。
@@ -477,7 +551,7 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 单 Chunk 重新向量化适用于用户修改已发布 Chunk 后的快速恢复，也允许对 ACTIVE Chunk 主动重算：
 
 1. `DRAFT/ACTIVE → INDEXING`，进入 INDEXING 后禁止并发编辑或删除。
-2. 根据最新正文和当前相邻关系重新构建 `index_content`。
+2. 根据最新正文、预览中可见的 `overlap_content` 和当前策略构建 `index_content`，并再次执行 512 token 硬校验。
 3. 使用稳定 `public_id` 删除/覆盖旧向量并写入新向量。
 4. 成功后置为 `ACTIVE`；失败后置为 `DRAFT`，文件进入 `FAILED` 并记录错误。
 5. 若文件内还存在 DRAFT Chunk，文件保持 `ADJUSTING`；全部 Chunk 均为 ACTIVE 时文件变为 `COMPLETED`。
@@ -501,8 +575,11 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 规则：
 
 - 文档名和完整标题路径始终参与向量计算。
+- 预览中展示的 `overlap_content` 参与向量计算；它不是只提供给 LLM 的附加文本。
+- 用户保存后的 `content` 直接替换自动生成正文参与向量计算，绝不继续使用修改前的原始正文。
 - 没有标题路径时省略“标题”行。
 - 没有合法 overlap 时省略“上文”行。
+- 文档名、标题、overlap、编辑正文及固定格式符的 token 合计必须 `<= maxTokens <= 512`。
 - `index_content` 保存成功索引时的完整文本，便于排查“数据库正文与向量输入不一致”。
 - 返回给用户或大模型的正文是 `content`，不是 `index_content`，避免把技术前缀和 overlap 当成正式答案重复展示。
 
@@ -541,7 +618,7 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 - 文件公开 ID 和文件名；
 - Chunk 公开 ID；
 - 完整标题路径；
-- 原 Markdown 起止行和字符范围；
+- `source_locator` 中当前文件类型可提供的位置；Markdown 为起止行和字符范围，未来 PDF 为页码和版面区域；
 - 当前 Chunk 顺序。
 
 人工编辑后，源行号仍表示“该 Chunk 最初由哪里自动生成”，不声称编辑后的每个字符都能映射回原文；`is_modified` 用于让调用方区分这一点。
@@ -552,7 +629,7 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| `POST` | `/knowledge/{knowledgeId}/files/{fileId}/chunk-preview` | 启动智能分块，或重试从 CHUNKING 失败的任务，返回 202 |
+| `POST` | `/knowledge/{knowledgeId}/files/{fileId}/chunk-preview` | 携带 `maxTokens/overlapTokens` 启动智能分块，或重试从 CHUNKING 失败的任务，返回 202 |
 | `GET` | `/knowledge/{knowledgeId}/files/{fileId}/processing` | 查询文件流程状态、进度和错误 |
 | `GET` | `/knowledge/{knowledgeId}/files/{fileId}/chunks` | 分页或全量读取预览 Chunk |
 | `PATCH` | `/knowledge/{knowledgeId}/files/{fileId}/chunks/{chunkId}` | 保存 Chunk 正文 |
@@ -574,13 +651,16 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 页面参考已确认的双栏布局：
 
 - 左侧只展示“智能分段”及说明，不展示高级分段和标题关联问题选项。
+- 智能分段内只提供 `maxTokens` 和 `overlapTokens`：前者默认且最高为 512，后者默认 40；前后端都校验完整索引预算。
 - 点击“生成预览”后轮询处理状态；CHUNKING 时禁用编辑。
-- 右侧按顺序展示 Chunk 卡片、标题路径、正文、字符/token 数和当前索引状态。
+- 右侧按顺序展示 Chunk 卡片、标题路径、独立的“上文 overlap”区域、正文、完整索引 token 构成和当前索引状态。
 - 卡片只提供编辑和删除；ACTIVE Chunk 修改后显示“待重新向量化”。
 - 正文采用失焦保存或 500～800ms 防抖保存，并展示保存中/已保存/冲突状态。
 - 删除需要二次确认，因为没有历史版本和恢复能力。
 - 页面底部提供“开始导入/确认向量化”；完成后的 Chunk 卡片可提供“重新向量化”。
 - VECTORIZING 和 INDEXING 时禁止相关编辑、删除和重复提交。
+
+修改分块参数后需要重新生成预览，因为 `maxTokens` 会改变边界，`overlapTokens` 会改变可见上文。若已经存在人工编辑的 DRAFT Chunk，前端必须提示重新生成会覆盖当前编辑；存在 ACTIVE Chunk 时本期不允许重新生成整套预览，只能编辑/删除/重新向量化现有 Chunk。
 
 系统内部仍执行完整边界规划，UI 简化不等于退化为固定长度切分。
 
@@ -595,31 +675,38 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 - `last_error` 只保存脱敏后的短消息；完整堆栈仅进服务日志。
 - 状态转换全部经过集中服务和白名单，不允许直接写任意数字。
 
-## 15. 与现有字段和旧数据的兼容
+## 15. 全新项目基线与 PDF 扩展点
 
-### 15.1 `file` 表
+本项目按全新流程实现，不兼容旧的 `file.embedding_status`，也不迁移或识别旧向量：
 
-- `file.status` 继续表示文件级检索可用/禁用，不承担流程状态。
-- `file.embedding_status` 不再作为真实流程来源。过渡期只做兼容映射：
-  - `COMPLETED → 2`
-  - `FAILED → 1`
-  - 其他状态 `→ 0`
-- 新前端改读 `file_processing.pipeline_state` 后，再单独安排迁移移除 `embedding_status`。
+- `file_processing.pipeline_state` 是唯一文件处理状态来源；新 schema、实体和接口中移除 `file.embedding_status`。
+- `file` 只保留物理文件属性和文件级业务可用状态，不重复保存分块/向量化状态。
+- 不设置 `legacy_vector_present`，不做双读、状态映射或旧向量兜底。
+- 数据库初始化和新代码直接按新模型创建数据；旧链路不作为实现约束。
 
-### 15.2 上线前已经向量化的 Markdown
+为了让 PDF 以最小改动接入，公共层固定以下接口和数据：
 
-采用非破坏式渐进迁移：
+```java
+interface DocumentStructureParser {
+    boolean supports(String fileType);
+    ParsedStructure parse(FileResource file);
+}
 
-1. 为已有 Markdown 文件补 `file_processing`，状态为 `UPLOADED`。
-2. 若原 `embedding_status=2`，设置 `legacy_vector_present=true`，旧向量在用户生成预览和编辑期间继续服务。
-3. 用户确认新预览后，文件进入 VECTORIZING；此时暂时从检索中排除该文件，按租户/知识库/文件范围删除旧向量。
-4. 旧向量删除成功后立即设置 `legacy_vector_present=false`，再写入新 Chunk 向量。若后续新向量写入失败，该文件保持不可检索并等待重试，不能错误回退到已经不存在的旧向量。
-5. 新向量全部成功后设置 `COMPLETED`。
-6. 新上传文件默认 `legacy_vector_present=false`。
+interface ChunkPlanningStrategy {
+    boolean supports(String fileType);
+    List<ChunkDraft> plan(ParsedStructure structure, ChunkPolicy policy);
+}
+```
 
-这样发布数据库变更不会立即清除已有知识库内容，也不会伪造缺少正文和来源信息的 `document_chunk`。
+后续接入 PDF 时只需要：
 
-PDF、TXT、Office 文件继续走旧链路，检索后置校验仅对携带 `documentChunkId` 的新 Markdown 向量强制查询 `document_chunk`；旧格式的向量按原逻辑返回。
+1. 新增 `PdfStructureParser`，输出页、段落、标题、表格和版面区域等通用结构块。
+2. 新增或注册 `PdfChunkPlanningStrategy`，处理跨页、页眉页脚和版面边界。
+3. 将 PDF 页码/区域写入现有 `source_locator`。
+4. 在 `planner_version` 写入 PDF 策略版本，在 `policy_snapshot` 写入 PDF 实际参数。
+5. 复用现有预览、编辑、删除、状态机、512 token 校验、向量化、重新向量化和检索后置校验。
+
+因此 PDF 接入不新增流程表、不新增 PDF Chunk 表、不改变 Chunk 状态，也不改变前端主要交互；只扩展解析/规划策略和来源定位展示。
 
 ## 16. 测试设计
 
@@ -639,6 +726,8 @@ PDF、TXT、Office 文件继续走旧链路，检索后置校验仅对携带 `do
 - 超长列表、表格和代码块按类型递归拆分。
 - 短尾只在同标题路径内合并。
 - 不跨强边界生成 overlap。
+- overlap 只包含完整中英文句子，实际 token 数不超过配置值。
+- 每个预览 Chunk 的文档名、标题、overlap、正文和格式符总计不超过 512 tokens。
 - `科大百事通.md` 作为黄金样例保存期望 Chunk 路径、数量范围和关键正文归属，不绑定脆弱的精确 token 数。
 
 ### 16.3 状态机和服务测试
@@ -649,6 +738,8 @@ PDF、TXT、Office 文件继续走旧链路，检索后置校验仅对携带 `do
 - 乐观锁冲突不会覆盖新内容。
 - 编辑 ACTIVE Chunk 后旧向量立即失效。
 - 编辑前一 Chunk 会按 overlap 依赖使右侧 Chunk 失效。
+- 编辑前一 Chunk 后，右侧预览中的 overlap 立即来自编辑后的正文且保持完整句。
+- 正文编辑造成完整索引输入超过 maxTokens 时返回 422，不截断用户内容。
 - 删除 DRAFT/ACTIVE Chunk 的数据库与向量补偿行为正确。
 - 整体向量化部分失败后正文仍保留、Chunk 回到 DRAFT。
 - 单 Chunk 重新向量化成功后恢复 ACTIVE。
@@ -660,18 +751,19 @@ PDF、TXT、Office 文件继续走旧链路，检索后置校验仅对携带 `do
 - 返回正文不包含文档名、标题前缀和 overlap。
 - 返回来源包含文件、Chunk、完整标题路径和源行号。
 - 租户、知识库和禁用文件过滤保持有效。
-- 旧 Markdown 和非 Markdown 向量在迁移期仍能检索。
 
 ### 16.5 前端测试
 
 - CHUNKING/VECTORIZING/INDEXING 时按钮状态正确。
+- 预览态展示与最终索引一致的 overlap 和 token 构成。
+- `maxTokens > 512` 时前端阻止提交，后端仍独立拒绝绕过校验的请求。
 - 编辑保存、保存失败、并发冲突和刷新恢复正确。
 - 删除确认和删除最后一个 Chunk 后的提示正确。
 - DRAFT/ACTIVE 状态和待重新向量化提示正确。
 
 ## 17. 实施边界与验收标准
 
-本设计可以作为一个实现计划完成，但应按以下顺序拆分任务：数据库和状态模型、Markdown 解析器、规划器、预览服务、编辑删除、向量化与检索一致性、前端交互、旧数据兼容。
+本设计可以作为一个实现计划完成，但应按以下顺序拆分任务：通用数据库和状态模型、文件类型策略接口、Markdown 解析器、Markdown 规划器、预览服务、编辑删除、向量化与检索一致性、前端交互。
 
 最终验收标准：
 
@@ -680,6 +772,9 @@ PDF、TXT、Office 文件继续走旧链路，检索后置校验仅对携带 `do
 3. 列表、表格、代码和同级条目的关键边界符合规划规则。
 4. 用户编辑/删除后刷新或下次进入仍保持结果。
 5. 向量输入精确包含文档名、标题路径、合法 overlap 和编辑后的正文。
-6. 检索只返回 ACTIVE Chunk，并返回不含 overlap 的当前正文和来源信息。
-7. 单 Chunk 支持编辑、删除、重新向量化，不存在启用/停用和历史版本功能。
-8. 分块或向量化失败可以安全重试，不产生可检索的过期 Chunk。
+6. 预览能看到实际 overlap；overlap 参与 Embedding，正文编辑后相邻 overlap 会同步重算。
+7. 任一索引输入不超过 512 tokens，overlap 不截断句子。
+8. 检索只返回 ACTIVE Chunk，并返回不含 overlap 的当前正文和来源信息。
+9. 单 Chunk 支持编辑、删除、重新向量化，不存在启用/停用和历史版本功能。
+10. 分块或向量化失败可以安全重试，不产生可检索的过期 Chunk。
+11. 后续 PDF 接入只需增加解析和规划策略，不修改流程表、Chunk 表和状态机。
