@@ -1,7 +1,7 @@
 # Markdown 自适应分块与人工调整设计
 
 日期：2026-08-31
-状态：已按第四轮评审修订，待书面规格确认
+状态：已按第五轮评审修订，待原型与书面规格确认
 
 ## 1. 背景
 
@@ -26,7 +26,7 @@
 - 预览态只展示只读标题结构和可编辑原文 Chunk，不展示 overlap，用户只关注原文分块质量。
 - 最终向量化前允许开启或关闭 overlap；开启时可设置 `overlapTokens`，默认 40。
 - Embedding 输入与 LLM 上下文使用同一文本：关闭 overlap 时为“完整标题路径 + 编辑后的正文”，开启时为“完整标题路径 + overlap + 编辑后的正文”。
-- `maxTokens` 可以在智能分段设置中修改；最终上下文不得超过 Embedding 模型的 512 token 硬限制。
+- MD 优化分块允许配置最小、推荐、最大三档 token 数；最终上下文不得超过 Embedding 模型的 512 token 硬限制。
 - 已向量化的单个 Chunk 支持编辑、删除和重新向量化。
 - 分块、编辑、向量化和失败重试具有明确、可恢复的状态。
 - 检索结果能通过 Chunk 定位到文件、标题路径和源文件位置。
@@ -35,7 +35,7 @@
 
 - 本期不实现 PDF 自适应分块。
 - 本期不实现“通用”和“父子分块”的后端能力；两者只展示不可选择的 UI 占位卡片。
-- 不提供高级分段或手工设置分隔符；智能分段阶段只开放 `maxTokens`，`overlapEnabled/overlapTokens` 在最终向量化前设置。
+- 不提供高级分段或手工设置分隔符；智能分段阶段开放 `minTokens/targetTokens/maxTokens`，`overlapEnabled/overlapTokens` 在最终向量化前设置。
 - 不提供合并、拆分、拖动边界等交互；用户通过直接编辑相邻 Chunk 完成内容归位。
 - 不提供“分段标题作为关联问题”开关；标题默认参与向量计算。
 - 不提供 Chunk 启用/停用。
@@ -74,7 +74,7 @@
 
 各组件职责如下：
 
-- `ChunkStrategyRegistry`：维护策略描述、文件类型适用范围和真实实现。只有注册了实现且支持当前文件类型的策略才能生成预览。
+- `ChunkStrategyRegistry`：只维护后端已经实现的策略、文件类型适用范围和真实实现。只有注册了实现且支持当前文件类型的策略才能生成预览。
 - `DocumentStructureParser`：文件结构解析策略接口，只负责输出通用结构块，不决定最终 Chunk 边界。本期实现 `MarkdownStructureParser`，后续增加 `PdfStructureParser`。
 - `SemanticUnitBuilder`：将必须保持在一起的相邻块组合成语义单元，例如 Markdown 的“引导段 + 列表”；不同文件类型可以提供自己的组合规则。
 - `AdaptiveChunkPlanner`：规划策略接口，根据结构边界、完整索引 token 预算和不可拆约束规划 Chunk。本期注册 Markdown 策略，后续注册 PDF 策略。
@@ -87,31 +87,46 @@
 
 策略通过 `strategyCode + file.type` 路由，公共主流程只依赖统一的 `StructuredBlock` 和 `ChunkDraft`。本期不再引入 `file_chunk`。解析产生的结构块、语义单元和 `ChunkDraft` 都是内存中的中间模型；一旦预览生成，直接持久化为 `document_chunk`。Overlap 发生在这一步之后，不属于任何文件解析策略。
 
-### 3.1 分块策略模型
+### 3.1 前端策略目录与后端实现注册表
 
-每个策略提供稳定的描述信息：
+“页面展示什么”和“后端实际实现什么”分开管理，避免为了两个占位卡片引入无效的后端类型与分支。
+
+前端维护展示目录 `chunkStrategyCatalog`：
+
+```ts
+type ChunkStrategyCatalogItem = {
+  code: string
+  scope: 'GLOBAL' | 'FILE_TYPE'
+  supportedFileTypes?: string[]
+  implemented: boolean
+  title: string
+  description: string
+}
+```
+
+本期前端目录：
+
+| code | 显示名称 | 范围 | 可见条件 | 本期状态 |
+| --- | --- | --- | --- | --- |
+| `GENERAL` | 通用 | 全局 | 所有文件类型 | 仅前端占位，禁用 |
+| `PARENT_CHILD` | 父子分块 | 全局 | 所有文件类型 | 仅前端占位，禁用 |
+| `MARKDOWN_OPTIMIZED` | MD 优化分块 | 文件类型专属 | `.md`、`.markdown` | 可选择、默认选中、后端已实现 |
+
+后端 descriptor 只描述实际存在的策略实现：
 
 ```java
 record ChunkStrategyDescriptor(
     String code,
     StrategyScope scope,
     Set<String> supportedFileTypes,
-    boolean available,
-    String unavailableReason,
     String plannerVersion,
     List<StrategyConfigField> configFields
 ) {}
 ```
 
-本期策略目录：
+本期后端 registry 只注册 `MARKDOWN_OPTIMIZED`。能力接口也只返回已经实现且适用于当前文件的策略；前端把接口结果与本地展示目录合并，得到“两个禁用占位 + 当前文件可用策略”。执行接口仍独立校验 registry，不能只依赖前端禁用状态。
 
-| code | 显示名称 | 范围 | 可见条件 | 本期状态 |
-| --- | --- | --- | --- | --- |
-| `GENERAL` | 通用 | 全局 | 所有文件类型 | UI 展示，禁用 |
-| `PARENT_CHILD` | 父子分块 | 全局 | 所有文件类型 | UI 展示，禁用 |
-| `MARKDOWN_OPTIMIZED` | MD 优化分块 | 文件类型专属 | `.md`、`.markdown` | 可选择、默认选中、完整实现 |
-
-未来增加 PDF 时注册 `PDF_LAYOUT_OPTIMIZED`，仅对 PDF 显示。策略可见性由 descriptor 决定；策略是否真正可用由后端 registry 是否存在实现决定，不能只依赖前端禁用状态。
+未来实现通用、父子或 PDF 策略时，新增对应后端策略实现和 descriptor，再把前端目录项的 `implemented` 改为 `true`；页面骨架、预览模型、状态机和现有 API 不变。
 
 ### 3.2 建议代码边界
 
@@ -220,13 +235,21 @@ Markdown 实现的 `sourceLocator` 填充行号和字符偏移；未来 PDF 实�
 
 ### 5.2 Token 预算
 
-MD 优化分块只开放 `maxTokens`，其余规划参数由服务端策略控制。Overlap 不属于此策略，在最终向量化前由通用 `contextPolicy` 单独设置：
+MD 优化分块开放三个可编辑参数。三者都用于“完整标题路径 + 正文”的原文边界规划；Overlap 不属于此策略，在最终向量化前由通用 `contextPolicy` 单独设置：
 
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
-| `minTokens` | 100 | 低于该值时优先与同章节相邻内容合并 |
-| `targetTokens` | 400 | 预览阶段“标题路径 + 正文”的内部目标上限；实际取 `min(400, floor(maxTokens × 0.8))` |
-| `maxTokens` | 512 | 用户可调；完整索引输入的硬上限，后端禁止设置为大于 512 |
+| `minTokens` | 100 | 软下限；低于该值时优先与同章节相邻内容合并，但不能为了凑长度破坏强结构边界 |
+| `targetTokens` | 400 | 推荐目标；达到该值附近时优先在高质量边界结束 Chunk，不要求精确等于该值 |
+| `maxTokens` | 512 | 当前策略的硬上限；标题路径、可选 overlap、正文与格式符的总和不得超过它，且它不得大于 512 |
+
+配置必须满足：
+
+```text
+0 < minTokens <= targetTokens <= maxTokens <= 512
+```
+
+前端在输入时即时校验，后端在生成预览时再次校验。最小值和推荐值是质量目标，不是强制填充目标；章节切换、代码块、表格、列表等强边界优先，因此合法 Chunk 可以短于 `minTokens`。最大值是硬约束。
 
 `maxTokens` 不是正文长度，而是一次真正送入 Embedding 模型的全部文本长度：
 
@@ -445,8 +468,6 @@ Overlap 文本没有独立编辑入口。用户只控制是否开启和最大 to
 | `tenant_id` | bigint | 租户隔离 |
 | `knowledge_id` | bigint | 所属知识库 |
 | `file_id` | bigint FK | 来源文件，文件删除时级联删除 |
-| `parent_chunk_id` | bigint nullable | 为未来父子分块预留的自关联父 Chunk；当前 MD 优化分块始终为空 |
-| `chunk_role` | smallint | `0=STANDALONE`、`1=PARENT`、`2=CHILD`；当前始终为 0 |
 | `position` | integer | 当前展示顺序 |
 | `content` | text | 用户可编辑的当前正文，不包含标题路径和 overlap |
 | `overlap_content` | text nullable | 隐藏的上文完整句；开启 overlap 后参与向量化和 LLM 上下文 |
@@ -468,12 +489,11 @@ Overlap 文本没有独立编辑入口。用户只控制是否开启和最大 to
 
 - `(file_id, position)` 唯一，保证显示顺序稳定。
 - `(tenant_id, knowledge_id, file_id, status)` 建索引。
-- `parent_chunk_id` 使用自外键并在父 Chunk 删除时级联处理；本期 API 不接受客户端写入层级字段。
 - `content` 不能为空白；编辑为空等同于删除，但 API 要求用户明确调用删除，避免误操作。
 - 不保存 `original_content`、`chunk_version`、`enabled`、`deleted` 或 revision 表。
 - 删除是物理删除；数据库不会提供恢复能力。
 
-预留层级字段不等于实现父子分块。本期 `MARKDOWN_OPTIMIZED` 只产生 `STANDALONE`，检索逻辑也只处理独立 Chunk；等 `PARENT_CHILD` 真正实现时，再由对应策略产生父子关系并扩展检索规则，无需更换 Chunk 主表。
+本期不为尚未实现的父子分块预加 `parent_chunk_id/chunk_role` 字段。扩展点放在 `ChunkPlanningStrategy` 的输出模型和策略注册机制中；真正实现 `PARENT_CHILD` 时，再通过一次明确的数据库迁移增加层级关系，并同步扩展检索规则。这样当前落库模型没有无效字段，同时主流程、状态机和现有独立 Chunk API 不需要重写。
 
 `source_locator` 使用按文件类型区分的 JSON 结构，避免 PDF 接入时修改表结构：
 
@@ -580,7 +600,7 @@ Chunk 不存在启用/停用状态。是否参与检索只由 `status == ACTIVE`
 
 ### 9.2 生成预览
 
-1. API 校验文件属于当前租户和知识库，根据 `strategyCode + file.type` 查询 `ChunkStrategyRegistry`。本期只接受 Markdown 文件的 `MARKDOWN_OPTIMIZED`；`GENERAL`、`PARENT_CHILD`、文件类型不匹配或未注册实现都返回 422。随后校验 `maxTokens <= 512`，并确保标题路径和正文具有有效预算。
+1. API 校验文件属于当前租户和知识库，根据 `strategyCode + file.type` 查询 `ChunkStrategyRegistry`。本期只接受 Markdown 文件的 `MARKDOWN_OPTIMIZED`；`GENERAL`、`PARENT_CHILD`、文件类型不匹配或未注册实现都返回 422。随后校验 `0 < minTokens <= targetTokens <= maxTokens <= 512`，并确保标题路径和正文具有有效预算。
 2. 原子转换 `UPLOADED/FAILED → CHUNKING`，提交异步任务。
 3. 异步任务计算源文件哈希，解析 AST、构建标题树、语义单元和 ChunkDraft，并使用 Embedding tokenizer 校验完整索引预算。
 4. 在单个数据库事务中删除该文件尚未发布的旧 DRAFT Chunk，并批量插入新 `document_chunk`，状态均为 `DRAFT`；预览阶段 `overlap_content` 保持为空。
@@ -723,7 +743,7 @@ Overlap 开启时，两者均为：
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| `GET` | `/knowledge/{knowledgeId}/files/{fileId}/chunk-strategies` | 返回当前文件可见策略、可用性、禁用原因和默认策略 |
+| `GET` | `/knowledge/{knowledgeId}/files/{fileId}/chunk-strategies` | 只返回后端已实现且适用于当前文件的策略与配置 schema |
 | `POST` | `/knowledge/{knowledgeId}/files/{fileId}/chunk-preview` | 携带 `strategyCode + strategyConfig` 启动分块，或重试 CHUNKING 失败任务，返回 202 |
 | `GET` | `/knowledge/{knowledgeId}/files/{fileId}/processing` | 查询文件流程状态、进度和错误 |
 | `GET` | `/knowledge/{knowledgeId}/files/{fileId}/chunks` | 分页或全量读取预览 Chunk |
@@ -739,34 +759,29 @@ Markdown 文件的策略查询示例：
   "fileType": "md",
   "strategies": [
     {
-      "code": "GENERAL",
-      "scope": "GLOBAL",
-      "visible": true,
-      "available": false,
-      "unavailableReason": "暂未开放",
-      "defaultSelected": false,
-      "configFields": []
-    },
-    {
-      "code": "PARENT_CHILD",
-      "scope": "GLOBAL",
-      "visible": true,
-      "available": false,
-      "unavailableReason": "暂未开放",
-      "defaultSelected": false,
-      "configFields": []
-    },
-    {
       "code": "MARKDOWN_OPTIMIZED",
       "scope": "FILE_TYPE",
-      "visible": true,
-      "available": true,
       "defaultSelected": true,
       "configFields": [
+        {
+          "key": "minTokens",
+          "type": "number",
+          "defaultValue": 100,
+          "min": 1,
+          "max": 512
+        },
+        {
+          "key": "targetTokens",
+          "type": "number",
+          "defaultValue": 400,
+          "min": 1,
+          "max": 512
+        },
         {
           "key": "maxTokens",
           "type": "number",
           "defaultValue": 512,
+          "min": 1,
           "max": 512
         }
       ]
@@ -775,7 +790,7 @@ Markdown 文件的策略查询示例：
 }
 ```
 
-能力接口可以返回未实现策略用于 UI 占位；执行接口只接受后端 registry 中可用的实现。两者职责不能混淆。
+`GENERAL/PARENT_CHILD` 不进入这份响应。前端以 `code` 合并本地展示目录与后端响应：本地占位始终展示但禁用，后端返回项才允许选择。接口被绕过时，执行接口仍只接受 registry 中的实现。
 
 关键返回码：
 
@@ -794,13 +809,13 @@ Markdown 文件的策略查询示例：
 
 - 标题为“分块设置”，策略以纵向单选卡片展示。
 - 全局策略区固定展示“通用”“父子分块”。本期两张卡片均为禁用态，显示“暂未开放”和简短说明；点击或键盘操作不能选中、不能展开参数、不能生成预览，同时通过 `aria-disabled` 和辅助文本暴露禁用原因。
-- 文件类型专属策略根据 capabilities 返回值显隐。Markdown 文件显示“MD 优化分块”并默认选中；非 Markdown 文件不显示该卡片。
+- 前端先展示本地全局占位目录，再根据后端能力响应追加文件类型专属策略。Markdown 文件显示“MD 优化分块”并默认选中；非 Markdown 文件不显示该卡片。
 - 选中卡片使用主色边框、单选标记和轻背景强调，并在卡片内展开参数；未选中可用卡片折叠参数。
-- MD 优化分块只展示 `maxTokens`，默认且最高 512，并说明“按 Markdown 标题、列表、表格和代码结构优化边界”。卡片内不出现 overlap。
+- MD 优化分块展示“最小 / 推荐 / 最大”三个 Token 数字输入框，默认分别为 `100 / 400 / 512`，并固定显示关系提示“最小 ≤ 推荐 ≤ 最大 ≤ 512”。输入不合法时就地标红并禁用“生成预览”。卡片说明为“按 Markdown 标题、列表、表格和代码结构优化边界”，其中不出现 overlap。
 - “生成预览”按钮只在存在可用且已选择策略时启用。CHUNKING 时显示加载状态并禁止更换策略。
 - 如果当前文件没有任何可用策略，保留禁用卡片并显示“当前文件类型暂不支持生成预览”。
 
-前端根据策略 `code` 维护图标、中文名称和说明；后端 capabilities 决定 `visible/available/unavailableReason/defaultSelected`。即使前端错误地将卡片启用，后端 registry 仍必须拒绝未实现策略。
+前端目录维护图标、中文名称、说明和两个未实现占位的禁用原因；后端能力响应只声明真实可执行策略、适用文件类型、默认值和校验 schema。即使前端错误地将占位卡片启用，后端 registry 仍必须拒绝未实现策略。
 
 ### 13.2 右侧预览
 
@@ -822,7 +837,7 @@ Markdown 文件的策略查询示例：
 - 完成后的 Chunk 卡片可提供“重新向量化”，沿用 `context_policy`。
 - VECTORIZING 和 INDEXING 时禁止相关编辑、删除和重复提交。
 
-修改 MD 优化分块的 `maxTokens` 后需要重新生成预览，因为它会改变原文边界。若已经存在人工编辑的 DRAFT Chunk，前端必须提示重新生成会覆盖当前编辑；存在 ACTIVE Chunk 时本期不允许重新生成整套预览，只能编辑/删除/重新向量化现有 Chunk。Overlap 设置不改变预览边界，只在最终确认时由通用增强器生成隐藏上下文。
+修改 MD 优化分块的 `minTokens/targetTokens/maxTokens` 任一参数后都需要重新生成预览，因为它们会改变原文边界。若已经存在人工编辑的 DRAFT Chunk，前端必须提示重新生成会覆盖当前编辑；存在 ACTIVE Chunk 时本期不允许重新生成整套预览，只能编辑/删除/重新向量化现有 Chunk。Overlap 设置不改变预览边界，只在最终确认时由通用增强器生成隐藏上下文。
 
 ## 14. 并发、事务和错误处理
 
@@ -896,9 +911,10 @@ interface ChunkContextEnricher {
 
 ### 16.3 策略注册与上下文增强测试
 
-- `GENERAL/PARENT_CHILD` 对所有文件可见但 `available=false`，提交预览会被后端拒绝。
+- 后端能力查询只返回已经注册实现的策略，不返回前端占位的 `GENERAL/PARENT_CHILD`。
 - `MARKDOWN_OPTIMIZED` 只对 `.md/.markdown` 可见并可用，其他文件类型不可提交。
 - Registry 只调用选中且支持当前文件类型的策略实现。
+- `minTokens/targetTokens/maxTokens` 不满足 `0 < min <= target <= max <= 512` 时拒绝生成预览。
 - `ChunkContextEnricher` 不调用 Markdown parser/planner。
 - Overlap 不跨强结构边界，只包含完整中英文句子，实际 token 数不超过配置值。
 - 最终开启 overlap 后，标题、实际 overlap、正文和格式符总计不超过 512 tokens；预算不足时只缩短/取消 overlap，不改变正文。
@@ -933,22 +949,23 @@ interface ChunkContextEnricher {
 - Markdown 文件额外显示并默认选中 MD 优化分块；非 Markdown 文件不显示该卡片。
 - 没有可用策略时生成预览按钮禁用，并显示明确原因。
 - MD 优化分块参数区不出现 overlap；Overlap 只出现在最终确认的上下文增强区域。
+- MD 优化分块显示最小、推荐、最大三个输入并恢复 `policy_snapshot` 中的当前值。
 - 预览态展示只读标题路径和可编辑正文，不泄露 `overlap_content/index_content`。
 - 最终确认提供 overlap 开关，开启时显示 `overlapTokens`，默认 40。
-- `maxTokens > 512` 时前端阻止提交，后端仍独立拒绝绕过校验的请求。
+- 三档参数次序错误或 `maxTokens > 512` 时前端阻止提交，后端仍独立拒绝绕过校验的请求。
 - 编辑保存、保存失败、并发冲突和刷新恢复正确。
 - 删除确认和删除最后一个 Chunk 后的提示正确。
 - DRAFT/ACTIVE 状态和待重新向量化提示正确。
 
 ## 17. 实施边界与验收标准
 
-本设计可以作为一个实现计划完成，但应按以下顺序拆分任务：通用数据库和状态模型、策略 descriptor/registry、Markdown 解析器、Markdown 规划器、通用上下文增强器、预览服务、编辑删除、向量化与检索一致性、前端策略卡片与预览交互。
+本设计可以作为一个实现计划完成，但应按以下顺序拆分任务：通用数据库和状态模型、后端实际策略 descriptor/registry、Markdown 解析器、Markdown 规划器、通用上下文增强器、预览服务、编辑删除、向量化与检索一致性、前端展示目录/策略卡片与预览交互。
 
 最终验收标准：
 
 1. Markdown 上传后不能绕过预览直接向量化。
 2. 左侧展示通用、父子分块和按文件类型显隐的专属策略；本期只有 Markdown 的 MD 优化分块可选择和执行。
-3. 后端拒绝 `GENERAL/PARENT_CHILD` 以及文件类型不匹配的策略请求。
+3. `GENERAL/PARENT_CHILD` 仅存在于前端展示目录；后端能力接口不返回它们，并拒绝任何伪造的对应策略请求。
 4. `科大百事通.md` 中标题不会形成空 Chunk，正文能继承正确的完整标题路径。
 5. 列表、表格、代码和同级条目的关键边界符合规划规则。
 6. 用户编辑/删除后刷新或下次进入仍保持结果。
@@ -960,4 +977,4 @@ interface ChunkContextEnricher {
 12. 检索只返回 ACTIVE Chunk，并返回保存的 `index_content` 作为 LLM 上下文和独立来源信息。
 13. 单 Chunk 支持编辑、删除、重新向量化，不存在启用/停用和历史版本功能。
 14. 分块或向量化失败可以安全重试，不产生可检索的过期 Chunk。
-15. 后续 PDF 接入只需注册解析/规划策略和 UI descriptor，不修改流程表、Chunk 表、上下文增强器和状态机。
+15. 后续 PDF 接入只需注册解析/规划策略并增加前端目录项，不修改流程表、Chunk 表、上下文增强器和状态机；父子分块真正实现时允许通过独立迁移增加层级字段。
