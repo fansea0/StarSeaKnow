@@ -135,6 +135,7 @@ public class ChunkVectorService {
             throw ChunkingException.conflict("Pipeline state or lock version is stale");
         }
         if (current != PipelineState.CHUNKED && current != PipelineState.ADJUSTING
+                && current != PipelineState.COMPLETED
                 && !(current == PipelineState.FAILED
                 && Integer.valueOf(PipelineState.VECTORIZING.code())
                 .equals(processing.getFailedFromState()))) {
@@ -176,8 +177,17 @@ public class ChunkVectorService {
             vectorizingLockVersion = stateService.transition(knowledgeId, fileId,
                     PipelineState.FAILED, PipelineState.VECTORIZING, lockVersion).lockVersion();
         } else {
-            int confirmedLockVersion = stateService.transition(knowledgeId, fileId, current,
-                    PipelineState.CONFIRMED, lockVersion).lockVersion();
+            PipelineState confirmationSource = current;
+            int confirmationLockVersion = lockVersion;
+            if (current == PipelineState.COMPLETED) {
+                confirmationLockVersion = stateService.transition(knowledgeId, fileId,
+                        PipelineState.COMPLETED, PipelineState.ADJUSTING,
+                        lockVersion).lockVersion();
+                confirmationSource = PipelineState.ADJUSTING;
+            }
+            int confirmedLockVersion = stateService.transition(knowledgeId, fileId,
+                    confirmationSource, PipelineState.CONFIRMED,
+                    confirmationLockVersion).lockVersion();
             vectorizingLockVersion = stateService.transition(knowledgeId, fileId,
                     PipelineState.CONFIRMED, PipelineState.VECTORIZING,
                     confirmedLockVersion).lockVersion();

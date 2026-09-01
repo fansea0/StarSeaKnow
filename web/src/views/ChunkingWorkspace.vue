@@ -52,6 +52,25 @@
           <el-button link data-testid="retry-processing-load" @click="retryProcessingLoad">重新加载文件状态</el-button>
         </p>
 
+        <section
+          v-if="isCompleted"
+          class="completion-banner"
+          data-testid="vectorization-complete"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="completion-banner__mark" aria-hidden="true">✓</span>
+          <div class="completion-banner__copy">
+            <span class="completion-banner__eyebrow mono">INDEX / READY</span>
+            <strong>索引建立完成</strong>
+            <p>已将 {{ chunks.length }} 个分块写入向量索引，现在可以在知识库中使用这份文档。</p>
+          </div>
+          <div class="completion-banner__actions">
+            <el-button data-testid="back-to-knowledge" @click="backToKnowledge">返回知识库</el-button>
+            <el-button type="primary" plain data-testid="rebuild-index" @click="openConfirmDialog">重新建立索引</el-button>
+          </div>
+        </section>
+
         <ChunkPreviewPanel
           :knowledge-id="knowledgeId"
           :file-id="fileId"
@@ -81,7 +100,7 @@
       :server-error="confirmError"
       :server-conflict="confirmConflict"
       :reloading="confirmReloading"
-      :blocked="!canConfirm || confirmConflict"
+      :blocked="!canSubmitVectorization || confirmConflict"
       @confirm="submitVectorization"
       @reload="reloadConfirmState"
     />
@@ -195,11 +214,18 @@ export default {
     fileId() { return this.$route.params.fileId },
     routeKey() { return `${String(this.knowledgeId)}:${String(this.fileId)}` },
     isProcessing() { return processingStates.has(Number(this.processing.state)) },
+    isCompleted() { return Number(this.processing.state) === 6 },
     canPreview() {
       return this.processingLoaded && !this.processingLoading && previewStates.has(Number(this.processing.state))
     },
     canConfirm() {
       return this.processingLoaded && !this.processingLoading && confirmStates.has(Number(this.processing.state)) && this.chunks.length > 0
+    },
+    canRebuild() {
+      return this.processingLoaded && !this.processingLoading && this.isCompleted && this.chunks.length > 0
+    },
+    canSubmitVectorization() {
+      return this.canConfirm || this.canRebuild
     },
     canRetryPreview() {
       return this.processingLoaded && !this.processingLoading && this.showRetryPreview && this.retainedChunksLoaded
@@ -456,13 +482,13 @@ export default {
       }
     },
     openConfirmDialog() {
-      if (!this.canConfirm) return
+      if (!this.canSubmitVectorization) return
       this.confirmError = ''
       this.confirmConflict = false
       this.confirmDialogVisible = true
     },
     async submitVectorization(contextPolicy, isRetry = false) {
-      if (isRetry ? !this.canRetryVector : (!this.canConfirm || this.confirmConflict || this.confirmReloading)) return
+      if (isRetry ? !this.canRetryVector : (!this.canSubmitVectorization || this.confirmConflict || this.confirmReloading)) return
       const context = this.currentContext()
       this.confirmSubmitting = true
       this.submissionError = ''
@@ -556,6 +582,9 @@ export default {
         pendingIds.delete(chunk.publicId)
       }
     },
+    backToKnowledge() {
+      return this.$router.push({ name: 'KnowledgeDetail', params: { id: String(this.knowledgeId) } })
+    },
   },
 }
 </script>
@@ -606,6 +635,39 @@ export default {
   font-size: 12px;
 }
 
+.completion-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin: 18px 28px 0;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--sea-signal) 34%, var(--sea-paper));
+  border-radius: 10px;
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--sea-signal) 10%, var(--sea-paper)), var(--sea-paper) 58%);
+}
+
+.completion-banner__mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--sea-signal);
+  color: var(--sea-paper);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--sea-signal) 20%, transparent);
+}
+
+.completion-banner__copy { display: grid; gap: 3px; }
+.completion-banner__eyebrow { color: var(--sea-signal); font-size: 9px; font-weight: 700; letter-spacing: .12em; }
+.completion-banner__copy strong { color: var(--sea-deep); font-size: 15px; }
+.completion-banner__copy p { margin: 0; color: var(--sea-muted); font-size: 12px; line-height: 1.55; }
+.completion-banner__actions { display: flex; gap: 8px; }
+
 @media (max-width: 850px) {
   .chunking-layout { grid-template-columns: 1fr; }
 }
@@ -615,5 +677,7 @@ export default {
   .workspace-heading h1 { font-size: 23px; }
   .failure-banner { align-items: stretch; flex-direction: column; margin: 14px 16px 0; }
   .processing-error { margin: 14px 16px 0; }
+  .completion-banner { grid-template-columns: auto 1fr; margin: 14px 16px 0; }
+  .completion-banner__actions { grid-column: 1 / -1; align-items: stretch; flex-direction: column; }
 }
 </style>
