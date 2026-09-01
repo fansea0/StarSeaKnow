@@ -21,7 +21,16 @@
       <el-input-number v-model="overlapTokens" :min="0" :max="512" controls-position="right" />
       <small>最多 512 Token</small>
     </label>
-    <p v-if="errorMessage" class="dialog-error" role="alert">{{ errorMessage }}</p>
+    <div v-if="displayError" class="dialog-error" role="alert">
+      <span>{{ displayError }}</span>
+      <el-button
+        v-if="serverConflict"
+        link
+        data-testid="reload-confirm"
+        :loading="reloading"
+        @click="$emit('reload')"
+      >重新加载文件状态</el-button>
+    </div>
 
     <template #footer>
       <el-button :disabled="submitting" @click="$emit('update:modelValue', false)">取消</el-button>
@@ -36,17 +45,21 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   submitting: { type: Boolean, default: false },
+  serverError: { type: String, default: '' },
+  serverConflict: { type: Boolean, default: false },
+  reloading: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue', 'confirm'])
+const emit = defineEmits(['update:modelValue', 'confirm', 'reload'])
 const overlapEnabled = ref(false)
 const overlapTokens = ref(40)
 const errorMessage = ref('')
+const displayError = computed(() => props.serverError || errorMessage.value)
 
 watch(
   () => props.modelValue,
@@ -100,5 +113,5 @@ function confirm() {
 }
 
 .token-setting small { grid-column: 1 / -1; color: var(--sea-muted); font-size: 11px; font-weight: 400; }
-.dialog-error { margin: 10px 0 0; color: var(--sea-danger); font-size: 12px; }
+.dialog-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 0; color: var(--sea-danger); font-size: 12px; }
 </style>

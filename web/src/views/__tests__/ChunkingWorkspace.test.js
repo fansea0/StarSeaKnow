@@ -1,12 +1,15 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus, { ElMessageBox } from 'element-plus'
+import { nextTick, reactive } from 'vue'
 import {
   confirmVectorization,
   createPreview,
+  deleteChunk,
   getChunks,
   getProcessing,
   getStrategies,
   reindexChunk,
+  updateChunk,
 } from '../../api/chunking'
 import ChunkingWorkspace from '../ChunkingWorkspace.vue'
 
@@ -54,22 +57,32 @@ const draftChunk = {
   lockVersion: 5,
 }
 
-function mountWorkspace() {
-  return mount(ChunkingWorkspace, {
+const mountedWrappers = []
+
+function routeFor(fileId = '22') {
+  return reactive({ params: { knowledgeId: '11', fileId } })
+}
+
+function mountWorkspace(route = routeFor()) {
+  const wrapper = mount(ChunkingWorkspace, {
     attachTo: document.body,
     global: {
       plugins: [ElementPlus],
-      mocks: {
-        $route: { params: { knowledgeId: '11', fileId: '22' } },
-      },
+      mocks: { $route: route },
     },
   })
+  mountedWrappers.push(wrapper)
+  return wrapper
 }
 
 function deferred() {
   let resolve
-  const promise = new Promise(res => { resolve = res })
-  return { promise, resolve }
+  let reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 
 describe('ChunkingWorkspace', () => {
@@ -82,10 +95,77 @@ describe('ChunkingWorkspace', () => {
     createPreview.mockResolvedValue({ status: 202 })
     confirmVectorization.mockResolvedValue({ status: 202 })
     reindexChunk.mockResolvedValue({ status: 202 })
+    updateChunk.mockResolvedValue({ data: { ...draftChunk, lockVersion: 6 } })
+    deleteChunk.mockResolvedValue({ status: 204 })
   })
 
   afterEach(() => {
+    mountedWrappers.splice(0).forEach(wrapper => wrapper.unmount())
+    vi.restoreAllMocks()
     vi.useRealTimers()
+  })
+
+  it('discards stale processing responses on route reuse, keeps one poll, and routes actions to the new file', async () => {
+    const route = routeFor('22')
+    const oldProcessing = deferred()
+    const newChunk = { ...draftChunk, publicId: 'chunk-new', content: '新文件正文', lockVersion: 8 }
+    getProcessing.mockImplementation((knowledgeId, fileId) => {
+      if (fileId === '22') return oldProcessing.promise
+      return getProcessing.mock.calls.filter(call => call[1] === '33').length === 1
+        ? Promise.resolve(processing(1, { progress: 20, lockVersion: 7 }))
+        : Promise.resolve(processing(2, { progress: 100, lockVersion: 8 }))
+    })
+    getChunks.mockResolvedValue({ data: [newChunk] })
+    updateChunk.mockResolvedValue({ data: { ...newChunk, content: '新文件已编辑', lockVersion: 9 } })
+    const wrapper = mountWorkspace(route)
+    await flushPromises()
+
+    route.params.fileId = '33'
+    await nextTick()
+    await flushPromises()
+    oldProcessing.resolve(processing(1, { progress: 99, lockVersion: 99 }))
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('新文件正文')
+    expect(getProcessing.mock.calls.filter(call => call[1] === '22')).toHaveLength(1)
+    expect(getProcessing.mock.calls.filter(call => call[1] === '33')).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getProcessing.mock.calls.filter(call => call[1] === '33')).toHaveLength(2)
+
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('新文件已编辑')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(updateChunk).toHaveBeenCalledWith('11', '33', 'chunk-new', {
+      content: '新文件已编辑',
+      lockVersion: 8,
+    })
+  })
+
+  it('discards a stale chunk response after the route changes', async () => {
+    const route = routeFor('22')
+    const oldChunks = deferred()
+    getProcessing.mockImplementation((knowledgeId, fileId) => Promise.resolve(processing(2, {
+      lockVersion: fileId === '22' ? 3 : 7,
+    })))
+    getChunks.mockImplementation((knowledgeId, fileId) => (
+      fileId === '22'
+        ? oldChunks.promise
+        : Promise.resolve({ data: [{ ...draftChunk, publicId: 'new-only', content: '仅属于新文件' }] })
+    ))
+    const wrapper = mountWorkspace(route)
+    await flushPromises()
+
+    route.params.fileId = '33'
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.text()).toContain('仅属于新文件')
+
+    oldChunks.resolve({ data: [{ ...draftChunk, publicId: 'old-only', content: '旧文件迟到正文' }] })
+    await flushPromises()
+    expect(wrapper.text()).toContain('仅属于新文件')
+    expect(wrapper.text()).not.toContain('旧文件迟到正文')
   })
 
   it('loads backend capabilities and selects MD optimized while placeholders stay disabled', async () => {
@@ -105,7 +185,8 @@ describe('ChunkingWorkspace', () => {
     const wrapper = mountWorkspace()
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('正在读取文件处理状态')
     initialProcessing.resolve(processing(0, { lockVersion: 7 }))
     await flushPromises()
     expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
@@ -219,6 +300,138 @@ describe('ChunkingWorkspace', () => {
     wrapper.unmount()
   })
 
+  it('force-reloads a conflicted card and resets its editor, version, and conflict state', async () => {
+    const freshChunk = { ...draftChunk, content: '服务端最新正文', lockVersion: 9 }
+    getProcessing.mockResolvedValue(processing(3, { lockVersion: 7 }))
+    getChunks
+      .mockResolvedValueOnce({ data: [draftChunk] })
+      .mockResolvedValueOnce({ data: [freshChunk] })
+    updateChunk.mockRejectedValue({ response: { status: 409, data: { msg: '块版本冲突' } } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('本地冲突正文')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+    expect(wrapper.text()).toContain('块版本冲突')
+
+    await wrapper.get('[data-testid="reload-chunk"]').trigger('click')
+    await flushPromises()
+    expect(getChunks).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('textarea').element.value).toBe('服务端最新正文')
+    expect(wrapper.find('[data-testid="reload-chunk"]').exists()).toBe(false)
+
+    updateChunk.mockResolvedValue({ data: { ...freshChunk, content: '基于新版本编辑', lockVersion: 10 } })
+    await wrapper.get('textarea').setValue('基于新版本编辑')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(updateChunk).toHaveBeenLastCalledWith('11', '22', 'chunk-1', {
+      content: '基于新版本编辑',
+      lockVersion: 9,
+    })
+  })
+
+  it('keeps the conflict and local body when the forced chunk reload fails', async () => {
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks
+      .mockResolvedValueOnce({ data: [draftChunk] })
+      .mockRejectedValueOnce({ response: { status: 503, data: { msg: '分块刷新失败' } } })
+    updateChunk.mockRejectedValue({ response: { status: 409, data: { msg: '块版本冲突' } } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('仍需保留的本地正文')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+    await wrapper.get('[data-testid="reload-chunk"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('textarea').element.value).toBe('仍需保留的本地正文')
+    expect(wrapper.get('[data-testid="reload-chunk"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('分块刷新失败')
+  })
+
+  it('force-refreshes all chunks after edit so a dependent chunk receives its new status and version', async () => {
+    const nextChunk = { ...draftChunk, publicId: 'chunk-2', position: 1, content: '相邻旧正文', lockVersion: 2 }
+    const refreshedNext = { ...nextChunk, content: '相邻块已失效', status: 1, lockVersion: 3 }
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks
+      .mockResolvedValueOnce({ data: [draftChunk, nextChunk] })
+      .mockResolvedValueOnce({ data: [{ ...draftChunk, content: '第一块新正文', lockVersion: 6 }, refreshedNext] })
+    updateChunk.mockResolvedValue({ data: { ...draftChunk, content: '第一块新正文', lockVersion: 6 } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.findAll('[data-testid="edit-chunk"]')[0].trigger('click')
+    await wrapper.get('textarea').setValue('第一块新正文')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+
+    expect(getChunks).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('相邻块已失效')
+    expect(wrapper.findAll('.chunk-card')[1].attributes('aria-disabled')).toBe('true')
+  })
+
+  it.each([
+    { failedFromState: 1, visible: 'retry-chunking', hidden: 'retry-vectorizing' },
+    { failedFromState: 5, visible: 'retry-vectorizing', hidden: 'retry-chunking' },
+  ])('shows only the matching FAILED retry for failedFromState=$failedFromState', async ({ failedFromState, visible, hidden }) => {
+    getProcessing.mockResolvedValue(processing(7, { failedFromState, lastError: '阶段失败' }))
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.find(`[data-testid="${visible}"]`).exists()).toBe(true)
+    expect(wrapper.find(`[data-testid="${hidden}"]`).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
+  })
+
+  it.each([1, 4, 5])('does not expose normal file actions in processing state %s', async (state) => {
+    getProcessing.mockResolvedValue(processing(state))
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
+  })
+
+  it('COMPLETED hides full preview and confirm actions but keeps DRAFT reindex', async () => {
+    getProcessing.mockResolvedValue(processing(6))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(true)
+  })
+
+  it('ADJUSTING keeps full confirmation but does not expose per-chunk reindex', async () => {
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(false)
+  })
+
+  it('keeps every file action disabled after processing load failure until retry succeeds', async () => {
+    getProcessing.mockRejectedValueOnce({ response: { status: 503, data: { msg: '状态服务不可用' } } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('状态服务不可用')
+    expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
+
+    getProcessing.mockResolvedValueOnce(processing(0, { lockVersion: 12 }))
+    await wrapper.get('[data-testid="retry-processing-load"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('owns overlap in the final dialog: disabled by default, enabling reveals 40 Token, and current file lock is submitted', async () => {
     getProcessing.mockResolvedValue(processing(3, { lockVersion: 9 }))
     getChunks.mockResolvedValue({ data: [{ ...draftChunk, isModified: false }] })
@@ -246,6 +459,53 @@ describe('ChunkingWorkspace', () => {
     wrapper.unmount()
   })
 
+  it('keeps the confirm dialog open and renders a 422 server error inside it', async () => {
+    getProcessing.mockResolvedValue(processing(3, { lockVersion: 9 }))
+    getChunks.mockResolvedValue({ data: [{ ...draftChunk, isModified: false }] })
+    confirmVectorization.mockRejectedValue({ response: { status: 422, data: { msg: '补充 Token 不合法' } } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="open-confirm"]').trigger('click')
+    await flushPromises()
+    document.body.querySelector('[data-testid="confirm-vectorization"]').click()
+    await flushPromises()
+
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog.textContent).toContain('补充 Token 不合法')
+    expect(dialog.querySelector('[role="alert"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="confirm-vectorization"]')).not.toBeNull()
+  })
+
+  it('reloads processing and chunks from a confirm 409, then submits the refreshed file lock', async () => {
+    getProcessing
+      .mockResolvedValueOnce(processing(3, { lockVersion: 3 }))
+      .mockResolvedValueOnce(processing(3, { lockVersion: 9 }))
+    getChunks.mockResolvedValue({ data: [{ ...draftChunk, isModified: false }] })
+    confirmVectorization
+      .mockRejectedValueOnce({ response: { status: 409, data: { msg: '确认版本冲突' } } })
+      .mockResolvedValueOnce({ status: 202 })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="open-confirm"]').trigger('click')
+    await flushPromises()
+    document.body.querySelector('[data-testid="confirm-vectorization"]').click()
+    await flushPromises()
+    expect(document.body.querySelector('[role="dialog"]').textContent).toContain('确认版本冲突')
+
+    document.body.querySelector('[data-testid="reload-confirm"]').click()
+    await flushPromises()
+    expect(getChunks).toHaveBeenCalledTimes(2)
+    document.body.querySelector('[data-testid="confirm-vectorization"]').click()
+    await flushPromises()
+    expect(confirmVectorization).toHaveBeenLastCalledWith('11', '22', {
+      overlapEnabled: false,
+      overlapTokens: 40,
+      lockVersion: 9,
+    })
+  })
+
   it('shows a per-chunk reindex action for a completed file with an edited DRAFT', async () => {
     getProcessing.mockResolvedValueOnce(processing(6)).mockResolvedValueOnce(processing(5))
     getChunks.mockResolvedValue({ data: [draftChunk] })
@@ -258,6 +518,28 @@ describe('ChunkingWorkspace', () => {
     expect(reindexChunk).toHaveBeenCalledWith('11', '22', 'chunk-1')
     expect(getProcessing).toHaveBeenCalledTimes(2)
     wrapper.unmount()
+  })
+
+  it('blocks duplicate reindex activation and disables that card until refresh completes', async () => {
+    const pending = deferred()
+    getProcessing.mockResolvedValueOnce(processing(6)).mockResolvedValueOnce(processing(5))
+    getChunks
+      .mockResolvedValueOnce({ data: [draftChunk] })
+      .mockResolvedValueOnce({ data: [{ ...draftChunk, status: 1, lockVersion: 6 }] })
+    reindexChunk.mockReturnValue(pending.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    const action = wrapper.get('[data-testid="reindex-chunk"]')
+    await action.trigger('click')
+    await action.trigger('click')
+    expect(reindexChunk).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('true')
+
+    pending.resolve({ status: 202 })
+    await flushPromises()
+    expect(getChunks).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('true')
   })
 
   it('shows the failure reason and only the retry matching failedFromState', async () => {

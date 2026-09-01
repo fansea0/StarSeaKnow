@@ -2,14 +2,21 @@
   <article class="chunk-card" :aria-disabled="actionsDisabled ? 'true' : 'false'">
     <header class="chunk-ribbon">
       <span class="chunk-code mono">CHUNK {{ chunkNumber }}</span>
-      <nav data-testid="section-path" aria-label="语义标题路径">
+      <nav
+        data-testid="section-path"
+        :title="sectionPathText"
+        :aria-label="`语义标题路径：${sectionPathText}`"
+      >
         <template v-if="localChunk.sectionPath?.length">
           <template v-for="(section, index) in localChunk.sectionPath" :key="`${section}-${index}`">
             <span v-if="index" aria-hidden="true">/</span>
-            <span>{{ section }}</span>
+            <span
+              class="path-segment"
+              :class="{ 'path-segment--last': index === localChunk.sectionPath.length - 1 }"
+            >{{ section }}</span>
           </template>
         </template>
-        <span v-else>文档正文</span>
+        <span v-else class="path-segment path-segment--last">文档正文</span>
       </nav>
     </header>
 
@@ -27,7 +34,7 @@
 
       <div v-if="errorMessage" class="chunk-error" role="alert">
         <span>{{ errorMessage }}</span>
-        <el-button v-if="conflict" link data-testid="reload-chunk" @click="$emit('reload')">重新加载</el-button>
+        <el-button v-if="conflict" link data-testid="reload-chunk" @click="$emit('reload', localChunk.publicId)">重新加载</el-button>
       </div>
     </div>
 
@@ -74,6 +81,7 @@ const props = defineProps({
   chunk: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
   showReindex: { type: Boolean, default: false },
+  reloadEpoch: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['updated', 'deleted', 'reload', 'reindex'])
@@ -90,6 +98,7 @@ let queuedSave = false
 
 const chunkNumber = computed(() => String((Number(localChunk.position) || 0) + 1).padStart(2, '0'))
 const actionsDisabled = computed(() => props.disabled || Number(localChunk.status) === 1)
+const sectionPathText = computed(() => localChunk.sectionPath?.length ? localChunk.sectionPath.join(' / ') : '文档正文')
 
 watch(
   () => props.chunk,
@@ -99,6 +108,27 @@ watch(
   },
   { deep: true },
 )
+
+watch(
+  () => props.reloadEpoch,
+  (value, previous) => {
+    if (value === previous) return
+    resetFromServer()
+  },
+)
+
+function resetFromServer() {
+  requestGeneration += 1
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = null
+  saveInFlight = false
+  queuedSave = false
+  Object.assign(localChunk, props.chunk)
+  editorValue.value = props.chunk.content || ''
+  saveStatus.value = ''
+  errorMessage.value = ''
+  conflict.value = false
+}
 
 function queueSave() {
   errorMessage.value = ''
@@ -183,10 +213,13 @@ async function requestDelete() {
 
   errorMessage.value = ''
   conflict.value = false
+  const generation = requestGeneration
   try {
     await deleteChunk(props.knowledgeId, props.fileId, localChunk.publicId, localChunk.lockVersion)
+    if (generation !== requestGeneration) return
     emit('deleted', localChunk.publicId)
   } catch (cause) {
+    if (generation !== requestGeneration) return
     const status = cause?.response?.status
     conflict.value = status === 409
     if (status === 409) {
@@ -245,6 +278,9 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.path-segment { flex: 0 0 auto; }
+.path-segment--last { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 .chunk-card__body { padding: 17px 18px 13px; }
 .chunk-content { margin: 0; color: var(--sea-ink); font-size: 14px; line-height: 1.78; white-space: pre-wrap; }

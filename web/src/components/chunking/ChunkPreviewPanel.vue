@@ -15,7 +15,7 @@
       <strong>{{ progress }}%</strong>
     </div>
 
-    <div v-if="loading" class="preview-empty" aria-live="polite">正在读取分块…</div>
+    <div v-if="loading" class="preview-empty" aria-live="polite">{{ loadingLabel }}</div>
     <div v-else-if="!chunks.length" class="preview-empty">
       <strong>尚无可预览分块</strong>
       <span>选择可用策略并生成预览后，在这里逐块检查。</span>
@@ -27,15 +27,17 @@
         :knowledge-id="knowledgeId"
         :file-id="fileId"
         :chunk="chunk"
+        :disabled="isReindexing(chunk)"
         :show-reindex="canReindex(chunk)"
+        :reload-epoch="reloadEpochs[chunk.publicId] || 0"
         @updated="$emit('updated', $event)"
         @deleted="$emit('deleted', $event)"
-        @reload="$emit('reload')"
+        @reload="$emit('reload', $event)"
         @reindex="$emit('reindex', $event)"
       />
     </div>
 
-    <footer v-if="chunks.length" class="preview-panel__footer">
+    <footer v-if="chunks.length && showConfirm" class="preview-panel__footer">
       <div>
         <strong>检查完成</strong>
         <span>确认后开始为当前文件建立向量索引。</span>
@@ -62,12 +64,20 @@ const props = defineProps({
   progress: { type: Number, default: 0 },
   processing: { type: Boolean, default: false },
   processingLabel: { type: String, default: '' },
+  loadingLabel: { type: String, default: '正在读取分块…' },
+  showConfirm: { type: Boolean, default: true },
+  reindexingIds: { type: Set, default: () => new Set() },
+  reloadEpochs: { type: Object, default: () => ({}) },
 })
 
 defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm'])
 
 function canReindex(chunk) {
-  return [3, 6].includes(props.fileState) && Number(chunk.status) === 0 && Boolean(chunk.isModified)
+  return Number(props.fileState) === 6 && Number(chunk.status) === 0 && Boolean(chunk.isModified)
+}
+
+function isReindexing(chunk) {
+  return props.reindexingIds.has(chunk.publicId)
 }
 </script>
 

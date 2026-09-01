@@ -17,6 +17,7 @@
         :loading="capabilityLoading"
         :submitting="previewSubmitting"
         :processing="isProcessing || processingLoading"
+        :show-preview-action="canPreview"
         :error="capabilityError || submissionError"
         @select="selectStrategy"
         @config-change="strategyConfig = $event"
@@ -31,13 +32,13 @@
             <span>{{ processing.lastError || '文件处理失败，请按失败阶段重试。' }}</span>
           </div>
           <el-button
-            v-if="processing.failedFromState === 1"
+            v-if="canRetryPreview"
             data-testid="retry-chunking"
             :disabled="!configValid || previewSubmitting"
-            @click="submitPreview"
+            @click="submitPreview(true)"
           >重试分块</el-button>
           <el-button
-            v-if="processing.failedFromState === 5"
+            v-if="canRetryVector"
             data-testid="retry-vectorizing"
             :loading="confirmSubmitting"
             @click="retryVectorization"
@@ -46,23 +47,27 @@
 
         <p v-if="processingError" class="processing-error" role="alert">
           {{ processingError }}
-          <el-button link @click="reloadWorkspace">重新加载</el-button>
+          <el-button link data-testid="retry-processing-load" @click="retryProcessingLoad">重新加载文件状态</el-button>
         </p>
 
         <ChunkPreviewPanel
           :knowledge-id="knowledgeId"
           :file-id="fileId"
           :chunks="chunks"
-          :loading="chunksLoading"
+          :loading="chunksLoading || (processingLoading && !processingLoaded)"
+          :loading-label="processingLoading && !processingLoaded ? '正在读取文件处理状态…' : '正在读取分块…'"
           :file-state="processing.state"
           :progress="processing.progress"
           :processing="isProcessing"
           :processing-label="processingLabel"
+          :show-confirm="canConfirm"
+          :reindexing-ids="reindexingChunkIds"
+          :reload-epochs="chunkReloadEpochs"
           @updated="handleChunkUpdated"
           @deleted="handleChunkDeleted"
           @reload="reloadChunks"
           @reindex="handleReindex"
-          @confirm="confirmDialogVisible = true"
+          @confirm="openConfirmDialog"
         />
       </div>
     </section>
@@ -70,7 +75,11 @@
     <ContextConfirmDialog
       v-model="confirmDialogVisible"
       :submitting="confirmSubmitting"
+      :server-error="confirmError"
+      :server-conflict="confirmConflict"
+      :reloading="confirmReloading"
       @confirm="submitVectorization"
+      @reload="reloadConfirmState"
     />
   </main>
 </template>
@@ -92,6 +101,21 @@ import ContextConfirmDialog from '../components/chunking/ContextConfirmDialog.vu
 
 const terminalChunkStates = new Set([2, 3, 6])
 const processingStates = new Set([1, 5])
+const previewStates = new Set([0, 2, 3])
+const confirmStates = new Set([2, 3])
+
+function initialProcessing() {
+  return {
+    state: 0,
+    failedFromState: null,
+    progress: 0,
+    lastError: null,
+    lockVersion: 0,
+    strategyCode: '',
+    policySnapshot: {},
+    contextPolicy: {},
+  }
+}
 
 function errorMessage(cause, fallback) {
   return cause?.response?.data?.msg || fallback
@@ -107,16 +131,8 @@ export default {
       strategyConfig: { minTokens: 100, targetTokens: 400, maxTokens: 512 },
       configValid: true,
       chunks: [],
-      processing: {
-        state: 0,
-        failedFromState: null,
-        progress: 0,
-        lastError: null,
-        lockVersion: 0,
-        strategyCode: '',
-        policySnapshot: {},
-        contextPolicy: {},
-      },
+      processing: initialProcessing(),
+      processingLoaded: false,
       capabilityLoading: true,
       processingLoading: true,
       chunksLoading: false,
@@ -126,51 +142,120 @@ export default {
       capabilityError: '',
       processingError: '',
       submissionError: '',
+      confirmError: '',
+      confirmConflict: false,
+      confirmReloading: false,
       pollTimer: null,
       processingRequest: null,
       chunksRequest: null,
       chunksLoadedKey: '',
+      chunkReloadEpochs: {},
+      reindexingChunkIds: new Set(),
+      requestGeneration: 0,
+      activeRouteKey: '',
       destroyed: false,
     }
   },
   computed: {
     knowledgeId() { return this.$route.params.knowledgeId },
     fileId() { return this.$route.params.fileId },
+    routeKey() { return `${String(this.knowledgeId)}:${String(this.fileId)}` },
     isProcessing() { return processingStates.has(Number(this.processing.state)) },
+    canPreview() {
+      return this.processingLoaded && !this.processingLoading && previewStates.has(Number(this.processing.state))
+    },
+    canConfirm() {
+      return this.processingLoaded && !this.processingLoading && confirmStates.has(Number(this.processing.state)) && this.chunks.length > 0
+    },
+    canRetryPreview() {
+      return this.processingLoaded && !this.processingLoading && Number(this.processing.state) === 7 && Number(this.processing.failedFromState) === 1
+    },
+    canRetryVector() {
+      return this.processingLoaded && !this.processingLoading && Number(this.processing.state) === 7 && Number(this.processing.failedFromState) === 5
+    },
     processingLabel() {
       return Number(this.processing.state) === 1 ? '正在生成分块' : '正在建立索引'
     },
   },
-  mounted() {
-    this.initialize()
+  watch: {
+    routeKey: {
+      immediate: true,
+      handler(key) { this.startRoute(key) },
+    },
   },
   beforeUnmount() {
     this.destroyed = true
+    this.requestGeneration += 1
     this.stopPolling()
   },
   methods: {
-    async initialize() {
-      await Promise.all([this.loadCapabilities(), this.refreshProcessing()])
+    currentContext() {
+      return {
+        generation: this.requestGeneration,
+        routeKey: this.activeRouteKey,
+        knowledgeId: String(this.knowledgeId),
+        fileId: String(this.fileId),
+      }
     },
-    async loadCapabilities() {
+    isCurrent(context) {
+      return !this.destroyed && context.generation === this.requestGeneration && context.routeKey === this.activeRouteKey
+    },
+    startRoute(key) {
+      this.requestGeneration += 1
+      this.activeRouteKey = key
+      this.stopPolling()
+      this.strategies = []
+      this.selectedStrategy = ''
+      this.strategyConfig = { minTokens: 100, targetTokens: 400, maxTokens: 512 }
+      this.configValid = true
+      this.chunks = []
+      this.processing = initialProcessing()
+      this.processingLoaded = false
+      this.capabilityLoading = true
+      this.processingLoading = true
+      this.chunksLoading = false
+      this.previewSubmitting = false
+      this.confirmSubmitting = false
+      this.confirmDialogVisible = false
+      this.confirmReloading = false
+      this.capabilityError = ''
+      this.processingError = ''
+      this.submissionError = ''
+      this.confirmError = ''
+      this.confirmConflict = false
+      this.processingRequest = null
+      this.chunksRequest = null
+      this.chunksLoadedKey = ''
+      this.chunkReloadEpochs = {}
+      this.reindexingChunkIds = new Set()
+      const context = this.currentContext()
+      this.initialize(context)
+    },
+    async initialize(context) {
+      await Promise.all([this.loadCapabilities(context), this.refreshProcessing(false, context)])
+    },
+    syncSelectedStrategy() {
+      const backendSelected = this.strategies.find(strategy => (
+        !strategy.disabled && strategy.code === this.processing.strategyCode
+      ))
+      const markdownDefault = this.strategies.find(strategy => (
+        !strategy.disabled && strategy.code === 'MARKDOWN_OPTIMIZED'
+      ))
+      this.selectedStrategy = backendSelected?.code || markdownDefault?.code || ''
+    },
+    async loadCapabilities(context = this.currentContext()) {
       this.capabilityLoading = true
       this.capabilityError = ''
       try {
-        const response = await getStrategies(this.knowledgeId, this.fileId)
-        if (this.destroyed) return
+        const response = await getStrategies(context.knowledgeId, context.fileId)
+        if (!this.isCurrent(context)) return
         const catalog = mergeStrategies(response?.data?.fileType, response?.data?.strategies)
         this.strategies = catalog
-        const backendSelected = catalog.find(strategy => (
-          !strategy.disabled && strategy.code === this.processing.strategyCode
-        ))
-        const markdownDefault = catalog.find(strategy => (
-          !strategy.disabled && strategy.code === 'MARKDOWN_OPTIMIZED'
-        ))
-        this.selectedStrategy = backendSelected?.code || markdownDefault?.code || ''
+        this.syncSelectedStrategy()
       } catch (cause) {
-        if (!this.destroyed) this.capabilityError = errorMessage(cause, '可用分块策略暂时无法加载。')
+        if (this.isCurrent(context)) this.capabilityError = errorMessage(cause, '可用分块策略暂时无法加载。')
       } finally {
-        if (!this.destroyed) this.capabilityLoading = false
+        if (this.isCurrent(context)) this.capabilityLoading = false
       }
     },
     selectStrategy(code) {
@@ -179,41 +264,50 @@ export default {
       this.selectedStrategy = code
       this.submissionError = ''
     },
-    async refreshProcessing(forceChunkLoad = false) {
+    async refreshProcessing(forceChunkLoad = false, context = this.currentContext()) {
+      if (!this.isCurrent(context)) return
       if (this.processingRequest) return this.processingRequest
       this.processingLoading = true
+      this.processingLoaded = false
       this.processingError = ''
-      this.processingRequest = (async () => {
+      const request = (async () => {
         try {
-          const response = await getProcessing(this.knowledgeId, this.fileId)
-          if (this.destroyed) return
+          const response = await getProcessing(context.knowledgeId, context.fileId)
+          if (!this.isCurrent(context)) return
           this.processing = { ...this.processing, ...(response?.data || {}) }
+          this.processingLoaded = true
+          this.syncSelectedStrategy()
           if (forceChunkLoad) this.chunksLoadedKey = ''
           if (terminalChunkStates.has(Number(this.processing.state))) {
             this.stopPolling()
-            await this.loadChunksOnce()
+            await this.loadChunks({ force: forceChunkLoad }, context)
           } else if (this.isProcessing) {
-            this.schedulePoll()
+            this.schedulePoll(context)
           } else {
             this.stopPolling()
           }
         } catch (cause) {
-          if (!this.destroyed) {
+          if (this.isCurrent(context)) {
+            this.processingLoaded = false
             this.processingError = errorMessage(cause, '文件处理状态暂时无法加载，请重新加载。')
             this.stopPolling()
           }
         } finally {
-          if (!this.destroyed) this.processingLoading = false
-          this.processingRequest = null
+          if (this.isCurrent(context) && this.processingRequest === request) {
+            this.processingLoading = false
+            this.processingRequest = null
+          }
         }
       })()
-      return this.processingRequest
+      this.processingRequest = request
+      return request
     },
-    schedulePoll() {
-      if (this.destroyed || this.pollTimer || !this.isProcessing) return
+    schedulePoll(context = this.currentContext()) {
+      if (!this.isCurrent(context) || this.pollTimer || !this.isProcessing) return
       this.pollTimer = setTimeout(async () => {
         this.pollTimer = null
-        await this.refreshProcessing()
+        if (!this.isCurrent(context)) return
+        await this.refreshProcessing(false, context)
       }, 1000)
     },
     stopPolling() {
@@ -221,40 +315,52 @@ export default {
       clearTimeout(this.pollTimer)
       this.pollTimer = null
     },
-    async loadChunksOnce() {
-      const key = `${this.processing.state}:${this.processing.lockVersion}`
-      if (this.chunksLoadedKey === key || this.chunksRequest) return this.chunksRequest
-      this.chunksLoading = true
-      this.chunksRequest = (async () => {
+    async loadChunks({ force = false } = {}, context = this.currentContext()) {
+      if (!this.isCurrent(context)) return false
+      const key = `${context.routeKey}:${this.processing.state}:${this.processing.lockVersion}`
+      if (!force && this.chunksLoadedKey === key) return true
+      if (this.chunksRequest) return this.chunksRequest
+      this.chunksLoading = this.chunks.length === 0
+      const request = (async () => {
         try {
-          const response = await getChunks(this.knowledgeId, this.fileId)
-          if (this.destroyed) return
+          const response = await getChunks(context.knowledgeId, context.fileId)
+          if (!this.isCurrent(context)) return false
           this.chunks = Array.isArray(response?.data) ? response.data : []
           this.chunksLoadedKey = key
+          return true
         } catch (cause) {
-          if (!this.destroyed) this.processingError = errorMessage(cause, '分块预览暂时无法加载，请重新加载。')
+          if (this.isCurrent(context)) this.processingError = errorMessage(cause, '分块预览暂时无法加载，请重新加载。')
+          return false
         } finally {
-          if (!this.destroyed) this.chunksLoading = false
-          this.chunksRequest = null
+          if (this.isCurrent(context) && this.chunksRequest === request) {
+            this.chunksLoading = false
+            this.chunksRequest = null
+          }
         }
       })()
-      return this.chunksRequest
+      this.chunksRequest = request
+      return request
     },
-    async reloadChunks() {
-      this.chunksLoadedKey = ''
-      await this.loadChunksOnce()
+    async reloadChunks(chunkPublicId) {
+      const context = this.currentContext()
+      const loaded = await this.loadChunks({ force: true }, context)
+      if (!loaded || !this.isCurrent(context) || !chunkPublicId || !this.chunks.some(chunk => chunk.publicId === chunkPublicId)) return
+      this.chunkReloadEpochs = {
+        ...this.chunkReloadEpochs,
+        [chunkPublicId]: (this.chunkReloadEpochs[chunkPublicId] || 0) + 1,
+      }
     },
-    async reloadWorkspace() {
-      this.stopPolling()
-      this.chunksLoadedKey = ''
-      this.processingError = ''
-      this.submissionError = ''
-      await Promise.all([this.loadCapabilities(), this.refreshProcessing(true)])
+    reloadWorkspace() {
+      this.startRoute(this.routeKey)
     },
-    async submitPreview() {
-      if (!this.configValid || this.isProcessing || this.processingLoading) return
+    retryProcessingLoad() {
+      return this.refreshProcessing(true, this.currentContext())
+    },
+    async submitPreview(isRetry = false) {
+      if (!this.configValid || (isRetry ? !this.canRetryPreview : !this.canPreview)) return
       const selected = this.strategies.find(strategy => strategy.code === this.selectedStrategy)
       if (!selected || selected.disabled) return
+      const context = this.currentContext()
 
       let replaceEditedDrafts = false
       if (this.chunks.some(chunk => Number(chunk.status) === 0 && chunk.isModified)) {
@@ -264,6 +370,7 @@ export default {
             '确认重新生成分块',
             { confirmButtonText: '替换并重新生成', cancelButtonText: '保留当前分块', type: 'warning' },
           )
+          if (!this.isCurrent(context)) return
           replaceEditedDrafts = true
         } catch {
           return
@@ -273,71 +380,113 @@ export default {
       this.previewSubmitting = true
       this.submissionError = ''
       try {
-        await createPreview(this.knowledgeId, this.fileId, {
+        await createPreview(context.knowledgeId, context.fileId, {
           strategyCode: this.selectedStrategy,
           strategyConfig: { ...this.strategyConfig },
           replaceEditedDrafts,
           lockVersion: this.processing.lockVersion,
         })
+        if (!this.isCurrent(context)) return
         this.chunksLoadedKey = ''
-        await this.refreshProcessing()
+        await this.refreshProcessing(false, context)
       } catch (cause) {
+        if (!this.isCurrent(context)) return
         const status = cause?.response?.status
         this.submissionError = status === 409
           ? errorMessage(cause, '文件状态已变化，请重新加载后再生成分块。')
           : errorMessage(cause, status === 422 ? '分块设置不符合要求，请调整后重试。' : '分块预览提交失败，请稍后重试。')
       } finally {
-        this.previewSubmitting = false
+        if (this.isCurrent(context)) this.previewSubmitting = false
       }
     },
-    async submitVectorization(contextPolicy) {
-      if (this.isProcessing || this.processingLoading) return
+    openConfirmDialog() {
+      if (!this.canConfirm) return
+      this.confirmError = ''
+      this.confirmConflict = false
+      this.confirmDialogVisible = true
+    },
+    async submitVectorization(contextPolicy, isRetry = false) {
+      if (isRetry ? !this.canRetryVector : !this.canConfirm) return
+      const context = this.currentContext()
       this.confirmSubmitting = true
       this.submissionError = ''
+      this.confirmError = ''
+      this.confirmConflict = false
       try {
-        await confirmVectorization(this.knowledgeId, this.fileId, {
+        await confirmVectorization(context.knowledgeId, context.fileId, {
           ...contextPolicy,
           lockVersion: this.processing.lockVersion,
         })
+        if (!this.isCurrent(context)) return
         this.confirmDialogVisible = false
-        await this.refreshProcessing()
+        await this.refreshProcessing(false, context)
       } catch (cause) {
+        if (!this.isCurrent(context)) return
         const status = cause?.response?.status
-        this.submissionError = status === 409
+        const message = status === 409
           ? errorMessage(cause, '文件状态已变化，请重新加载后再确认。')
           : errorMessage(cause, status === 422 ? '上下文设置不符合要求，请调整后重试。' : '建立索引提交失败，请稍后重试。')
+        if (this.confirmDialogVisible) {
+          this.confirmError = message
+          this.confirmConflict = status === 409
+        } else {
+          this.submissionError = message
+        }
       } finally {
-        this.confirmSubmitting = false
+        if (this.isCurrent(context)) this.confirmSubmitting = false
       }
     },
     retryVectorization() {
+      if (!this.canRetryVector) return
       const policy = this.processing.contextPolicy || {}
       return this.submitVectorization({
         overlapEnabled: Boolean(policy.overlapEnabled),
         overlapTokens: Number.isInteger(policy.overlapTokens) ? policy.overlapTokens : 40,
-      })
+      }, true)
+    },
+    async reloadConfirmState() {
+      const context = this.currentContext()
+      this.confirmReloading = true
+      this.confirmError = ''
+      this.confirmConflict = false
+      await this.refreshProcessing(true, context)
+      if (this.isCurrent(context)) {
+        this.confirmReloading = false
+        if (!this.processingLoaded) this.confirmError = this.processingError || '文件状态仍无法加载。'
+      }
     },
     async handleChunkUpdated(updated) {
+      const context = this.currentContext()
       const index = this.chunks.findIndex(chunk => chunk.publicId === updated.publicId)
       if (index >= 0) this.chunks.splice(index, 1, updated)
-      await this.refreshProcessing()
+      await this.refreshProcessing(false, context)
+      await this.loadChunks({ force: true }, context)
     },
-    handleChunkDeleted(publicId) {
+    async handleChunkDeleted(publicId) {
+      const context = this.currentContext()
       this.chunks = this.chunks.filter(chunk => chunk.publicId !== publicId)
-      this.chunksLoadedKey = ''
-      return this.refreshProcessing()
+      await this.refreshProcessing(false, context)
+      await this.loadChunks({ force: true }, context)
     },
     async handleReindex(chunk) {
+      if (this.reindexingChunkIds.has(chunk.publicId)) return
+      const context = this.currentContext()
+      const pendingIds = this.reindexingChunkIds
+      pendingIds.add(chunk.publicId)
       this.submissionError = ''
       try {
-        await reindexChunk(this.knowledgeId, this.fileId, chunk.publicId)
-        this.chunksLoadedKey = ''
-        await this.refreshProcessing()
+        await reindexChunk(context.knowledgeId, context.fileId, chunk.publicId)
+        if (!this.isCurrent(context)) return
+        await this.refreshProcessing(false, context)
+        await this.loadChunks({ force: true }, context)
       } catch (cause) {
+        if (!this.isCurrent(context)) return
         const status = cause?.response?.status
         this.submissionError = status === 409
           ? errorMessage(cause, '文件状态已变化，请重新加载后再建立索引。')
           : errorMessage(cause, status === 422 ? '该分块当前不能建立索引。' : '单块索引提交失败，请稍后重试。')
+      } finally {
+        pendingIds.delete(chunk.publicId)
       }
     },
   },

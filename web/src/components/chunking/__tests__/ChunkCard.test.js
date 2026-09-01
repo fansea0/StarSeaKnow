@@ -57,6 +57,8 @@ describe('ChunkCard', () => {
 
     expect(wrapper.get('[data-testid="section-path"]').text()).toContain('产品手册')
     expect(wrapper.get('[data-testid="section-path"]').text()).toContain('安装')
+    expect(wrapper.get('[data-testid="section-path"]').attributes('title')).toBe('产品手册 / 安装')
+    expect(wrapper.get('[data-testid="section-path"]').attributes('aria-label')).toBe('语义标题路径：产品手册 / 安装')
     expect(wrapper.find('[data-testid="section-path"] input').exists()).toBe(false)
     expect(wrapper.find('textarea').exists()).toBe(false)
     expect(wrapper.get('[data-testid="chunk-body"]').text()).toBe('原始正文')

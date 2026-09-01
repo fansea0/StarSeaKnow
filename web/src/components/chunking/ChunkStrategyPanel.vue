@@ -37,7 +37,7 @@
 
     <p v-if="error" class="strategy-error" role="alert">{{ error }}</p>
 
-    <footer class="strategy-panel__footer">
+    <footer v-if="showPreviewAction" class="strategy-panel__footer">
       <el-button
         type="primary"
         data-testid="create-preview"
@@ -60,6 +60,7 @@ defineProps({
   loading: { type: Boolean, default: false },
   submitting: { type: Boolean, default: false },
   processing: { type: Boolean, default: false },
+  showPreviewAction: { type: Boolean, default: true },
   error: { type: String, default: '' },
 })
 
