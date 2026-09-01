@@ -2,7 +2,6 @@ package com.starsea.ai.service;
 
 import com.starsea.ai.openapi.retrieval.RetrievalQuery;
 import com.starsea.ai.openapi.retrieval.RetrievedChunk;
-import org.springframework.ai.document.Document;
 
 import java.util.List;
 
@@ -13,12 +12,6 @@ import java.util.List;
  * @Date:2025/4/26 11:20
  */
 public interface RagService {
-
-    // 匹配相似文档内容
-    List<Document> search(String keyword,String knowledgeId);
-
-    // 匹配相似文档内容
-    List<Document> searchByFile(String keyword,Long knowledgeId);
 
     List<RetrievedChunk> retrieve(RetrievalQuery query);
 }

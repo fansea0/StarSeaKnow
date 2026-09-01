@@ -27,7 +27,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -176,7 +175,6 @@ public class ExternalRetrievalController {
         List<RetrievalRecord> records = new ArrayList<>(safeChunks.stream()
                 .filter(chunk -> chunk != null)
                 .map(this::record)
-                .sorted(Comparator.comparingDouble(RetrievalRecord::score).reversed())
                 .toList());
         RetrievalResponse response = new RetrievalResponse(List.copyOf(records));
         while (!records.isEmpty() && serializedSize(response) > MAX_RESPONSE_BYTES) {
@@ -191,8 +189,10 @@ public class ExternalRetrievalController {
         metadata.put("document_id", text(chunk.documentId()));
         metadata.put("chunk_id", text(chunk.chunkId()));
         metadata.put("file_type", chunk.fileType());
-        metadata.put("page_number", chunk.pageNumber());
         metadata.put("chunk_index", chunk.chunkIndex());
+        metadata.put("section_path", chunk.sectionPath());
+        metadata.put("start_line", sourceValue(chunk.sourceLocator(), "startLine", "start_line"));
+        metadata.put("end_line", sourceValue(chunk.sourceLocator(), "endLine", "end_line"));
         double score = Double.isFinite(chunk.score()) ? Math.max(0.0, Math.min(1.0, chunk.score())) : 0.0;
         return new RetrievalRecord(truncateUtf8(chunk.content(), MAX_CHUNK_BYTES), score,
                 chunk.title() == null ? "" : chunk.title(),
@@ -278,6 +278,19 @@ public class ExternalRetrievalController {
 
     private static String text(UUID value) {
         return value == null ? null : value.toString();
+    }
+
+    private static Object sourceValue(Map<String, Object> sourceLocator, String... keys) {
+        if (sourceLocator == null) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = sourceLocator.get(key);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private static int positiveOrDefault(Integer value, int defaultValue) {

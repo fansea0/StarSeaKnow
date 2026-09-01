@@ -29,6 +29,21 @@
         <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
     </resultMap>
 
+    <select id="findActiveByPublicIds" resultMap="DocumentChunkResultMap">
+        SELECT *
+        FROM document_chunk
+        WHERE tenant_id = #{tenantId}
+          AND status = 2
+          AND knowledge_id IN
+          <foreach collection="knowledgeIds" item="knowledgeId" open="(" separator="," close=")">
+              #{knowledgeId}
+          </foreach>
+          AND public_id IN
+          <foreach collection="publicIds" item="publicId" open="(" separator="," close=")">
+              #{publicId,jdbcType=OTHER,typeHandler=com.starsea.ai.auth.UuidTypeHandler}
+          </foreach>
+    </select>
+
     <select id="findByFile" resultMap="DocumentChunkResultMap">
         SELECT *
         FROM document_chunk

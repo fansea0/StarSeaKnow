@@ -6,10 +6,15 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Mapper
 public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
+
+    List<DocumentChunk> findActiveByPublicIds(@Param("tenantId") long tenantId,
+                                              @Param("knowledgeIds") Set<Long> knowledgeIds,
+                                              @Param("publicIds") List<UUID> publicIds);
 
     List<DocumentChunk> findByFile(@Param("fileId") long fileId,
                                    @Param("tenantId") long tenantId,
