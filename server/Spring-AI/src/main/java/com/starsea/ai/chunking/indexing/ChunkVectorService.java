@@ -141,7 +141,7 @@ public class ChunkVectorService {
             throw ChunkingException.conflict("The current processing state cannot confirm vectorization");
         }
         if (!Objects.equals(processing.getSourceHash(), source.hash())) {
-            throw ChunkingException.conflict(
+            throw ChunkingException.unprocessable(
                     "The physical source changed after the chunk preview was generated");
         }
         File file = requireFile(fileId);
@@ -201,7 +201,7 @@ public class ChunkVectorService {
             throw ChunkingException.conflict("Only an ADJUSTING or COMPLETED file can reindex one chunk");
         }
         if (!Objects.equals(processing.getSourceHash(), source.hash())) {
-            throw ChunkingException.conflict(
+            throw ChunkingException.unprocessable(
                     "The physical source changed after the chunk preview was generated");
         }
         File file = requireFile(fileId);

@@ -16,6 +16,7 @@ import com.starsea.ai.chunking.preview.ChunkPreviewService;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
+import com.starsea.ai.config.GlobalExceptionHandler;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.FileProcessing;
@@ -64,6 +65,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 class ChunkVectorServiceTest {
 
@@ -114,6 +116,29 @@ class ChunkVectorServiceTest {
     }
 
     @Test
+    void source_change_is_exposed_as_http_422_with_an_actionable_message() throws Exception {
+        ChunkPreviewService previewService = mock(ChunkPreviewService.class);
+        ChunkCommandService commandService = mock(ChunkCommandService.class);
+        ChunkVectorService vectorService = mock(ChunkVectorService.class);
+        doThrow(ChunkingException.unprocessable(
+                "The source document changed after preview; regenerate the preview"))
+                .when(vectorService).confirm(eq(KNOWLEDGE_ID), eq(FILE_ID), any(ConfirmRequest.class));
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(
+                        new ChunkingController(previewService, commandService, vectorService))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mvc.perform(post("/knowledge/10/files/20/confirm")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"overlapEnabled":false,"overlapTokens":40,"lockVersion":3}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.msg").value(
+                        "The source document changed after preview; regenerate the preview"));
+    }
+
+    @Test
     void confirmation_hashes_physical_source_before_any_state_mutation() throws Exception {
         Fixture fixture = fixture(PipelineState.CHUNKED, 3, "stale-preview-hash",
                 List.of(chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "edited body")));
@@ -122,7 +147,8 @@ class ChunkVectorServiceTest {
                 () -> fixture.service.confirm(KNOWLEDGE_ID, FILE_ID,
                         new ConfirmRequest(true, 40, 3)));
 
-        assertEquals(409, exception.status().value());
+        assertEquals(422, exception.status().value());
+        assertTrue(exception.getMessage().contains("changed"));
         verify(fixture.stateService, never()).transition(
                 anyLong(), anyLong(), any(), any(), anyInt());
         verify(fixture.processingMapper, never()).update(any(), any(Wrapper.class));
@@ -137,7 +163,8 @@ class ChunkVectorServiceTest {
         ChunkingException exception = assertThrows(ChunkingException.class,
                 () -> fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID));
 
-        assertEquals(409, exception.status().value());
+        assertEquals(422, exception.status().value());
+        assertTrue(exception.getMessage().contains("changed"));
         assertEquals(1, fixture.transactionManager.begins());
         assertEquals(0, fixture.transactionManager.commits());
         assertEquals(1, fixture.transactionManager.rollbacks());
