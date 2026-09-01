@@ -23,7 +23,17 @@ final class MarkdownBlockRenderer {
     }
 
     String plainText(Node node) {
-        return textRenderer.render(node).strip();
+        return withoutTerminalLineEnding(textRenderer.render(node));
+    }
+
+    private String withoutTerminalLineEnding(String rendered) {
+        if (rendered.endsWith("\r\n")) {
+            return rendered.substring(0, rendered.length() - 2);
+        }
+        if (rendered.endsWith("\n") || rendered.endsWith("\r")) {
+            return rendered.substring(0, rendered.length() - 1);
+        }
+        return rendered;
     }
 
     String rawText(Node node) {

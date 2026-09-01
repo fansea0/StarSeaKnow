@@ -37,7 +37,8 @@ class MarkdownStructureParserTest {
         assertEquals(7, tableBlock.sourceLocator().startLine());
         assertEquals("| 操作 | 说明 |\n| --- | --- |\n| 重置 | 点击“忘记密码” |", tableBlock.rawText());
         assertEquals("- 第一步\n  - 嵌套步骤", listBlock.rawText());
-        assertEquals("```text\n保留 `围栏` 与标记\n```", codeBlock.rawText());
+        assertEquals("```text\n  保留 `围栏` 与标记\n```", codeBlock.rawText());
+        assertEquals("  保留 `围栏` 与标记", codeBlock.plainText());
         assertEquals("> 引用内容\n>\n> 第二行", quoteBlock.rawText());
         assertEquals("<div class=\"notice\">\n<strong>HTML 内容</strong>\n</div>", htmlBlock.rawText());
         assertEquals("---", thematicBreak.rawText());
