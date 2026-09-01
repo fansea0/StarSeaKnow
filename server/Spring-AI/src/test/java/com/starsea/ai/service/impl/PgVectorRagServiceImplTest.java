@@ -29,8 +29,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -158,7 +160,7 @@ class PgVectorRagServiceImplTest {
     }
 
     @Test
-    void document_id_is_authoritative_and_metadata_cannot_redirect_candidate_score() {
+    void accepts_valid_document_id_when_chunk_metadata_is_missing() {
         Fixture fixture = fixture();
         Map<String, Object> missingMetadataId = new LinkedHashMap<>(candidateMetadata(FOURTH_CHUNK_ID.toString()));
         missingMetadataId.remove("documentChunkId");
@@ -168,33 +170,90 @@ class PgVectorRagServiceImplTest {
                 .metadata(missingMetadataId)
                 .score(0.80)
                 .build();
-        Document mismatch = Document.builder()
-                .id(FIRST_CHUNK_ID.toString())
-                .text("mismatched metadata")
-                .metadata(candidateMetadata(SECOND_CHUNK_ID.toString()))
-                .score(0.99)
-                .build();
-        Document malformedMetadata = Document.builder()
-                .id(THIRD_CHUNK_ID.toString())
-                .text("malformed metadata")
-                .metadata(candidateMetadata("not-a-uuid"))
-                .score(0.95)
-                .build();
         when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
-                .thenReturn(List.of(mismatch, malformedMetadata, missingMetadata));
+                .thenReturn(List.of(missingMetadata));
         when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
                 .thenReturn(List.of(chunk(FOURTH_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
                         ChunkStatus.ACTIVE, 4, "database fourth")));
 
         List<RetrievedChunk> result = fixture.service.retrieve(
-                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 3, 0.0));
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0));
 
         assertEquals(List.of(FOURTH_CHUNK_ID), result.stream().map(RetrievedChunk::chunkId).toList());
+        assertEquals(0.80, result.get(0).score());
         @SuppressWarnings({"rawtypes", "unchecked"})
         ArgumentCaptor<List<UUID>> ids = (ArgumentCaptor) ArgumentCaptor.forClass(List.class);
         verify(fixture.chunkMapper).findActiveByPublicIds(
                 eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), ids.capture());
         assertEquals(List.of(FOURTH_CHUNK_ID), ids.getValue());
+    }
+
+    @Test
+    void rejects_malformed_document_id_even_when_metadata_id_is_valid() {
+        assertCandidateRejected(Document.builder()
+                .id("not-a-uuid")
+                .text("malformed document id")
+                .metadata(candidateMetadata(FIRST_CHUNK_ID.toString()))
+                .score(0.99)
+                .build());
+    }
+
+    @Test
+    void rejects_valid_document_id_when_metadata_id_is_malformed() {
+        assertCandidateRejected(Document.builder()
+                .id(FIRST_CHUNK_ID.toString())
+                .text("malformed metadata id")
+                .metadata(candidateMetadata("not-a-uuid"))
+                .score(0.99)
+                .build());
+    }
+
+    @Test
+    void rejects_valid_document_id_when_metadata_has_different_valid_id() {
+        assertCandidateRejected(Document.builder()
+                .id(FIRST_CHUNK_ID.toString())
+                .text("mismatched metadata id")
+                .metadata(candidateMetadata(SECOND_CHUNK_ID.toString()))
+                .score(0.99)
+                .build());
+    }
+
+    @Test
+    void accepts_matching_document_and_metadata_ids() {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(candidate(FIRST_CHUNK_ID, "matching candidate", 0.91)));
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                        ChunkStatus.ACTIVE, 0, "database first")));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0));
+
+        assertEquals(List.of(FIRST_CHUNK_ID), result.stream().map(RetrievedChunk::chunkId).toList());
+        assertEquals(0.91, result.get(0).score());
+    }
+
+    @Test
+    void duplicate_chunk_id_retains_first_candidate_order_and_score() {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                candidate(FIRST_CHUNK_ID, "first occurrence", 0.71),
+                candidate(SECOND_CHUNK_ID, "second chunk", 0.69),
+                candidate(FIRST_CHUNK_ID, "later duplicate", 0.99)));
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(
+                        chunk(SECOND_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                ChunkStatus.ACTIVE, 1, "database second"),
+                        chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                ChunkStatus.ACTIVE, 0, "database first")));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 2, 0.0));
+
+        assertEquals(List.of(FIRST_CHUNK_ID, SECOND_CHUNK_ID),
+                result.stream().map(RetrievedChunk::chunkId).toList());
+        assertEquals(List.of(0.71, 0.69), result.stream().map(RetrievedChunk::score).toList());
     }
 
     @Test
@@ -326,6 +385,18 @@ class PgVectorRagServiceImplTest {
                 .thenReturn(List.of(file));
         return new Fixture(vectorStore, fileService, chunkMapper,
                 new PgVectorRagServiceImpl(vectorStore, fileService, chunkMapper));
+    }
+
+    private void assertCandidateRejected(Document candidate) {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(candidate));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0));
+
+        assertTrue(result.isEmpty());
+        verify(fixture.chunkMapper, never()).findActiveByPublicIds(anyLong(), any(), any());
     }
 
     private static Document candidate(UUID publicId, String text, double score) {
