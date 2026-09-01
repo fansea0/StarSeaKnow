@@ -12,10 +12,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /**
  * 全局异常处理器
@@ -46,6 +48,14 @@ public class GlobalExceptionHandler
                 .map(error -> error.getField() + " " + error.getDefaultMessage())
                 .orElse("request validation failed");
         return ResponseEntity.badRequest().body(AjaxResult.error(message));
+    }
+
+    @ExceptionHandler({MissingServletRequestParameterException.class,
+            MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<AjaxResult> handleRequestParameterBinding(Exception exception)
+    {
+        return ResponseEntity.badRequest()
+                .body(AjaxResult.error("request parameters must be valid"));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

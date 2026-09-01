@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -40,7 +41,6 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -244,7 +244,7 @@ class ChunkCommandServiceTest {
     }
 
     @Test
-    void vector_cleanup_has_three_bounded_attempts_without_rolling_back_success() {
+    void vector_cleanup_has_exactly_three_bounded_attempts_without_rolling_back_success() {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
@@ -256,51 +256,93 @@ class ChunkCommandServiceTest {
                 new EditChunkRequest("Edited", 2));
 
         assertEquals("Edited", response.content());
-        verify(vectorGateway, times(4)).delete(CHUNK_ID);
+        verify(vectorGateway, times(3)).delete(CHUNK_ID);
         assertEquals(List.of(100L, 300L, 900L), sleeps);
     }
 
     @Test
-    void vector_cleanup_runs_only_after_the_database_transaction_commits() {
-        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
-        when(chunkMapper.findScopedByPublicIdForUpdate(
-                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
+    void vector_cleanup_succeeds_on_each_bounded_attempt_index() {
+        for (int successAttempt = 1; successAttempt <= 3; successAttempt++) {
+            AtomicInteger calls = new AtomicInteger();
+            List<Long> attemptSleeps = new ArrayList<>();
+            int expectedSuccessAttempt = successAttempt;
+            ChunkVectorGateway gateway = publicId -> {
+                if (calls.incrementAndGet() < expectedSuccessAttempt) {
+                    throw new IllegalStateException("retry");
+                }
+            };
+            DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
+            when(chunkMapper.findScopedByPublicIdForUpdate(
+                    FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+            when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
+                    "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
+            ChunkCommandService attemptService = new ChunkCommandService(
+                    chunkMapper, processingMapper, stateService, new CharacterTokenCounter(),
+                    new ChunkIndexContentBuilder(), gateway, attemptSleeps::add);
+
+            attemptService.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                    new EditChunkRequest("Edited", 2));
+
+            assertEquals(successAttempt, calls.get());
+            assertEquals(List.of(100L, 300L, 900L).subList(0, successAttempt), attemptSleeps);
+        }
+    }
+
+    @Test
+    void real_transaction_rolls_back_target_and_dependent_when_file_transition_fails() {
+        List<DocumentChunk> database = activeTargetAndDependent();
+        DocumentChunkMapper mutableMapper = mutableChunkMapper(database);
+        ChunkVectorGateway cleanup = mock(ChunkVectorGateway.class);
+        doThrow(new FileProcessingService.StateConflictException("state changed"))
+                .when(stateService).transition(KNOWLEDGE_ID, FILE_ID,
+                        PipelineState.CHUNKED, PipelineState.ADJUSTING, 5);
+        ChunkCommandService target = new ChunkCommandService(
+                mutableMapper, processingMapper, stateService, new CharacterTokenCounter(),
+                new ChunkIndexContentBuilder(), cleanup, millis -> { });
+        StateTransactionManager transactionManager = new StateTransactionManager(database);
+        ChunkCommandService transactional = transactionalProxy(target, transactionManager);
+
+        assertThrows(FileProcessingService.StateConflictException.class, () -> transactional.edit(
+                KNOWLEDGE_ID, FILE_ID, CHUNK_ID, new EditChunkRequest("Edited", 2)));
+
+        assertEquals(1, transactionManager.rollbacks());
+        assertEquals("Old", database.get(0).getContent());
+        assertEquals(ChunkStatus.ACTIVE.code(), database.get(0).getStatus());
+        assertEquals("target-index", database.get(0).getIndexContent());
+        assertEquals(ChunkStatus.ACTIVE.code(), database.get(1).getStatus());
+        assertEquals("dependent-overlap", database.get(1).getOverlapContent());
+        assertEquals("dependent-index", database.get(1).getIndexContent());
+        verify(mutableMapper).invalidateDependent(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 32L, 31L, 7);
+        verify(cleanup, never()).delete(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void successful_mutable_transaction_cleans_vectors_only_after_committed_state_is_visible() {
+        List<DocumentChunk> database = activeTargetAndDependent();
+        DocumentChunkMapper mutableMapper = mutableChunkMapper(database);
         AtomicBoolean committed = new AtomicBoolean();
-        doAnswer(invocation -> {
-            assertTrue(committed.get(), "vector deletion must observe a committed database state");
-            return null;
-        }).when(vectorGateway).delete(CHUNK_ID);
-        AbstractPlatformTransactionManager transactionManager = new AbstractPlatformTransactionManager() {
-            @Override
-            protected Object doGetTransaction() {
-                return new Object();
-            }
-
-            @Override
-            protected void doBegin(Object transaction, TransactionDefinition definition) {
-            }
-
-            @Override
-            protected void doCommit(DefaultTransactionStatus status) {
-                committed.set(true);
-            }
-
-            @Override
-            protected void doRollback(DefaultTransactionStatus status) {
-            }
+        List<UUID> cleaned = new ArrayList<>();
+        ChunkVectorGateway cleanup = publicId -> {
+            assertTrue(committed.get(), "vector deletion must observe committed mutable state");
+            assertEquals(ChunkStatus.DRAFT.code(), database.get(0).getStatus());
+            assertEquals(ChunkStatus.DRAFT.code(), database.get(1).getStatus());
+            cleaned.add(publicId);
         };
-        ProxyFactory proxyFactory = new ProxyFactory(service);
-        proxyFactory.addAdvice(new TransactionInterceptor(
-                transactionManager, new AnnotationTransactionAttributeSource()));
-        ChunkCommandService transactional = (ChunkCommandService) proxyFactory.getProxy();
+        ChunkCommandService target = new ChunkCommandService(
+                mutableMapper, processingMapper, stateService, new CharacterTokenCounter(),
+                new ChunkIndexContentBuilder(), cleanup, millis -> { });
+        StateTransactionManager transactionManager = new StateTransactionManager(database, committed);
+        ChunkCommandService transactional = transactionalProxy(target, transactionManager);
 
         transactional.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
                 new EditChunkRequest("Edited", 2));
 
         assertTrue(committed.get());
-        verify(vectorGateway).delete(CHUNK_ID);
+        assertEquals("Edited", database.get(0).getContent());
+        assertEquals(ChunkStatus.DRAFT.code(), database.get(0).getStatus());
+        assertEquals(ChunkStatus.DRAFT.code(), database.get(1).getStatus());
+        assertEquals(List.of(CHUNK_ID, NEXT_ID), cleaned);
     }
 
     @Test
@@ -351,6 +393,10 @@ class ChunkCommandServiceTest {
                 "com.starsea.ai.mapper.DocumentChunkMapper.deleteScoped", Map.of(
                         "fileId", FILE_ID, "tenantId", TENANT_ID, "knowledgeId", KNOWLEDGE_ID,
                         "chunkPublicId", CHUNK_ID, "lockVersion", 2));
+        String dependent = sql(configuration,
+                "com.starsea.ai.mapper.DocumentChunkMapper.invalidateDependent", Map.of(
+                        "fileId", FILE_ID, "tenantId", TENANT_ID, "knowledgeId", KNOWLEDGE_ID,
+                        "chunkId", 32L, "sourceChunkId", 31L, "lockVersion", 7));
 
         assertTrue(update.contains("tenant_id = ?"));
         assertTrue(update.contains("knowledge_id = ?"));
@@ -367,6 +413,14 @@ class ChunkCommandServiceTest {
         assertTrue(delete.contains("status <> 1"));
         assertTrue(delete.contains("lock_version = ?"));
         assertTrue(!delete.contains("UPDATE document_chunk"));
+        assertTrue(dependent.contains("tenant_id = ?"));
+        assertTrue(dependent.contains("knowledge_id = ?"));
+        assertTrue(dependent.contains("file_id = ?"));
+        assertTrue(dependent.contains("id = ?"));
+        assertTrue(dependent.contains("overlap_source_chunk_id = ?"));
+        assertTrue(dependent.contains("status <> 1"));
+        assertTrue(dependent.contains("lock_version = ?"));
+        assertTrue(dependent.contains("index_content = NULL"));
     }
 
     private static DocumentChunk chunk(long id, UUID publicId, int position,
@@ -386,6 +440,77 @@ class ChunkCommandServiceTest {
         chunk.setIsModified(false);
         chunk.setLockVersion(lockVersion);
         return chunk;
+    }
+
+    private static List<DocumentChunk> activeTargetAndDependent() {
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
+        target.setIndexContent("target-index");
+        DocumentChunk dependent = chunk(32L, NEXT_ID, 5, ChunkStatus.ACTIVE, 7, "Next");
+        dependent.setOverlapSourceChunkId(31L);
+        dependent.setOverlapContent("dependent-overlap");
+        dependent.setOverlapTokenCount(2);
+        dependent.setIndexContent("dependent-index");
+        return new ArrayList<>(List.of(target, dependent));
+    }
+
+    private DocumentChunkMapper mutableChunkMapper(List<DocumentChunk> database) {
+        DocumentChunkMapper mapper = mock(DocumentChunkMapper.class);
+        when(mapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID))
+                .thenAnswer(invocation -> database.get(0));
+        when(mapper.findNextDependentForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5, 31L))
+                .thenAnswer(invocation -> database.get(1));
+        when(mapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
+                "Edited", 6, sha256("Edited"), 2)).thenAnswer(invocation -> {
+            DocumentChunk updated = copy(database.get(0));
+            updated.setContent("Edited");
+            updated.setTokenCount(6);
+            updated.setContentHash(sha256("Edited"));
+            updated.setStatus(ChunkStatus.DRAFT.code());
+            updated.setIsModified(true);
+            updated.setIndexContent(null);
+            updated.setLockVersion(3);
+            database.set(0, updated);
+            return 1;
+        });
+        when(mapper.invalidateDependent(FILE_ID, TENANT_ID, KNOWLEDGE_ID,
+                32L, 31L, 7)).thenAnswer(invocation -> {
+            DocumentChunk updated = copy(database.get(1));
+            updated.setStatus(ChunkStatus.DRAFT.code());
+            updated.setOverlapContent(null);
+            updated.setOverlapTokenCount(0);
+            updated.setIndexContent(null);
+            updated.setLockVersion(8);
+            database.set(1, updated);
+            return 1;
+        });
+        return mapper;
+    }
+
+    private static DocumentChunk copy(DocumentChunk source) {
+        DocumentChunk copy = new DocumentChunk();
+        copy.setId(source.getId());
+        copy.setPublicId(source.getPublicId());
+        copy.setTenantId(source.getTenantId());
+        copy.setKnowledgeId(source.getKnowledgeId());
+        copy.setFileId(source.getFileId());
+        copy.setPosition(source.getPosition());
+        copy.setContent(source.getContent());
+        copy.setOverlapContent(source.getOverlapContent());
+        copy.setOverlapSourceChunkId(source.getOverlapSourceChunkId());
+        copy.setOverlapTokenCount(source.getOverlapTokenCount());
+        copy.setIndexContent(source.getIndexContent());
+        copy.setSectionPath(source.getSectionPath());
+        copy.setSourceLocator(source.getSourceLocator());
+        copy.setTokenCount(source.getTokenCount());
+        copy.setContentHash(source.getContentHash());
+        copy.setBoundaryReason(source.getBoundaryReason());
+        copy.setStatus(source.getStatus());
+        copy.setIsModified(source.getIsModified());
+        copy.setLastError(source.getLastError());
+        copy.setLockVersion(source.getLockVersion());
+        return copy;
     }
 
     private static FileProcessing processing(PipelineState state, int lockVersion) {
@@ -419,6 +544,57 @@ class ChunkCommandServiceTest {
         MappedStatement statement = configuration.getMappedStatement(statementId);
         BoundSql boundSql = statement.getBoundSql(parameters);
         return boundSql.getSql().replaceAll("\\s+", " ").trim();
+    }
+
+    private static ChunkCommandService transactionalProxy(
+            ChunkCommandService target, StateTransactionManager transactionManager) {
+        ProxyFactory proxyFactory = new ProxyFactory(target);
+        proxyFactory.setProxyTargetClass(true);
+        proxyFactory.addAdvice(new TransactionInterceptor(
+                transactionManager, new AnnotationTransactionAttributeSource()));
+        return (ChunkCommandService) proxyFactory.getProxy();
+    }
+
+    private static final class StateTransactionManager extends AbstractPlatformTransactionManager {
+        private final List<DocumentChunk> database;
+        private final AtomicBoolean committed;
+        private List<DocumentChunk> snapshot = List.of();
+        private int rollbacks;
+
+        private StateTransactionManager(List<DocumentChunk> database) {
+            this(database, new AtomicBoolean());
+        }
+
+        private StateTransactionManager(List<DocumentChunk> database, AtomicBoolean committed) {
+            this.database = database;
+            this.committed = committed;
+        }
+
+        int rollbacks() {
+            return rollbacks;
+        }
+
+        @Override
+        protected Object doGetTransaction() {
+            return new Object();
+        }
+
+        @Override
+        protected void doBegin(Object transaction, TransactionDefinition definition) {
+            snapshot = List.copyOf(database);
+        }
+
+        @Override
+        protected void doCommit(DefaultTransactionStatus status) {
+            committed.set(true);
+        }
+
+        @Override
+        protected void doRollback(DefaultTransactionStatus status) {
+            rollbacks++;
+            database.clear();
+            database.addAll(snapshot);
+        }
     }
 
     private static final class CharacterTokenCounter implements TokenCounter {

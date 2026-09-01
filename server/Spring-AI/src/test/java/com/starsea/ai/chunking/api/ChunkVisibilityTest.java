@@ -113,4 +113,28 @@ class ChunkVisibilityTest {
                 .andExpect(jsonPath("$.data.totalTokenCount").value(520))
                 .andExpect(jsonPath("$.data.maxTokens").value(512));
     }
+
+    @Test
+    void delete_transport_binding_errors_are_actual_http_400_responses() throws Exception {
+        ChunkPreviewService previewService = mock(ChunkPreviewService.class);
+        ChunkCommandService commandService = mock(ChunkCommandService.class);
+        UUID publicId = UUID.fromString("10000000-0000-0000-0000-000000000021");
+        MockMvc mockMvc = MockMvcBuilders
+                .standaloneSetup(new ChunkingController(previewService, commandService))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mockMvc.perform(delete("/knowledge/{knowledgeId}/files/{fileId}/chunks/{chunkPublicId}",
+                        10L, 20L, publicId))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(delete("/knowledge/{knowledgeId}/files/{fileId}/chunks/{chunkPublicId}",
+                        10L, 20L, "not-a-uuid").param("lockVersion", "5"))
+                .andExpect(status().isBadRequest());
+
+        verify(commandService, org.mockito.Mockito.never())
+                .delete(org.mockito.ArgumentMatchers.anyLong(),
+                        org.mockito.ArgumentMatchers.anyLong(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.anyInt());
+    }
 }

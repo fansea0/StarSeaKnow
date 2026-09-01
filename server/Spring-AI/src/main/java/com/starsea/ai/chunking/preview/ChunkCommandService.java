@@ -307,22 +307,18 @@ public class ChunkCommandService {
 
     private void deleteVectorWithRetry(long tenantId, long fileId, UUID publicId) {
         RuntimeException lastFailure = null;
-        for (int attempt = 0; attempt <= RETRY_DELAYS_MILLIS.length; attempt++) {
+        for (int attempt = 0; attempt < RETRY_DELAYS_MILLIS.length; attempt++) {
             try {
+                retrySleeper.sleep(RETRY_DELAYS_MILLIS[attempt]);
                 vectorGateway.delete(publicId);
                 return;
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                lastFailure = new IllegalStateException(
+                        "Vector cleanup retry was interrupted", interrupted);
+                break;
             } catch (RuntimeException failure) {
                 lastFailure = failure;
-                if (attempt < RETRY_DELAYS_MILLIS.length) {
-                    try {
-                        retrySleeper.sleep(RETRY_DELAYS_MILLIS[attempt]);
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        lastFailure = new IllegalStateException(
-                                "Vector cleanup retry was interrupted", interrupted);
-                        break;
-                    }
-                }
             }
         }
         log.error("chunk_vector_delete_failed tenant_id={} file_id={} chunk_public_id={}",
