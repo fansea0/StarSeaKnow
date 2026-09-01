@@ -1,6 +1,7 @@
 package com.starsea.ai.config;
 
 import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.domain.dto.AjaxResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -13,6 +14,7 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * 全局异常处理器
@@ -46,9 +48,30 @@ public class GlobalExceptionHandler
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<AjaxResult> handleHttpMessageNotReadable()
+    public ResponseEntity<AjaxResult> handleHttpMessageNotReadable(HttpMessageNotReadableException exception)
     {
+        Throwable cause = exception.getCause();
+        while (cause != null) {
+            if (cause instanceof IllegalArgumentException) {
+                return ResponseEntity.unprocessableEntity()
+                        .body(AjaxResult.error(cause.getMessage()));
+            }
+            cause = cause.getCause();
+        }
         return ResponseEntity.badRequest().body(AjaxResult.error("request body must be valid JSON"));
+    }
+
+    @ExceptionHandler(ChunkingException.class)
+    public ResponseEntity<AjaxResult> handleChunking(ChunkingException exception)
+    {
+        return ResponseEntity.status(exception.status()).body(AjaxResult.error(exception.getMessage()));
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<AjaxResult> handleResponseStatus(ResponseStatusException exception)
+    {
+        String message = exception.getReason() == null ? exception.getMessage() : exception.getReason();
+        return ResponseEntity.status(exception.getStatusCode()).body(AjaxResult.error(message));
     }
 
 
