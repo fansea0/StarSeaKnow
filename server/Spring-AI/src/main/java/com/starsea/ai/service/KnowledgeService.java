@@ -9,6 +9,4 @@ import com.starsea.ai.domain.Knowledge;
 * @createDate 2025-05-03 11:33:17
 */
 public interface KnowledgeService extends IService<Knowledge> {
-
-    void loadEmbedding(Long knowledgeId,Long fileId);
 }

@@ -17,7 +17,6 @@ public class FileVo {
     private Long size;
     private Integer status;
     private String type;
-    private Integer embeddingStatus;
     private Date createTime;
     private Date updateTime;
 }

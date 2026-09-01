@@ -13,7 +13,6 @@
             <result property="status" column="status" jdbcType="SMALLINT"/>
             <result property="type" column="type" jdbcType="VARCHAR"/>
             <result property="path" column="path" jdbcType="VARCHAR"/>
-            <result property="embeddingStatus" column="embedding_status" jdbcType="SMALLINT"/>
             <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>
             <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
     </resultMap>
@@ -21,7 +20,7 @@
     <sql id="Base_Column_List">
         id,public_id,file_name,size,
         status,type,path,
-        embedding_status,create_time,update_time
+        create_time,update_time
     </sql>
 
     <select id="selectByFileId" resultType="com.starsea.ai.domain.File">
@@ -30,7 +29,7 @@
 
     <select id="selectEnabledByKnowledgeIds" resultMap="BaseResultMap">
         SELECT DISTINCT f.id, f.public_id, f.file_name, f.size, f.status, f.type,
-                        f.path, f.embedding_status, f.create_time, f.update_time
+                        f.path, f.create_time, f.update_time
         FROM file f
         JOIN knowledge_file kf
           ON kf.file_id = f.id

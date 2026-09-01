@@ -41,14 +41,6 @@ public class KnowledgeController {
     private final AgentKnowledgeService agentKnowledgeService;
     private final FileService fileService;
 
-    @RequireRole("tenant_admin")
-    @PostMapping("/file")
-    public AjaxResult fileEmbedding(Long knowledgeId, Long fileId) {
-        // TODO: 文件分块 ---> 向量化处理 ---> 存入pgvector
-        knowledgeService.loadEmbedding(knowledgeId, fileId);
-        return AjaxResult.success();
-    }
-
     @GetMapping("/file/list")
     public AjaxResult fileList(Long knowledgeId) {
         List<KnowledgeFile> knowledgeFiles = knowledgeFileService.list(new LambdaQueryWrapper<KnowledgeFile>().eq(KnowledgeFile::getKnowledgeId, knowledgeId));

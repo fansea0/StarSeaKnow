@@ -32,8 +32,6 @@ public class File implements Serializable {
     private String type;
     @TableField("path")
     private String path;
-    @TableField("embedding_status")
-    private Integer embeddingStatus;
     @TableField("create_time")
     private Date createTime;
     @TableField("update_time")
@@ -45,14 +43,13 @@ public class File implements Serializable {
     public File() {
     }
 
-    public File(Long id, String fileName, Long size, Integer status, String type, String path, Integer embeddingStatus, Date createTime, Date updateTime) {
+    public File(Long id, String fileName, Long size, Integer status, String type, String path, Date createTime, Date updateTime) {
         this.id = id;
         this.fileName = fileName;
         this.size = size;
         this.status = status;
         this.type = type;
         this.path = path;
-        this.embeddingStatus = embeddingStatus;
         this.createTime = createTime;
         this.updateTime = updateTime;
     }
