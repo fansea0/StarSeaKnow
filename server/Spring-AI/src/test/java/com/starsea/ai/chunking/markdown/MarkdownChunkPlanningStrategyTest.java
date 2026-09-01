@@ -113,6 +113,43 @@ class MarkdownChunkPlanningStrategyTest {
     }
 
     @Test
+    void oversized_unterminated_four_marker_code_fences_keep_matching_synthesized_closers() {
+        List<FenceCase> cases = List.of(
+                new FenceCase("````java", "````"),
+                new FenceCase("~~~~java", "~~~~"));
+
+        for (FenceCase fenceCase : cases) {
+            String code = fenceCase.opening() + "\n" + "long-code-line-".repeat(6);
+            ParsedStructure structure = structure(List.of(
+                    block("code", BlockType.FENCED_CODE, code, code, null, List.of())));
+
+            List<ChunkDraft> chunks = strategy.plan(structure, new ChunkPolicy(5, 20, 30));
+
+            assertTrue(chunks.size() >= 2, fenceCase.opening());
+            assertTrue(chunks.stream().allMatch(chunk -> chunk.content().startsWith(fenceCase.opening() + "\n")),
+                    fenceCase.opening());
+            assertTrue(chunks.stream().allMatch(chunk -> chunk.content().endsWith("\n" + fenceCase.closing())),
+                    fenceCase.opening());
+            assertTrue(chunks.stream().allMatch(chunk -> counter.count(indexText(chunk)) <= 30),
+                    fenceCase.opening());
+        }
+    }
+
+    @Test
+    void opposite_marker_final_line_remains_code_body_and_does_not_close_the_fence() {
+        String code = "````\n" + "long-code-line-".repeat(5) + "\n~~~~";
+        ParsedStructure structure = structure(List.of(
+                block("code", BlockType.FENCED_CODE, code, code, null, List.of())));
+
+        List<ChunkDraft> chunks = strategy.plan(structure, new ChunkPolicy(5, 20, 30));
+
+        assertTrue(chunks.size() >= 2);
+        assertTrue(chunks.stream().allMatch(chunk -> chunk.content().endsWith("\n````")));
+        assertEquals(1, chunks.stream().mapToInt(chunk -> occurrences(chunk.content(), "~~~~")).sum());
+        assertTrue(chunks.stream().allMatch(chunk -> counter.count(indexText(chunk)) <= 30));
+    }
+
+    @Test
     void oversized_table_repeats_header_in_every_chunk() {
         String table = "| 项目 | 说明 |\n"
                 + "| --- | --- |\n"
@@ -184,6 +221,42 @@ class MarkdownChunkPlanningStrategyTest {
         assertEquals(2, peer.size());
     }
 
+    @Test
+    void chunk_locators_keep_every_atom_region_once() {
+        Map<String, Object> firstRegion = Map.of("id", "first");
+        Map<String, Object> middleRegion = Map.of("id", "middle");
+        Map<String, Object> lastRegion = Map.of("id", "last");
+        ChunkPolicy policy = new ChunkPolicy(1, 50, 80);
+
+        List<ChunkDraft> threeAtoms = strategy.plan(structure(List.of(
+                blockWithRegion("p1", "第一段", firstRegion),
+                blockWithRegion("p2", "第二段", middleRegion),
+                blockWithRegion("p3", "第三段", lastRegion))), policy);
+        List<ChunkDraft> oneAtom = strategy.plan(structure(List.of(
+                blockWithRegion("only", "单独段落", firstRegion))), policy);
+
+        assertEquals(1, threeAtoms.size());
+        assertEquals(List.of(firstRegion, middleRegion, lastRegion), threeAtoms.get(0).sourceLocator().regions());
+        assertEquals(1, oneAtom.size());
+        assertEquals(List.of(firstRegion), oneAtom.get(0).sourceLocator().regions());
+    }
+
+    @Test
+    void token_safe_split_chooses_furthest_fitting_unicode_prefix_with_non_monotonic_counts() {
+        TokenCounter nonMonotonicCounter = new NonMonotonicTokenCounter();
+        MarkdownChunkPlanningStrategy nonMonotonicStrategy =
+                new MarkdownChunkPlanningStrategy(nonMonotonicCounter);
+        String content = "😀bcde";
+        ParsedStructure structure = structure(List.of(
+                block("p1", BlockType.PARAGRAPH, content, content, null, List.of())));
+
+        List<ChunkDraft> chunks = nonMonotonicStrategy.plan(structure, new ChunkPolicy(1, 5, 10));
+
+        assertEquals(List.of("😀bcd", "e"), chunks.stream().map(ChunkDraft::content).toList());
+        assertEquals(content, chunks.stream().map(ChunkDraft::content).reduce("", String::concat));
+        assertTrue(chunks.stream().allMatch(chunk -> nonMonotonicCounter.count(indexText(chunk)) <= 10));
+    }
+
     private ParsedStructure structure(List<StructuredBlock> blocks) {
         FileResource resource = new FileResource(1, 2, 3,
                 UUID.fromString("00000000-0000-0000-0000-000000000003"),
@@ -201,6 +274,13 @@ class MarkdownChunkPlanningStrategyTest {
         return new SourceLocator("markdown", List.of(id), null, null, null, null, null, null, List.of());
     }
 
+    private StructuredBlock blockWithRegion(String id, String text, Map<String, Object> region) {
+        SourceLocator locator = new SourceLocator(
+                "markdown", List.of(id), null, null, null, null, null, null, List.of(region));
+        return new StructuredBlock(id, BlockType.PARAGRAPH, text, text, null, List.of(),
+                counter.count(text), locator, Map.of());
+    }
+
     private String indexText(ChunkDraft chunk) {
         return chunk.sectionPath().isEmpty()
                 ? chunk.content()
@@ -214,6 +294,9 @@ class MarkdownChunkPlanningStrategyTest {
     private record ContainerCase(BlockType type, String rawText) {
     }
 
+    private record FenceCase(String opening, String closing) {
+    }
+
     private static final class CharacterTokenCounter implements TokenCounter {
 
         @Override
@@ -224,6 +307,20 @@ class MarkdownChunkPlanningStrategyTest {
         @Override
         public String id() {
             return "test-code-point-counter";
+        }
+    }
+
+    private static final class NonMonotonicTokenCounter implements TokenCounter {
+
+        @Override
+        public int count(String text) {
+            int codePoints = text == null ? 0 : text.codePointCount(0, text.length());
+            return codePoints == 2 || codePoints == 3 || codePoints == 5 ? 20 : codePoints;
+        }
+
+        @Override
+        public String id() {
+            return "test-non-monotonic-counter";
         }
     }
 }

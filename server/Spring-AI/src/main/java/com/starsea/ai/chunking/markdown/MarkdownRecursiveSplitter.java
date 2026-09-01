@@ -156,20 +156,72 @@ public final class MarkdownRecursiveSplitter {
 
     private List<String> splitFencedCode(String content, List<String> path, int maxTokens) {
         String[] lines = content.split("\\R", -1);
-        if (lines.length < 2 || !(lines[0].startsWith("```") || lines[0].startsWith("~~~"))) {
+        Fence openingFence = parseOpeningFence(lines[0]);
+        if (lines.length < 2 || openingFence == null) {
             return splitLines(content, path, maxTokens, "\n");
         }
         String opening = lines[0];
-        String closing = lines[lines.length - 1].startsWith("```") || lines[lines.length - 1].startsWith("~~~")
-                ? lines[lines.length - 1] : opening.substring(0, 3);
+        boolean hasClosingFence = isMatchingClosingFence(lines[lines.length - 1], openingFence);
+        String closing = hasClosingFence
+                ? lines[lines.length - 1]
+                : String.valueOf(openingFence.marker()).repeat(openingFence.length());
         List<String> bodyLines = new ArrayList<>();
-        int end = lines[lines.length - 1].equals(closing) ? lines.length - 1 : lines.length;
+        int end = hasClosingFence ? lines.length - 1 : lines.length;
         for (int index = 1; index < end; index++) {
             bodyLines.add(lines[index]);
         }
         String prefix = opening + "\n";
         String suffix = "\n" + closing;
         return packWrappedAtoms(bodyLines, path, maxTokens, prefix, suffix, "\n");
+    }
+
+    private Fence parseOpeningFence(String line) {
+        int markerStart = leadingSpaces(line);
+        if (markerStart > 3 || markerStart >= line.length()) {
+            return null;
+        }
+        char marker = line.charAt(markerStart);
+        if (marker != '`' && marker != '~') {
+            return null;
+        }
+        int markerEnd = markerStart;
+        while (markerEnd < line.length() && line.charAt(markerEnd) == marker) {
+            markerEnd++;
+        }
+        int length = markerEnd - markerStart;
+        if (length < 3 || marker == '`' && line.substring(markerEnd).indexOf('`') >= 0) {
+            return null;
+        }
+        return new Fence(marker, length);
+    }
+
+    private boolean isMatchingClosingFence(String line, Fence openingFence) {
+        int markerStart = leadingSpaces(line);
+        if (markerStart > 3 || markerStart >= line.length() || line.charAt(markerStart) != openingFence.marker()) {
+            return false;
+        }
+        int markerEnd = markerStart;
+        while (markerEnd < line.length() && line.charAt(markerEnd) == openingFence.marker()) {
+            markerEnd++;
+        }
+        if (markerEnd - markerStart < openingFence.length()) {
+            return false;
+        }
+        for (int index = markerEnd; index < line.length(); index++) {
+            char trailing = line.charAt(index);
+            if (trailing != ' ' && trailing != '\t') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int leadingSpaces(String line) {
+        int spaces = 0;
+        while (spaces < line.length() && line.charAt(spaces) == ' ') {
+            spaces++;
+        }
+        return spaces;
     }
 
     private List<String> splitLines(String content, List<String> path, int maxTokens, String separator) {
@@ -225,25 +277,20 @@ public final class MarkdownRecursiveSplitter {
         List<String> chunks = new ArrayList<>();
         String remaining = content;
         while (!remaining.isEmpty()) {
-            int low = 1;
-            int high = remaining.codePointCount(0, remaining.length());
-            int accepted = 0;
-            while (low <= high) {
-                int middle = (low + high) >>> 1;
-                int end = remaining.offsetByCodePoints(0, middle);
+            int acceptedEnd = -1;
+            int codePoints = remaining.codePointCount(0, remaining.length());
+            for (int prefixLength = 1; prefixLength <= codePoints; prefixLength++) {
+                int end = remaining.offsetByCodePoints(0, prefixLength);
                 if (fits(path, prefix + remaining.substring(0, end) + suffix, maxTokens)) {
-                    accepted = middle;
-                    low = middle + 1;
-                } else {
-                    high = middle - 1;
+                    acceptedEnd = end;
                 }
             }
-            if (accepted == 0) {
-                throw new IllegalArgumentException("A single Markdown code point cannot fit maxTokens");
+            if (acceptedEnd < 0) {
+                throw new IllegalArgumentException(
+                        "No non-empty prefix of the oversized Markdown semantic unit fits configured maxTokens");
             }
-            int end = remaining.offsetByCodePoints(0, accepted);
-            chunks.add(prefix + remaining.substring(0, end) + suffix);
-            remaining = remaining.substring(end);
+            chunks.add(prefix + remaining.substring(0, acceptedEnd) + suffix);
+            remaining = remaining.substring(acceptedEnd);
         }
         return chunks;
     }
@@ -278,5 +325,8 @@ public final class MarkdownRecursiveSplitter {
     }
 
     record SplitPart(String content, SourceLocator sourceLocator, boolean forcedSplit, String endReason) {
+    }
+
+    private record Fence(char marker, int length) {
     }
 }

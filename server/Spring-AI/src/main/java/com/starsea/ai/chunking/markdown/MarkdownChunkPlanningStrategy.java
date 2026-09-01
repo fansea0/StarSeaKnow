@@ -179,10 +179,13 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
         PlanningAtom first = atoms.get(start);
         PlanningAtom last = atoms.get(end);
         List<String> blockIds = new ArrayList<>();
+        List<SourceLocator> locators = new ArrayList<>();
         for (int index = start; index <= end; index++) {
-            blockIds.addAll(atoms.get(index).sourceLocator().blockIds());
+            SourceLocator locator = atoms.get(index).sourceLocator();
+            blockIds.addAll(locator.blockIds());
+            locators.add(locator);
         }
-        SourceLocator source = combineLocators(first.sourceLocator(), last.sourceLocator(), blockIds);
+        SourceLocator source = combineLocators(locators, blockIds);
         String endReason = last.endReason();
         if (end + 1 < atoms.size()) {
             PlanningAtom next = atoms.get(end + 1);
@@ -205,7 +208,8 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
                         && fits(current.sectionPath(), combinedContent, policy.maxTokens())) {
                     List<String> blockIds = new ArrayList<>(previous.sourceLocator().blockIds());
                     blockIds.addAll(current.sourceLocator().blockIds());
-                    SourceLocator locator = combineLocators(previous.sourceLocator(), current.sourceLocator(), blockIds);
+                    SourceLocator locator = combineLocators(
+                            List.of(previous.sourceLocator(), current.sourceLocator()), blockIds);
                     boolean forced = Boolean.TRUE.equals(previous.boundaryReason().get("forcedSplit"))
                             || Boolean.TRUE.equals(current.boundaryReason().get("forcedSplit"));
                     merged.set(merged.size() - 1, draft(
@@ -280,10 +284,13 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
         return value instanceof Number number ? number.intValue() : defaultValue;
     }
 
-    private SourceLocator combineLocators(SourceLocator first, SourceLocator last, List<String> blockIds) {
+    private SourceLocator combineLocators(List<SourceLocator> locators, List<String> blockIds) {
+        SourceLocator first = locators.get(0);
+        SourceLocator last = locators.get(locators.size() - 1);
         Set<String> uniqueBlockIds = new LinkedHashSet<>(blockIds);
-        List<Map<String, Object>> regions = new ArrayList<>(first.regions());
-        regions.addAll(last.regions());
+        List<Map<String, Object>> regions = locators.stream()
+                .flatMap(locator -> locator.regions().stream())
+                .toList();
         return new SourceLocator(
                 first.type(),
                 List.copyOf(uniqueBlockIds),
