@@ -40,10 +40,12 @@ import org.springframework.transaction.support.DefaultTransactionStatus;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -51,6 +53,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -206,7 +209,8 @@ class ChunkPreviewWorkerTest {
         DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
         FileProcessingService realProcessingService = mock(FileProcessingService.class);
         TokenCounter tokenCounter = mock(TokenCounter.class);
-        when(chunkMapper.findByFile(20L, 1L, 10L)).thenReturn(List.of());
+        when(processingMapper.findScopedForUpdate(20L, 1L, 10L)).thenReturn(processing());
+        when(chunkMapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(List.of());
         when(processingMapper.update(any(FileProcessing.class), any(LambdaUpdateWrapper.class))).thenReturn(1);
         when(chunkMapper.insert(any(DocumentChunk.class))).thenReturn(1);
         ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
@@ -241,13 +245,15 @@ class ChunkPreviewWorkerTest {
         DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
         FileProcessingService stateService = mock(FileProcessingService.class);
         DocumentChunk oldDraft = persistedChunk(99L, ChunkStatus.DRAFT, false, "Old draft");
-        when(chunkMapper.findByFile(20L, 1L, 10L)).thenReturn(List.of(oldDraft));
+        when(processingMapper.findScopedForUpdate(20L, 1L, 10L)).thenReturn(processing());
+        when(chunkMapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(List.of(oldDraft));
         when(chunkMapper.deleteReplaceableDrafts(20L, 1L, 10L, false)).thenReturn(0);
         ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
                 chunkMapper, processingMapper, stateService);
 
         assertThrows(ChunkingException.class, () -> service.replace(
-                job(), "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
+                job(List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(oldDraft))),
+                "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
                 List.of(draft("Replacement", 3))));
 
         verify(chunkMapper, never()).insert(any(DocumentChunk.class));
@@ -261,7 +267,8 @@ class ChunkPreviewWorkerTest {
         List<DocumentChunk> database = new java.util.ArrayList<>();
         database.add(persistedChunk(99L, ChunkStatus.DRAFT, false, "Old draft"));
         DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
-        when(chunkMapper.findByFile(20L, 1L, 10L))
+        when(processingMapper.findScopedForUpdate(20L, 1L, 10L)).thenReturn(processing());
+        when(chunkMapper.findByFileForUpdate(20L, 1L, 10L))
                 .thenAnswer(invocation -> List.copyOf(database));
         when(chunkMapper.deleteReplaceableDrafts(20L, 1L, 10L, false)).thenAnswer(invocation -> {
             int before = database.size();
@@ -283,7 +290,8 @@ class ChunkPreviewWorkerTest {
         ChunkPreviewPersistenceService proxy = transactionalProxy(target, transactionManager);
 
         assertThrows(IllegalStateException.class, () -> proxy.replace(
-                job(), "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
+                job(List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(database.get(0)))),
+                "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
                 List.of(draft("Replacement", 3))));
 
         assertEquals(1, transactionManager.rollbacks());
@@ -321,9 +329,97 @@ class ChunkPreviewWorkerTest {
         assertTrue(sql.contains("is_modified = FALSE"));
     }
 
+    @Test
+    void confirmed_edited_draft_change_after_dispatch_is_rejected_before_delete() {
+        DocumentChunk confirmed = persistedChunk(99L, ChunkStatus.DRAFT, true, "Confirmed edit");
+        confirmed.setContentHash("confirmed-hash");
+        confirmed.setUpdateTime(OffsetDateTime.parse("2026-09-01T10:00:00+08:00"));
+        DocumentChunk changed = persistedChunk(99L, ChunkStatus.DRAFT, true, "Changed again");
+        changed.setContentHash("changed-hash");
+        changed.setUpdateTime(OffsetDateTime.parse("2026-09-01T10:00:01+08:00"));
+        DocumentChunkMapper chunkMapper = lockedChunks(List.of(changed));
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
+                chunkMapper, processingMapper, stateService);
+
+        assertThrows(ChunkingException.class, () -> service.replace(
+                job(true, List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(confirmed))),
+                "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
+                List.of(draft("Replacement", 3))));
+
+        assertNoReplacementWrites(chunkMapper, stateService);
+    }
+
+    @Test
+    void same_count_identity_replacement_after_dispatch_is_rejected_before_delete() {
+        DocumentChunk confirmed = persistedChunk(99L, ChunkStatus.DRAFT, false, "Old");
+        DocumentChunk different = persistedChunk(100L, ChunkStatus.DRAFT, false, "Different");
+        DocumentChunkMapper chunkMapper = lockedChunks(List.of(different));
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
+                chunkMapper, processingMapper, stateService);
+
+        assertThrows(ChunkingException.class, () -> service.replace(
+                job(List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(confirmed))),
+                "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
+                List.of(draft("Replacement", 3))));
+
+        assertNoReplacementWrites(chunkMapper, stateService);
+    }
+
+    @Test
+    void empty_confirmed_snapshot_that_gains_a_row_is_rejected_before_delete() {
+        DocumentChunk unexpected = persistedChunk(100L, ChunkStatus.DRAFT, false, "Unexpected");
+        DocumentChunkMapper chunkMapper = lockedChunks(List.of(unexpected));
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
+                chunkMapper, processingMapper, stateService);
+
+        assertThrows(ChunkingException.class, () -> service.replace(
+                job(List.of()), "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
+                List.of(draft("Replacement", 3))));
+
+        assertNoReplacementWrites(chunkMapper, stateService);
+    }
+
+    @Test
+    void locking_sql_reads_processing_before_scoped_chunks_for_update() throws Exception {
+        Configuration configuration = new Configuration();
+        try (InputStream processing = getClass().getClassLoader()
+                .getResourceAsStream("mapper/FileProcessingMapper.xml");
+             InputStream chunks = getClass().getClassLoader()
+                     .getResourceAsStream("mapper/DocumentChunkMapper.xml")) {
+            new XMLMapperBuilder(processing, configuration, "mapper/FileProcessingMapper.xml",
+                    configuration.getSqlFragments()).parse();
+            new XMLMapperBuilder(chunks, configuration, "mapper/DocumentChunkMapper.xml",
+                    configuration.getSqlFragments()).parse();
+        }
+        String processingSql = sql(configuration,
+                "com.starsea.ai.mapper.FileProcessingMapper.findScopedForUpdate");
+        String chunksSql = sql(configuration,
+                "com.starsea.ai.mapper.DocumentChunkMapper.findByFileForUpdate");
+
+        assertTrue(processingSql.contains("tenant_id = ?"));
+        assertTrue(processingSql.endsWith("FOR UPDATE"));
+        assertTrue(chunksSql.contains("tenant_id = ?"));
+        assertTrue(chunksSql.contains("knowledge_id = ?"));
+        assertTrue(chunksSql.endsWith("FOR UPDATE"));
+    }
+
     private static ChunkPreviewWorker.Job job() {
+        return job(List.of());
+    }
+
+    private static ChunkPreviewWorker.Job job(List<ChunkPreviewWorker.ExistingChunkSnapshot> existingChunks) {
+        return job(false, existingChunks);
+    }
+
+    private static ChunkPreviewWorker.Job job(
+            boolean replaceEditedDrafts,
+            List<ChunkPreviewWorker.ExistingChunkSnapshot> existingChunks) {
         return new ChunkPreviewWorker.Job(
-                10L, 20L, "MARKDOWN_OPTIMIZED", new ChunkPolicy(100, 400, 512), false, 1);
+                10L, 20L, "MARKDOWN_OPTIMIZED", new ChunkPolicy(100, 400, 512),
+                replaceEditedDrafts, 1, existingChunks);
     }
 
     private static ChunkDraft draft(String content, int tokens) {
@@ -364,9 +460,33 @@ class ChunkPreviewWorkerTest {
         chunk.setFileId(20L);
         chunk.setPosition(0);
         chunk.setContent(content);
+        chunk.setPublicId(new UUID(0L, id));
+        chunk.setContentHash("hash-" + id);
         chunk.setStatus(status.code());
         chunk.setIsModified(modified);
+        chunk.setUpdateTime(OffsetDateTime.parse("2026-09-01T10:00:00+08:00"));
         return chunk;
+    }
+
+    private DocumentChunkMapper lockedChunks(List<DocumentChunk> chunks) {
+        DocumentChunkMapper mapper = mock(DocumentChunkMapper.class);
+        when(processingMapper.findScopedForUpdate(20L, 1L, 10L)).thenReturn(processing());
+        when(mapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(chunks);
+        return mapper;
+    }
+
+    private void assertNoReplacementWrites(DocumentChunkMapper mapper,
+                                            FileProcessingService stateService) {
+        verify(mapper, never()).deleteReplaceableDrafts(anyLong(), anyLong(), anyLong(), anyBoolean());
+        verify(mapper, never()).insert(any(DocumentChunk.class));
+        verify(processingMapper, never()).update(any(FileProcessing.class), any(LambdaUpdateWrapper.class));
+        verify(stateService, never()).transition(anyLong(), anyLong(), any(), any(), anyInt());
+    }
+
+    private static String sql(Configuration configuration, String statementId) {
+        BoundSql boundSql = configuration.getMappedStatement(statementId).getBoundSql(Map.of(
+                "fileId", 20L, "tenantId", 1L, "knowledgeId", 10L));
+        return boundSql.getSql().replaceAll("\\s+", " ").trim();
     }
 
     private static ChunkPreviewPersistenceService transactionalProxy(

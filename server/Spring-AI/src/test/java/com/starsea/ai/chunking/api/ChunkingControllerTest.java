@@ -15,6 +15,7 @@ import com.starsea.ai.chunking.spi.DocumentStructureParser;
 import com.starsea.ai.config.GlobalExceptionHandler;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.FileProcessing;
+import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.mapper.DocumentChunkMapper;
 import com.starsea.ai.mapper.FileMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
@@ -29,16 +30,21 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -55,6 +61,8 @@ class ChunkingControllerTest {
     private FileProcessingMapper processingMapper;
     private FileMapper fileMapper;
     private ChunkTaskDispatcher dispatcher;
+    private DocumentChunkMapper chunkMapper;
+    private ChunkPreviewWorker worker;
     private MockMvc mockMvc;
 
     @BeforeEach
@@ -63,8 +71,8 @@ class ChunkingControllerTest {
         processingMapper = mock(FileProcessingMapper.class);
         fileMapper = mock(FileMapper.class);
         dispatcher = mock(ChunkTaskDispatcher.class);
-        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
-        ChunkPreviewWorker worker = mock(ChunkPreviewWorker.class);
+        chunkMapper = mock(DocumentChunkMapper.class);
+        worker = mock(ChunkPreviewWorker.class);
 
         ChunkPlanningStrategy markdownStrategy = mock(ChunkPlanningStrategy.class);
         when(markdownStrategy.code()).thenReturn("MARKDOWN_OPTIMIZED");
@@ -191,6 +199,42 @@ class ChunkingControllerTest {
                         eq(PipelineState.CHUNKING), eq(0), any(Runnable.class));
 
         performValidPreview().andExpect(status().isConflict());
+    }
+
+    @Test
+    void preview_job_carries_the_exact_confirmed_existing_chunk_snapshot() throws Exception {
+        DocumentChunk edited = new DocumentChunk();
+        edited.setId(91L);
+        edited.setPublicId(UUID.fromString("10000000-0000-0000-0000-000000000091"));
+        edited.setTenantId(1L);
+        edited.setKnowledgeId(KNOWLEDGE_ID);
+        edited.setFileId(FILE_ID);
+        edited.setPosition(4);
+        edited.setStatus(0);
+        edited.setIsModified(true);
+        edited.setContentHash("confirmed-hash");
+        edited.setUpdateTime(OffsetDateTime.parse("2026-09-01T10:00:00+08:00"));
+        when(chunkMapper.findByFile(FILE_ID, 1L, KNOWLEDGE_ID)).thenReturn(List.of(edited));
+        doAnswer(invocation -> {
+            invocation.<Runnable>getArgument(5).run();
+            return null;
+        }).when(dispatcher).dispatch(eq(KNOWLEDGE_ID), eq(FILE_ID), eq(PipelineState.UPLOADED),
+                eq(PipelineState.CHUNKING), eq(0), any(Runnable.class));
+
+        mockMvc.perform(post("/knowledge/{knowledgeId}/files/{fileId}/chunk-preview",
+                        KNOWLEDGE_ID, FILE_ID)
+                        .contentType("application/json")
+                        .content("""
+                                {"strategyCode":"MARKDOWN_OPTIMIZED",
+                                 "strategyConfig":{"minTokens":100,"targetTokens":400,"maxTokens":512},
+                                 "replaceEditedDrafts":true,"lockVersion":0}
+                                """))
+                .andExpect(status().isAccepted());
+
+        var job = org.mockito.ArgumentCaptor.forClass(ChunkPreviewWorker.Job.class);
+        verify(worker).generate(job.capture());
+        assertEquals(List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(edited)),
+                job.getValue().existingChunks());
     }
 
     private org.springframework.test.web.servlet.ResultActions performValidPreview() throws Exception {

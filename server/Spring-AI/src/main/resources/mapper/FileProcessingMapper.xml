@@ -22,6 +22,15 @@
         <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
     </resultMap>
 
+    <select id="findScopedForUpdate" resultMap="FileProcessingResultMap">
+        SELECT *
+        FROM file_processing
+        WHERE file_id = #{fileId}
+          AND tenant_id = #{tenantId}
+          AND knowledge_id = #{knowledgeId}
+        FOR UPDATE
+    </select>
+
     <update id="transition">
         UPDATE file_processing
         SET pipeline_state = #{target},

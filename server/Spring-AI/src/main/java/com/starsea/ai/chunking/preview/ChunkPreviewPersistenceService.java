@@ -43,8 +43,21 @@ public class ChunkPreviewPersistenceService {
     public void replace(ChunkPreviewWorker.Job job, String sourceHash, String plannerVersion,
                         Map<String, Object> policySnapshot, List<ChunkDraft> drafts) {
         long tenantId = requireTenantId();
-        List<DocumentChunk> existing = chunkMapper.findByFile(
+        FileProcessing lockedProcessing = processingMapper.findScopedForUpdate(
                 job.fileId(), tenantId, job.knowledgeId());
+        if (lockedProcessing == null
+                || !Integer.valueOf(PipelineState.CHUNKING.code()).equals(lockedProcessing.getPipelineState())
+                || !Integer.valueOf(job.lockVersion()).equals(lockedProcessing.getLockVersion())) {
+            throw ChunkingException.conflict("Pipeline state or lock version changed before preview persistence");
+        }
+        List<DocumentChunk> existing = chunkMapper.findByFileForUpdate(
+                job.fileId(), tenantId, job.knowledgeId());
+        List<ChunkPreviewWorker.ExistingChunkSnapshot> lockedSnapshot = existing.stream()
+                .map(ChunkPreviewWorker.ExistingChunkSnapshot::from)
+                .toList();
+        if (!job.existingChunks().equals(lockedSnapshot)) {
+            throw ChunkingException.conflict("The current chunk set changed after preview confirmation");
+        }
         for (DocumentChunk chunk : existing) {
             ChunkStatus status = ChunkStatus.fromCode(chunk.getStatus());
             if (status != ChunkStatus.DRAFT) {

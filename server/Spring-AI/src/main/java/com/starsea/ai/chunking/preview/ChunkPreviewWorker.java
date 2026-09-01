@@ -26,11 +26,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.OffsetDateTime;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 
 @Component
 public class ChunkPreviewWorker {
@@ -189,10 +191,34 @@ public class ChunkPreviewWorker {
     }
 
     public record Job(long knowledgeId, long fileId, String strategyCode, ChunkPolicy policy,
-                      boolean replaceEditedDrafts, int lockVersion) {
+                      boolean replaceEditedDrafts, int lockVersion,
+                      List<ExistingChunkSnapshot> existingChunks) {
         public Job {
             Objects.requireNonNull(strategyCode, "strategyCode");
             Objects.requireNonNull(policy, "policy");
+            existingChunks = existingChunks == null ? List.of() : List.copyOf(existingChunks);
+        }
+    }
+
+    public record ExistingChunkSnapshot(
+            Long id,
+            UUID publicId,
+            Integer status,
+            Boolean isModified,
+            OffsetDateTime updateTime,
+            String contentHash,
+            Integer position) {
+
+        public static ExistingChunkSnapshot from(com.starsea.ai.domain.DocumentChunk chunk) {
+            Objects.requireNonNull(chunk, "chunk");
+            return new ExistingChunkSnapshot(
+                    chunk.getId(),
+                    chunk.getPublicId(),
+                    chunk.getStatus(),
+                    chunk.getIsModified(),
+                    chunk.getUpdateTime(),
+                    chunk.getContentHash(),
+                    chunk.getPosition());
         }
     }
 

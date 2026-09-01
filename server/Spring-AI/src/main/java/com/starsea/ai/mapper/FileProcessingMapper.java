@@ -8,6 +8,10 @@ import org.apache.ibatis.annotations.Param;
 @Mapper
 public interface FileProcessingMapper extends BaseMapper<FileProcessing> {
 
+    FileProcessing findScopedForUpdate(@Param("fileId") long fileId,
+                                       @Param("tenantId") long tenantId,
+                                       @Param("knowledgeId") long knowledgeId);
+
     int transition(@Param("fileId") long fileId,
                    @Param("tenantId") long tenantId,
                    @Param("knowledgeId") long knowledgeId,

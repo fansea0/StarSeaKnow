@@ -89,7 +89,8 @@ public class ChunkPreviewService {
         requireRegisteredStrategy(request.strategyCode(), scoped.fileType());
         requireRegisteredParser(scoped.fileType());
         requireUsableSource(scoped.file());
-        requireReplaceableDrafts(scoped, request.replaceEditedDrafts());
+        List<ChunkPreviewWorker.ExistingChunkSnapshot> existingChunks =
+                requireReplaceableDrafts(scoped, request.replaceEditedDrafts());
 
         PipelineState current = currentState(scoped.processing());
         requireEligibleState(scoped.processing(), current);
@@ -103,7 +104,8 @@ public class ChunkPreviewService {
                 request.strategyCode().trim().toUpperCase(Locale.ROOT),
                 request.strategyConfig(),
                 request.replaceEditedDrafts(),
-                request.lockVersion() + 1);
+                request.lockVersion() + 1,
+                existingChunks);
         dispatcher.dispatch(knowledgeId, fileId, current, PipelineState.CHUNKING,
                 request.lockVersion(), () -> worker.generate(job));
     }
@@ -135,7 +137,8 @@ public class ChunkPreviewService {
         }
     }
 
-    private void requireReplaceableDrafts(ScopedFile scoped, boolean replaceEditedDrafts) {
+    private List<ChunkPreviewWorker.ExistingChunkSnapshot> requireReplaceableDrafts(
+            ScopedFile scoped, boolean replaceEditedDrafts) {
         List<DocumentChunk> chunks = chunkMapper.findByFile(
                 scoped.processing().getFileId(), scoped.tenantId(), scoped.processing().getKnowledgeId());
         for (DocumentChunk chunk : chunks) {
@@ -155,6 +158,7 @@ public class ChunkPreviewService {
                 throw ChunkingException.conflict("Edited DRAFT chunks require explicit replacement confirmation");
             }
         }
+        return chunks.stream().map(ChunkPreviewWorker.ExistingChunkSnapshot::from).toList();
     }
 
     private void requireEligibleState(FileProcessing processing, PipelineState current) {

@@ -38,6 +38,16 @@
         ORDER BY position
     </select>
 
+    <select id="findByFileForUpdate" resultMap="DocumentChunkResultMap">
+        SELECT *
+        FROM document_chunk
+        WHERE file_id = #{fileId}
+          AND tenant_id = #{tenantId}
+          AND knowledge_id = #{knowledgeId}
+        ORDER BY position
+        FOR UPDATE
+    </select>
+
     <delete id="deleteReplaceableDrafts">
         DELETE FROM document_chunk
         WHERE file_id = #{fileId}
