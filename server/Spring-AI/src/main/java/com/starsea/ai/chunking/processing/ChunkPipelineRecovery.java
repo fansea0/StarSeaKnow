@@ -7,11 +7,13 @@ import com.starsea.ai.mapper.FileProcessingMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -19,49 +21,109 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Recovers asynchronous chunking work that cannot survive a process restart. */
 @Component
-public class ChunkPipelineRecovery implements ApplicationRunner {
+public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(ChunkPipelineRecovery.class);
 
     private final FileProcessingMapper processingMapper;
     private final DocumentChunkMapper chunkMapper;
     private final TransactionOperations transactions;
+    private final TaskScheduler scheduler;
     private final Duration timeout;
+    private final Duration initialDelay;
+    private final Duration fixedDelay;
     private final Clock clock;
+    private final AtomicBoolean scanInProgress = new AtomicBoolean();
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private ScheduledFuture<?> scheduledTask;
 
     @Autowired
     public ChunkPipelineRecovery(FileProcessingMapper processingMapper,
                                  DocumentChunkMapper chunkMapper,
                                  PlatformTransactionManager transactionManager,
-                                 @Value("${chunking.recovery.timeout:10m}") Duration timeout) {
+                                 @Qualifier("chunkingRecoveryScheduler") TaskScheduler scheduler,
+                                 @Value("${chunking.recovery.timeout:10m}") Duration timeout,
+                                 @Value("${chunking.recovery.initial-delay:1m}") Duration initialDelay,
+                                 @Value("${chunking.recovery.fixed-delay:1m}") Duration fixedDelay) {
         this(processingMapper, chunkMapper, new TransactionTemplate(transactionManager),
-                timeout, Clock.systemUTC());
+                scheduler, timeout, initialDelay, fixedDelay, Clock.systemUTC());
     }
 
     ChunkPipelineRecovery(FileProcessingMapper processingMapper,
                           DocumentChunkMapper chunkMapper,
                           TransactionOperations transactions,
+                          TaskScheduler scheduler,
                           Duration timeout,
+                          Duration initialDelay,
+                          Duration fixedDelay,
                           Clock clock) {
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("chunking recovery timeout must be positive");
         }
+        if (initialDelay == null || initialDelay.isNegative()) {
+            throw new IllegalArgumentException("chunking recovery initial delay must not be negative");
+        }
+        if (fixedDelay == null || fixedDelay.isZero() || fixedDelay.isNegative()) {
+            throw new IllegalArgumentException("chunking recovery fixed delay must be positive");
+        }
         this.processingMapper = processingMapper;
         this.chunkMapper = chunkMapper;
         this.transactions = transactions;
+        this.scheduler = scheduler;
         this.timeout = timeout;
+        this.initialDelay = initialDelay;
+        this.fixedDelay = fixedDelay;
         this.clock = clock;
     }
 
     @Override
     public void run(ApplicationArguments args) {
-        RecoverySummary summary = recoverTimedOut();
+        scanScheduled();
+        synchronized (this) {
+            if (closed.get()) {
+                return;
+            }
+            scheduledTask = scheduler.scheduleWithFixedDelay(
+                    this::scanScheduled, clock.instant().plus(initialDelay), fixedDelay);
+            if (scheduledTask == null) {
+                throw new IllegalStateException("chunking recovery scan could not be scheduled");
+            }
+        }
+    }
+
+    void scanScheduled() {
+        if (closed.get() || !scanInProgress.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            logSummary(recoverTimedOut());
+        } catch (RuntimeException failure) {
+            log.error("Unable to complete chunking recovery scan", failure);
+        } finally {
+            scanInProgress.set(false);
+        }
+    }
+
+    private void logSummary(RecoverySummary summary) {
         if (summary.filesRecovered() > 0) {
             log.warn("Recovered {} timed-out chunking files and {} INDEXING chunks",
                     summary.filesRecovered(), summary.chunksRecovered());
+        }
+    }
+
+    @Override
+    public synchronized void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        if (scheduledTask != null) {
+            scheduledTask.cancel(false);
+            scheduledTask = null;
         }
     }
 
@@ -90,7 +152,7 @@ public class ChunkPipelineRecovery implements ApplicationRunner {
         if (state != PipelineState.CHUNKING && state != PipelineState.VECTORIZING) {
             return RecoverySummary.NONE;
         }
-        String error = state + " timed out during application restart recovery";
+        String error = state + " timed out during recovery scan";
         int updated = processingMapper.transition(
                 candidate.getFileId(), candidate.getTenantId(), candidate.getKnowledgeId(),
                 state.code(), PipelineState.FAILED.code(), 0, candidate.getLockVersion(),
