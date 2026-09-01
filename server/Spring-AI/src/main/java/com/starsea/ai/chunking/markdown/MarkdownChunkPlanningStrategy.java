@@ -19,7 +19,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Markdown-aware adaptive planner that owns source boundaries but never overlap. */
+/** Markdown-aware adaptive planner that owns only source-content boundaries. */
 @Component
 public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrategy {
 

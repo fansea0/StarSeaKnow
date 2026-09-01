@@ -1,4 +1,3 @@
-ALTER TABLE file DROP COLUMN IF EXISTS embedding_status;
 ALTER TABLE file ADD CONSTRAINT uk_file_id_tenant UNIQUE (id, tenant_id);
 
 CREATE TABLE file_processing (
