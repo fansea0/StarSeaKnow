@@ -14,6 +14,7 @@ import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.mapper.DocumentChunkMapper;
 import com.starsea.ai.mapper.FileMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -26,8 +27,10 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
@@ -42,7 +45,9 @@ public class ChunkVectorService {
     private final ChunkVectorWorker worker;
     private final TransactionTemplate transactions;
     private final Executor executor;
+    private final SourceHashReader sourceHashReader;
 
+    @Autowired
     public ChunkVectorService(FileProcessingMapper processingMapper,
                               FileMapper fileMapper,
                               DocumentChunkMapper chunkMapper,
@@ -50,6 +55,18 @@ public class ChunkVectorService {
                               ChunkVectorWorker worker,
                               TransactionTemplate transactions,
                               @Qualifier("chunkingTaskExecutor") Executor executor) {
+        this(processingMapper, fileMapper, chunkMapper, stateService, worker,
+                transactions, executor, ChunkVectorService::sha256File);
+    }
+
+    ChunkVectorService(FileProcessingMapper processingMapper,
+                       FileMapper fileMapper,
+                       DocumentChunkMapper chunkMapper,
+                       FileProcessingService stateService,
+                       ChunkVectorWorker worker,
+                       TransactionTemplate transactions,
+                       Executor executor,
+                       SourceHashReader sourceHashReader) {
         this.processingMapper = processingMapper;
         this.fileMapper = fileMapper;
         this.chunkMapper = chunkMapper;
@@ -57,6 +74,7 @@ public class ChunkVectorService {
         this.worker = worker;
         this.transactions = transactions;
         this.executor = executor;
+        this.sourceHashReader = sourceHashReader;
     }
 
     public void confirm(long knowledgeId, long fileId, ConfirmRequest request) {
@@ -65,8 +83,9 @@ public class ChunkVectorService {
         }
         ContextPolicy policy = contextPolicy(request.overlapEnabled(), request.overlapTokens());
         long tenantId = requireTenantId();
+        SourceSnapshot source = readSourceOutsideTransaction(tenantId, knowledgeId, fileId);
         ChunkVectorWorker.BatchJob job = transactions.execute(status -> prepareBatch(
-                tenantId, knowledgeId, fileId, request.lockVersion(), policy));
+                tenantId, knowledgeId, fileId, request.lockVersion(), policy, source));
         if (job == null) {
             throw new IllegalStateException("Vectorization preparation returned no job");
         }
@@ -86,8 +105,29 @@ public class ChunkVectorService {
         dispatch(() -> worker.vectorizeSingle(job), failure -> worker.failSingleDispatch(job, failure));
     }
 
+    private SourceSnapshot readSourceOutsideTransaction(long tenantId, long knowledgeId, long fileId) {
+        FileProcessing processing = processingMapper.selectById(fileId);
+        if (!isScoped(processing, tenantId, knowledgeId, fileId)) {
+            throw ChunkingException.notFound(
+                    "File was not found in the current tenant and knowledge base");
+        }
+        File file = requireFile(fileId);
+        final Path path;
+        final String hash;
+        try {
+            path = Path.of(file.getPath());
+            hash = sourceHashReader.hash(path);
+        } catch (InvalidPathException | NullPointerException exception) {
+            throw ChunkingException.unprocessable("The source document cannot be read");
+        } catch (Exception exception) {
+            throw ChunkingException.unprocessable("The source document cannot be read");
+        }
+        return new SourceSnapshot(ChunkVectorWorker.FileSnapshot.from(file), hash);
+    }
+
     private ChunkVectorWorker.BatchJob prepareBatch(long tenantId, long knowledgeId, long fileId,
-                                                     int lockVersion, ContextPolicy policy) {
+                                                     int lockVersion, ContextPolicy policy,
+                                                     SourceSnapshot source) {
         FileProcessing processing = requireLockedProcessing(tenantId, knowledgeId, fileId);
         PipelineState current = pipelineState(processing);
         if (!Integer.valueOf(lockVersion).equals(processing.getLockVersion())) {
@@ -99,9 +139,12 @@ public class ChunkVectorService {
                 .equals(processing.getFailedFromState()))) {
             throw ChunkingException.conflict("The current processing state cannot confirm vectorization");
         }
-
+        if (!Objects.equals(processing.getSourceHash(), source.hash())) {
+            throw ChunkingException.conflict(
+                    "The physical source changed after the chunk preview was generated");
+        }
         File file = requireFile(fileId);
-        requireCurrentSourceHash(file, processing.getSourceHash());
+        requireSameFile(source.file(), file);
         List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(fileId, tenantId, knowledgeId);
         if (chunks.isEmpty()) {
             throw ChunkingException.unprocessable("Confirmation requires at least one chunk");
@@ -122,9 +165,10 @@ public class ChunkVectorService {
         int contextUpdated = processingMapper.update(contextPatch,
                 processingScope(fileId, tenantId, knowledgeId)
                         .eq("pipeline_state", current.code())
-                        .eq("lock_version", lockVersion));
+                        .eq("lock_version", lockVersion)
+                        .eq("source_hash", source.hash()));
         if (contextUpdated != 1) {
-            throw ChunkingException.conflict("Pipeline state or lock version changed concurrently");
+            throw ChunkingException.conflict("Pipeline state or source snapshot changed concurrently");
         }
 
         int vectorizingLockVersion;
@@ -142,8 +186,10 @@ public class ChunkVectorService {
         List<ChunkVectorWorker.ChunkSnapshot> snapshots = chunks.stream()
                 .map(chunk -> markIndexing(chunk, tenantId, knowledgeId, fileId))
                 .toList();
+        int maxTokens = ChunkVectorWorker.configuredMaximum(processing.getPolicySnapshot());
         return new ChunkVectorWorker.BatchJob(tenantId, knowledgeId, fileId,
-                vectorizingLockVersion, policy, snapshots);
+                vectorizingLockVersion, source.hash(), policy, maxTokens,
+                source.file(), snapshots, snapshots);
     }
 
     private ChunkVectorWorker.SingleJob prepareSingle(long tenantId, long knowledgeId, long fileId,
@@ -153,19 +199,21 @@ public class ChunkVectorService {
         if (current != PipelineState.ADJUSTING && current != PipelineState.COMPLETED) {
             throw ChunkingException.conflict("Only an ADJUSTING or COMPLETED file can reindex one chunk");
         }
-        DocumentChunk chunk = chunkMapper.findScopedByPublicIdForUpdate(
-                fileId, tenantId, knowledgeId, chunkPublicId);
-        if (chunk == null) {
-            throw ChunkingException.notFound("Chunk was not found in the requested file");
-        }
-        ChunkStatus status = chunkStatus(chunk);
+        File file = requireFile(fileId);
+        List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(fileId, tenantId, knowledgeId);
+        DocumentChunk target = chunks.stream()
+                .filter(chunk -> Objects.equals(chunk.getPublicId(), chunkPublicId))
+                .findFirst()
+                .orElseThrow(() -> ChunkingException.notFound(
+                        "Chunk was not found in the requested file"));
+        ChunkStatus status = chunkStatus(target);
         if (status == ChunkStatus.INDEXING) {
             throw ChunkingException.conflict("An INDEXING chunk cannot be reindexed again");
         }
         if (status != ChunkStatus.DRAFT && status != ChunkStatus.ACTIVE) {
             throw ChunkingException.conflict("Only a DRAFT or ACTIVE chunk can be reindexed");
         }
-        requireStableChunk(chunk);
+        chunks.forEach(this::requireStableChunk);
 
         int adjustingLockVersion = value(processing.getLockVersion());
         if (current == PipelineState.COMPLETED) {
@@ -173,14 +221,23 @@ public class ChunkVectorService {
                     PipelineState.COMPLETED, PipelineState.ADJUSTING,
                     adjustingLockVersion).lockVersion();
         }
-        ChunkVectorWorker.ChunkSnapshot snapshot = markIndexing(
-                chunk, tenantId, knowledgeId, fileId);
+        ChunkVectorWorker.ChunkSnapshot targetSnapshot = markIndexing(
+                target, tenantId, knowledgeId, fileId);
+        List<ChunkVectorWorker.ChunkSnapshot> allSnapshots = chunks.stream()
+                .map(chunk -> Objects.equals(chunk.getId(), target.getId())
+                        ? targetSnapshot
+                        : ChunkVectorWorker.ChunkSnapshot.current(chunk))
+                .toList();
         return new ChunkVectorWorker.SingleJob(tenantId, knowledgeId, fileId,
-                adjustingLockVersion, readContextPolicy(processing), snapshot);
+                adjustingLockVersion, processing.getSourceHash(), readContextPolicy(processing),
+                ChunkVectorWorker.configuredMaximum(processing.getPolicySnapshot()),
+                ChunkVectorWorker.FileSnapshot.from(file), allSnapshots, targetSnapshot);
     }
 
     private ChunkVectorWorker.ChunkSnapshot markIndexing(DocumentChunk chunk, long tenantId,
                                                           long knowledgeId, long fileId) {
+        ChunkVectorWorker.ChunkSnapshot snapshot =
+                ChunkVectorWorker.ChunkSnapshot.afterMarking(chunk);
         DocumentChunk patch = new DocumentChunk();
         patch.setStatus(ChunkStatus.INDEXING.code());
         int updated = chunkMapper.update(patch, new UpdateWrapper<DocumentChunk>()
@@ -196,7 +253,7 @@ public class ChunkVectorService {
         if (updated != 1) {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
         }
-        return ChunkVectorWorker.ChunkSnapshot.afterMarking(chunk);
+        return snapshot;
     }
 
     private void dispatch(Runnable task, java.util.function.Consumer<RuntimeException> onRejected) {
@@ -239,17 +296,19 @@ public class ChunkVectorService {
         return file;
     }
 
-    private void requireCurrentSourceHash(File file, String previewHash) {
-        final byte[] bytes;
-        try {
-            bytes = Files.readAllBytes(Path.of(file.getPath()));
-        } catch (IOException | InvalidPathException | NullPointerException exception) {
-            throw ChunkingException.unprocessable("The source document cannot be read");
+    private void requireSameFile(ChunkVectorWorker.FileSnapshot expected, File current) {
+        if (!Objects.equals(expected.publicId(), current.getPublicId())
+                || !Objects.equals(expected.path(), current.getPath())
+                || !Objects.equals(expected.fileType(), current.getType())) {
+            throw ChunkingException.conflict("The source file metadata changed before vectorization");
         }
-        if (previewHash == null || !previewHash.equals(sha256(bytes))) {
-            throw ChunkingException.conflict(
-                    "The physical source changed after the chunk preview was generated");
-        }
+    }
+
+    private boolean isScoped(FileProcessing processing, long tenantId, long knowledgeId, long fileId) {
+        return processing != null
+                && Long.valueOf(fileId).equals(processing.getFileId())
+                && Long.valueOf(tenantId).equals(processing.getTenantId())
+                && Long.valueOf(knowledgeId).equals(processing.getKnowledgeId());
     }
 
     private ContextPolicy contextPolicy(boolean enabled, int overlapTokens) {
@@ -281,7 +340,9 @@ public class ChunkVectorService {
     }
 
     private void requireStableChunk(DocumentChunk chunk) {
-        if (chunk.getId() == null || chunk.getPublicId() == null || chunk.getLockVersion() == null) {
+        if (chunk.getId() == null || chunk.getPublicId() == null || chunk.getLockVersion() == null
+                || chunk.getTenantId() == null || chunk.getKnowledgeId() == null
+                || chunk.getFileId() == null) {
             throw ChunkingException.conflict("Chunk identity or lock version is invalid");
         }
     }
@@ -310,10 +371,10 @@ public class ChunkVectorService {
         return context.getTenantId();
     }
 
-    private String sha256(byte[] content) {
+    private static String sha256File(Path path) throws IOException {
         try {
-            return java.util.HexFormat.of().formatHex(
-                    MessageDigest.getInstance("SHA-256").digest(content));
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path)));
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 is unavailable", exception);
         }
@@ -321,5 +382,13 @@ public class ChunkVectorService {
 
     private int value(Integer value) {
         return value == null ? 0 : value;
+    }
+
+    private record SourceSnapshot(ChunkVectorWorker.FileSnapshot file, String hash) {
+    }
+
+    @FunctionalInterface
+    interface SourceHashReader {
+        String hash(Path path) throws Exception;
     }
 }

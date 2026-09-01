@@ -5,6 +5,7 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingApiModels.ConfirmRequest;
 import com.starsea.ai.chunking.api.ChunkingController;
 import com.starsea.ai.chunking.api.ChunkingException;
+import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.ContextPolicy;
 import com.starsea.ai.chunking.model.EnrichedChunk;
@@ -261,7 +262,7 @@ class ChunkVectorServiceTest {
 
         worker.vectorizeBatch(batchJob(first, 5, new ContextPolicy(true, 40)));
 
-        assertEquals(2, transactionManager.commits());
+        assertEquals(1, transactionManager.commits());
         var patchCaptor = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
         verify(chunkMapper).update(patchCaptor.capture(), any(Wrapper.class));
         DocumentChunk patch = patchCaptor.getValue();
@@ -313,7 +314,7 @@ class ChunkVectorServiceTest {
         assertTrue(patchCaptor.getAllValues().stream().allMatch(patch -> patch.getContent() == null));
         verify(stateService).fail(KNOWLEDGE_ID, FILE_ID, PipelineState.VECTORIZING,
                 5, 0, "embedding unavailable");
-        assertEquals(2, transactionManager.commits());
+        assertEquals(1, transactionManager.commits());
     }
 
     @Test
@@ -343,7 +344,7 @@ class ChunkVectorServiceTest {
         ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
                 stateService, enricher, tokenCounter, gateway, transactions);
 
-        worker.vectorizeSingle(singleJob(first, 8, ContextPolicy.defaults()));
+        worker.vectorizeSingle(singleJob(first, 8, ContextPolicy.defaults(), 400));
 
         verify(gateway, never()).add(any());
         var patchCaptor = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
@@ -386,7 +387,188 @@ class ChunkVectorServiceTest {
         assertEquals("body", patchCaptor.getValue().getIndexContent());
         verify(stateService).transition(KNOWLEDGE_ID, FILE_ID, PipelineState.ADJUSTING,
                 PipelineState.COMPLETED, 8);
-        assertEquals(2, transactionManager.commits());
+        assertEquals(1, transactionManager.commits());
+    }
+
+    @Test
+    void combined_confirm_hash_enrich_and_vector_io_are_outside_exactly_two_transactions()
+            throws Exception {
+        TopologyFixture fixture = topologyFixture(true);
+
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+
+        assertEquals(2, fixture.transactionManager.begins());
+        assertEquals(2, fixture.transactionManager.commits());
+        assertEquals(0, fixture.transactionManager.rollbacks());
+        assertEquals(PipelineState.COMPLETED.code(), fixture.processing.getPipelineState());
+        assertEquals(ChunkStatus.ACTIVE.code(), fixture.chunk.getStatus());
+        assertEquals("标题：Captured\n\ncaptured body", fixture.chunk.getIndexContent());
+        assertEquals(1, fixture.sourceReads()[0]);
+        assertEquals(1, fixture.enrichCalls()[0]);
+        assertEquals(1, fixture.vectorAdds()[0]);
+    }
+
+    @Test
+    void combined_single_reindex_enrich_and_vector_io_are_outside_exactly_two_transactions()
+            throws Exception {
+        TopologyFixture fixture = topologyFixture(true);
+
+        fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID);
+
+        assertEquals(2, fixture.transactionManager.begins());
+        assertEquals(2, fixture.transactionManager.commits());
+        assertEquals(0, fixture.transactionManager.rollbacks());
+        assertEquals(PipelineState.COMPLETED.code(), fixture.processing.getPipelineState());
+        assertEquals(ChunkStatus.ACTIVE.code(), fixture.chunk.getStatus());
+        assertEquals("标题：Captured\n\ncaptured body", fixture.chunk.getIndexContent());
+        assertEquals(0, fixture.sourceReads()[0]);
+        assertEquals(1, fixture.enrichCalls()[0]);
+        assertEquals(1, fixture.vectorAdds()[0]);
+    }
+
+    @Test
+    void phase_one_job_deeply_captures_body_and_metadata_before_backing_entities_mutate()
+            throws Exception {
+        TopologyFixture fixture = topologyFixture(false);
+
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+        fixture.chunk.setContent("mutated backing body");
+        fixture.chunk.getSectionPath().set(0, "Mutated");
+        fixture.dispatched.get().run();
+
+        assertEquals("captured body", fixture.enrichedBody.get());
+        assertEquals(List.of("Captured"), fixture.enrichedSectionPath.get());
+        assertEquals("标题：Captured\n\ncaptured body", fixture.addedDocument.get().indexContent());
+        assertEquals("md", fixture.addedDocument.get().fileType());
+        assertEquals(2, fixture.transactionManager.commits());
+    }
+
+    @Test
+    void phase_three_snapshot_mismatch_rolls_back_without_activating_changed_row()
+            throws Exception {
+        TopologyFixture fixture = topologyFixture(false);
+
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+        fixture.chunk.setLockVersion(99);
+        fixture.dispatched.get().run();
+
+        assertEquals(ChunkStatus.INDEXING.code(), fixture.chunk.getStatus());
+        assertTrue(fixture.transactionManager.rollbacks() >= 1);
+        assertEquals(1, fixture.transactionManager.commits());
+        verify(fixture.stateService, never()).transition(KNOWLEDGE_ID, FILE_ID,
+                PipelineState.VECTORIZING, PipelineState.COMPLETED, 5);
+    }
+
+    private TopologyFixture topologyFixture(boolean directExecution) throws Exception {
+        Path source = tempDir.resolve("topology.md");
+        Files.writeString(source, "# Exact source\n\nBody.\n");
+        RecordingTransactionManager transactionManager = new RecordingTransactionManager();
+        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        FileMapper fileMapper = mock(FileMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
+        TokenCounter tokenCounter = mock(TokenCounter.class);
+        ChunkVectorGateway gateway = mock(ChunkVectorGateway.class);
+        FileProcessing processing = processing(PipelineState.ADJUSTING, 3, sourceHash());
+        File file = file(source);
+        DocumentChunk chunk = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "captured body");
+        chunk.setSectionPath(new ArrayList<>(List.of("Captured")));
+        AtomicReference<Runnable> dispatched = new AtomicReference<>();
+        AtomicReference<String> enrichedBody = new AtomicReference<>();
+        AtomicReference<List<String>> enrichedSectionPath = new AtomicReference<>();
+        AtomicReference<ChunkVectorGateway.VectorDocument> addedDocument = new AtomicReference<>();
+        int[] sourceReads = {0};
+        int[] enrichCalls = {0};
+        int[] vectorAdds = {0};
+
+        when(processingMapper.selectById(FILE_ID)).thenReturn(processing);
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing);
+        when(fileMapper.selectById(FILE_ID)).thenReturn(file);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(List.of(chunk));
+        when(processingMapper.update(any(), any(Wrapper.class))).thenAnswer(invocation -> {
+            FileProcessing patch = invocation.getArgument(0);
+            processing.setContextPolicy(patch.getContextPolicy());
+            return 1;
+        });
+        when(chunkMapper.update(any(), any(Wrapper.class))).thenAnswer(invocation -> {
+            DocumentChunk patch = invocation.getArgument(0);
+            if (patch.getStatus() != null) {
+                chunk.setStatus(patch.getStatus());
+            }
+            if (patch.getOverlapContent() != null) {
+                chunk.setOverlapContent(patch.getOverlapContent());
+            }
+            if (patch.getOverlapSourceChunkId() != null) {
+                chunk.setOverlapSourceChunkId(patch.getOverlapSourceChunkId());
+            }
+            if (patch.getOverlapTokenCount() != null) {
+                chunk.setOverlapTokenCount(patch.getOverlapTokenCount());
+            }
+            if (patch.getIndexContent() != null) {
+                chunk.setIndexContent(patch.getIndexContent());
+            }
+            if (patch.getLastError() != null) {
+                chunk.setLastError(patch.getLastError());
+            }
+            chunk.setLockVersion(chunk.getLockVersion() + 1);
+            return 1;
+        });
+        when(stateService.transition(anyLong(), anyLong(), any(), any(), anyInt()))
+                .thenAnswer(invocation -> {
+                    PipelineState expected = invocation.getArgument(2);
+                    PipelineState target = invocation.getArgument(3);
+                    int lockVersion = invocation.getArgument(4);
+                    assertEquals(expected.code(), processing.getPipelineState());
+                    assertEquals(lockVersion, processing.getLockVersion());
+                    processing.setPipelineState(target.code());
+                    processing.setLockVersion(lockVersion + 1);
+                    return new FileProcessingService.Transition(KNOWLEDGE_ID, FILE_ID,
+                            expected, target, lockVersion + 1, processing.getProgress(), null, null);
+                });
+        when(enricher.enrich(any(), any(), anyInt())).thenAnswer(invocation -> {
+            assertFalse(transactionManager.active());
+            enrichCalls[0]++;
+            List<DocumentChunk> detached = invocation.getArgument(0);
+            DocumentChunk captured = detached.get(0);
+            enrichedBody.set(captured.getContent());
+            enrichedSectionPath.set(List.copyOf(captured.getSectionPath()));
+            String indexContent = new ChunkIndexContentBuilder().build(
+                    captured.getSectionPath(), null, captured.getContent());
+            return List.of(new EnrichedChunk(captured, null, null, 0, indexContent));
+        });
+        when(tokenCounter.count(any())).thenAnswer(invocation -> {
+            assertFalse(transactionManager.active());
+            return 10;
+        });
+        org.mockito.Mockito.doAnswer(invocation -> {
+            assertFalse(transactionManager.active());
+            return null;
+        }).when(gateway).deleteAll(any());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            assertFalse(transactionManager.active());
+            vectorAdds[0]++;
+            List<ChunkVectorGateway.VectorDocument> documents = invocation.getArgument(0);
+            addedDocument.set(documents.get(0));
+            return null;
+        }).when(gateway).add(any());
+
+        ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
+                stateService, enricher, tokenCounter, gateway, transactions);
+        Executor executor = directExecution ? Runnable::run : dispatched::set;
+        ChunkVectorService service = new ChunkVectorService(processingMapper, fileMapper, chunkMapper,
+                stateService, worker, transactions, executor, path -> {
+                    assertFalse(transactionManager.active());
+                    sourceReads[0]++;
+                    return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                            .digest(Files.readAllBytes(path)));
+                });
+        return new TopologyFixture(service, processingMapper, chunkMapper, stateService,
+                processing, file, chunk, transactionManager, dispatched, enrichedBody,
+                enrichedSectionPath, addedDocument, sourceReads, enrichCalls, vectorAdds);
     }
 
     private Fixture fixture(PipelineState state, int lockVersion, String sourceHash,
@@ -399,6 +581,7 @@ class ChunkVectorServiceTest {
         FileProcessingService stateService = mock(FileProcessingService.class);
         ChunkVectorWorker worker = mock(ChunkVectorWorker.class);
         FileProcessing processing = processing(state, lockVersion, sourceHash);
+        when(processingMapper.selectById(FILE_ID)).thenReturn(processing);
         when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(processing);
         when(fileMapper.selectById(FILE_ID)).thenReturn(file(source));
@@ -464,24 +647,40 @@ class ChunkVectorServiceTest {
         return chunk;
     }
 
-    private static ChunkVectorWorker.BatchJob batchJob(DocumentChunk chunk, int fileLockVersion,
-                                                        ContextPolicy policy) {
+    private ChunkVectorWorker.BatchJob batchJob(DocumentChunk chunk, int fileLockVersion,
+                                                 ContextPolicy policy) {
         return batchJob(List.of(chunk), fileLockVersion, policy);
     }
 
-    private static ChunkVectorWorker.BatchJob batchJob(List<DocumentChunk> chunks,
-                                                        int fileLockVersion,
-                                                        ContextPolicy policy) {
+    private ChunkVectorWorker.BatchJob batchJob(List<DocumentChunk> chunks,
+                                                 int fileLockVersion,
+                                                 ContextPolicy policy) {
+        List<ChunkVectorWorker.ChunkSnapshot> snapshots = chunks.stream()
+                .map(ChunkVectorWorker.ChunkSnapshot::fromIndexing).toList();
         return new ChunkVectorWorker.BatchJob(TENANT_ID, KNOWLEDGE_ID, FILE_ID,
-                fileLockVersion, policy, chunks.stream()
-                .map(ChunkVectorWorker.ChunkSnapshot::fromIndexing).toList());
+                fileLockVersion, "hash", policy, 512,
+                new ChunkVectorWorker.FileSnapshot(
+                        FILE_PUBLIC_ID, tempDir.resolve("source.md").toString(), "md"),
+                snapshots, snapshots);
     }
 
-    private static ChunkVectorWorker.SingleJob singleJob(DocumentChunk chunk,
-                                                          int fileLockVersion,
-                                                          ContextPolicy policy) {
+    private ChunkVectorWorker.SingleJob singleJob(DocumentChunk chunk,
+                                                   int fileLockVersion,
+                                                   ContextPolicy policy) {
+        return singleJob(chunk, fileLockVersion, policy, 512);
+    }
+
+    private ChunkVectorWorker.SingleJob singleJob(DocumentChunk chunk,
+                                                   int fileLockVersion,
+                                                   ContextPolicy policy,
+                                                   int maxTokens) {
+        ChunkVectorWorker.ChunkSnapshot snapshot =
+                ChunkVectorWorker.ChunkSnapshot.fromIndexing(chunk);
         return new ChunkVectorWorker.SingleJob(TENANT_ID, KNOWLEDGE_ID, FILE_ID,
-                fileLockVersion, policy, ChunkVectorWorker.ChunkSnapshot.fromIndexing(chunk));
+                fileLockVersion, "hash", policy, maxTokens,
+                new ChunkVectorWorker.FileSnapshot(
+                        FILE_PUBLIC_ID, tempDir.resolve("source.md").toString(), "md"),
+                List.of(snapshot), snapshot);
     }
 
     private record Fixture(
@@ -495,10 +694,30 @@ class ChunkVectorServiceTest {
             AtomicReference<Runnable> dispatched) {
     }
 
+    private record TopologyFixture(
+            ChunkVectorService service,
+            FileProcessingMapper processingMapper,
+            DocumentChunkMapper chunkMapper,
+            FileProcessingService stateService,
+            FileProcessing processing,
+            File file,
+            DocumentChunk chunk,
+            RecordingTransactionManager transactionManager,
+            AtomicReference<Runnable> dispatched,
+            AtomicReference<String> enrichedBody,
+            AtomicReference<List<String>> enrichedSectionPath,
+            AtomicReference<ChunkVectorGateway.VectorDocument> addedDocument,
+            int[] sourceReads,
+            int[] enrichCalls,
+            int[] vectorAdds) {
+    }
+
     private static final class RecordingTransactionManager extends AbstractPlatformTransactionManager {
 
         private final ThreadLocal<Boolean> active = ThreadLocal.withInitial(() -> false);
+        private int begins;
         private int commits;
+        private int rollbacks;
 
         @Override
         protected Object doGetTransaction() {
@@ -508,6 +727,7 @@ class ChunkVectorServiceTest {
         @Override
         protected void doBegin(Object transaction, TransactionDefinition definition) {
             active.set(true);
+            begins++;
         }
 
         @Override
@@ -517,7 +737,7 @@ class ChunkVectorServiceTest {
 
         @Override
         protected void doRollback(DefaultTransactionStatus status) {
-            // Tests inspect committed phase boundaries only.
+            rollbacks++;
         }
 
         @Override
@@ -531,6 +751,14 @@ class ChunkVectorServiceTest {
 
         int commits() {
             return commits;
+        }
+
+        int begins() {
+            return begins;
+        }
+
+        int rollbacks() {
+            return rollbacks;
         }
     }
 }
