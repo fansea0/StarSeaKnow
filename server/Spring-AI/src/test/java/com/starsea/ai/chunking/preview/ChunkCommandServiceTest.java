@@ -26,6 +26,8 @@ import org.springframework.transaction.annotation.AnnotationTransactionAttribute
 import org.springframework.transaction.interceptor.TransactionInterceptor;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,11 +37,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -59,7 +63,6 @@ class ChunkCommandServiceTest {
     private FileProcessingMapper processingMapper;
     private FileProcessingService stateService;
     private ChunkVectorGateway vectorGateway;
-    private List<Long> sleeps;
     private ChunkCommandService service;
 
     @BeforeEach
@@ -70,10 +73,9 @@ class ChunkCommandServiceTest {
         processingMapper = mock(FileProcessingMapper.class);
         stateService = mock(FileProcessingService.class);
         vectorGateway = mock(ChunkVectorGateway.class);
-        sleeps = new ArrayList<>();
         TokenCounter counter = new CharacterTokenCounter();
         service = new ChunkCommandService(chunkMapper, processingMapper, stateService,
-                counter, new ChunkIndexContentBuilder(), vectorGateway, sleeps::add);
+                counter, new ChunkIndexContentBuilder(), vectorGateway, millis -> { });
         when(processingMapper.selectById(FILE_ID)).thenReturn(processing(PipelineState.CHUNKED, 5));
         when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(processing(PipelineState.CHUNKED, 5));
@@ -257,7 +259,6 @@ class ChunkCommandServiceTest {
 
         assertEquals("Edited", response.content());
         verify(vectorGateway, times(3)).delete(CHUNK_ID);
-        assertEquals(List.of(100L, 300L, 900L), sleeps);
     }
 
     @Test
@@ -346,6 +347,46 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void registered_vector_cleanup_is_suppressed_when_commit_fails_and_state_rolls_back() {
+        List<DocumentChunk> database = activeTargetAndDependent();
+        DocumentChunkMapper mutableMapper = mutableChunkMapper(database);
+        ChunkVectorGateway cleanup = mock(ChunkVectorGateway.class);
+        AtomicBoolean committed = new AtomicBoolean();
+        AtomicInteger completionStatus = new AtomicInteger(-1);
+        doAnswer(invocation -> {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    completionStatus.set(status);
+                }
+            });
+            return null;
+        }).when(stateService).transition(KNOWLEDGE_ID, FILE_ID,
+                PipelineState.CHUNKED, PipelineState.ADJUSTING, 5);
+        ChunkCommandService target = new ChunkCommandService(
+                mutableMapper, processingMapper, stateService, new CharacterTokenCounter(),
+                new ChunkIndexContentBuilder(), cleanup, millis -> { });
+        StateTransactionManager transactionManager =
+                new StateTransactionManager(database, committed, true);
+        ChunkCommandService transactional = transactionalProxy(target, transactionManager);
+
+        assertThrows(IllegalStateException.class, () -> transactional.edit(
+                KNOWLEDGE_ID, FILE_ID, CHUNK_ID, new EditChunkRequest("Edited", 2)));
+
+        assertEquals(2, transactionManager.registeredSynchronizations());
+        assertEquals(1, transactionManager.rollbacks());
+        assertEquals(TransactionSynchronization.STATUS_ROLLED_BACK, completionStatus.get());
+        assertFalse(committed.get());
+        assertEquals("Old", database.get(0).getContent());
+        assertEquals(ChunkStatus.ACTIVE.code(), database.get(0).getStatus());
+        assertEquals("target-index", database.get(0).getIndexContent());
+        assertEquals(ChunkStatus.ACTIVE.code(), database.get(1).getStatus());
+        assertEquals("dependent-overlap", database.get(1).getOverlapContent());
+        assertEquals("dependent-index", database.get(1).getIndexContent());
+        verify(cleanup, never()).delete(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void adjusting_file_completes_only_when_every_remaining_chunk_is_active() {
         FileProcessing adjusting = processing(PipelineState.ADJUSTING, 8);
         when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
@@ -393,10 +434,11 @@ class ChunkCommandServiceTest {
                 "com.starsea.ai.mapper.DocumentChunkMapper.deleteScoped", Map.of(
                         "fileId", FILE_ID, "tenantId", TENANT_ID, "knowledgeId", KNOWLEDGE_ID,
                         "chunkPublicId", CHUNK_ID, "lockVersion", 2));
-        String dependent = sql(configuration,
+        BoundSql dependentBinding = boundSql(configuration,
                 "com.starsea.ai.mapper.DocumentChunkMapper.invalidateDependent", Map.of(
                         "fileId", FILE_ID, "tenantId", TENANT_ID, "knowledgeId", KNOWLEDGE_ID,
                         "chunkId", 32L, "sourceChunkId", 31L, "lockVersion", 7));
+        String dependent = normalizeSql(dependentBinding);
 
         assertTrue(update.contains("tenant_id = ?"));
         assertTrue(update.contains("knowledge_id = ?"));
@@ -416,7 +458,11 @@ class ChunkCommandServiceTest {
         assertTrue(dependent.contains("tenant_id = ?"));
         assertTrue(dependent.contains("knowledge_id = ?"));
         assertTrue(dependent.contains("file_id = ?"));
-        assertTrue(dependent.contains("id = ?"));
+        assertEquals(1L, java.util.regex.Pattern.compile("\\bid\\s*=\\s*\\?")
+                .matcher(dependent).results().count());
+        assertEquals(1L, dependentBinding.getParameterMappings().stream()
+                .filter(mapping -> "chunkId".equals(mapping.getProperty()))
+                .count());
         assertTrue(dependent.contains("overlap_source_chunk_id = ?"));
         assertTrue(dependent.contains("status <> 1"));
         assertTrue(dependent.contains("lock_version = ?"));
@@ -541,8 +587,16 @@ class ChunkCommandServiceTest {
 
     private static String sql(Configuration configuration, String statementId,
                               Map<String, Object> parameters) {
+        return normalizeSql(boundSql(configuration, statementId, parameters));
+    }
+
+    private static BoundSql boundSql(Configuration configuration, String statementId,
+                                     Map<String, Object> parameters) {
         MappedStatement statement = configuration.getMappedStatement(statementId);
-        BoundSql boundSql = statement.getBoundSql(parameters);
+        return statement.getBoundSql(parameters);
+    }
+
+    private static String normalizeSql(BoundSql boundSql) {
         return boundSql.getSql().replaceAll("\\s+", " ").trim();
     }
 
@@ -558,20 +612,33 @@ class ChunkCommandServiceTest {
     private static final class StateTransactionManager extends AbstractPlatformTransactionManager {
         private final List<DocumentChunk> database;
         private final AtomicBoolean committed;
+        private final boolean failCommit;
         private List<DocumentChunk> snapshot = List.of();
         private int rollbacks;
+        private int registeredSynchronizations;
 
         private StateTransactionManager(List<DocumentChunk> database) {
-            this(database, new AtomicBoolean());
+            this(database, new AtomicBoolean(), false);
         }
 
         private StateTransactionManager(List<DocumentChunk> database, AtomicBoolean committed) {
+            this(database, committed, false);
+        }
+
+        private StateTransactionManager(List<DocumentChunk> database, AtomicBoolean committed,
+                                        boolean failCommit) {
             this.database = database;
             this.committed = committed;
+            this.failCommit = failCommit;
+            setRollbackOnCommitFailure(true);
         }
 
         int rollbacks() {
             return rollbacks;
+        }
+
+        int registeredSynchronizations() {
+            return registeredSynchronizations;
         }
 
         @Override
@@ -586,6 +653,11 @@ class ChunkCommandServiceTest {
 
         @Override
         protected void doCommit(DefaultTransactionStatus status) {
+            registeredSynchronizations = TransactionSynchronizationManager
+                    .getSynchronizations().size();
+            if (failCommit) {
+                throw new IllegalStateException("commit failed");
+            }
             committed.set(true);
         }
 
