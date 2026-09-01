@@ -54,6 +54,11 @@ file:
   uploadPath: ${user.dir}/src/main/resources/file/
   outputPath: ${user.dir}/src/main/resources/output/
 
+chunking:
+  tokenizer:
+    resource: tokenizer/bge-base-zh-v1.5-tokenizer.json
+    sha256: 7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839
+
 jwt:
   secret: dev-secret-please-change-32bytes-minimum-length-required
   access-ttl-millis: 900000       # 15 min
