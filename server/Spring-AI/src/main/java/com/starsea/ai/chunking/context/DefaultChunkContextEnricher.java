@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -102,8 +103,41 @@ public final class DefaultChunkContextEnricher implements ChunkContextEnricher {
                 && current.getPosition() != null
                 && current.getPosition() == previous.getPosition() + 1
                 && Objects.equals(previous.getSectionPath(), current.getSectionPath())
+                && !isContainerChunk(previous)
+                && !isContainerChunk(current)
                 && !isStructuralBoundary(previous.getBoundaryReason(), "end")
                 && !isStructuralBoundary(current.getBoundaryReason(), "start");
+    }
+
+    private boolean isContainerChunk(DocumentChunk chunk) {
+        if (isStructuralBoundary(chunk.getBoundaryReason(), "end")) {
+            return true;
+        }
+        Map<String, Object> sourceLocator = chunk.getSourceLocator();
+        if (sourceLocator == null) {
+            return false;
+        }
+        return isContainerType(sourceLocator.get("type"))
+                || isContainerType(sourceLocator.get("blockType"))
+                || isContainerType(sourceLocator.get("blockTypes"));
+    }
+
+    private boolean isContainerType(Object value) {
+        if (value instanceof Iterable<?> values) {
+            for (Object item : values) {
+                if (isContainerType(item)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (value == null) {
+            return false;
+        }
+        return switch (String.valueOf(value).toUpperCase(Locale.ROOT)) {
+            case "TABLE", "FENCED_CODE", "INDENTED_CODE" -> true;
+            default -> false;
+        };
     }
 
     private boolean isStructuralBoundary(Map<String, Object> boundaryReason, String key) {

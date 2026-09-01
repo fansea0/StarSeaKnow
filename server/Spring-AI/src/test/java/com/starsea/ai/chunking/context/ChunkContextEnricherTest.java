@@ -11,6 +11,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChunkContextEnricherTest {
@@ -57,15 +58,70 @@ class ChunkContextEnricherTest {
     }
 
     @Test
-    void stops_overlap_at_structural_boundaries_and_position_gaps() {
-        assertNoOverlap(chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "PARAGRAPH_END"),
-                chunk(2L, 1, List.of("乙"), "当前", "H2_SECTION", "PARAGRAPH_END"));
+    void retains_closing_chinese_quotes_and_english_brackets_with_the_sentence() {
+        DocumentChunk chinese = chunk(1L, 0, List.of(), "他说：“可以。”", "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk english = chunk(2L, 1, List.of(), "Use it.\")", "PARAGRAPH_END", "PARAGRAPH_END");
+        DocumentChunk current = chunk(3L, 2, List.of(), "正文", "PARAGRAPH_END", "PARAGRAPH_END");
+
+        List<EnrichedChunk> enriched = enricher.enrich(List.of(chinese, english, current), new ContextPolicy(true, 40), 512);
+
+        assertEquals("他说：“可以。”", enriched.get(1).overlapContent());
+        assertEquals("Use it.\")", enriched.get(2).overlapContent());
+    }
+
+    @Test
+    void omits_decimal_and_dotted_abbreviation_fragments_when_whole_sentence_exceeds_tight_budget() {
+        DocumentChunk decimal = chunk(1L, 0, List.of(), "金额为 1.2。", "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk decimalCurrent = chunk(2L, 1, List.of(), "正文", "PARAGRAPH_END", "PARAGRAPH_END");
+        DocumentChunk abbreviation = chunk(3L, 0, List.of(), "见 e.g. 示例。", "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk abbreviationCurrent = chunk(4L, 1, List.of(), "正文", "PARAGRAPH_END", "PARAGRAPH_END");
+        DocumentChunk ieAbbreviation = chunk(5L, 0, List.of(), "即 i.e. 示例。", "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk ieAbbreviationCurrent = chunk(6L, 1, List.of(), "正文", "PARAGRAPH_END", "PARAGRAPH_END");
+
+        assertNull(enricher.enrich(List.of(decimal, decimalCurrent), new ContextPolicy(true, 8), 512)
+                .get(1).overlapContent());
+        assertNull(enricher.enrich(List.of(abbreviation, abbreviationCurrent), new ContextPolicy(true, 8), 512)
+                .get(1).overlapContent());
+        assertNull(enricher.enrich(List.of(ieAbbreviation, ieAbbreviationCurrent), new ContextPolicy(true, 8), 512)
+                .get(1).overlapContent());
+    }
+
+    @Test
+    void stops_overlap_at_a_peer_label_on_the_same_title_path() {
+        assertNoOverlap(chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "PEER_LABEL"),
+                chunk(2L, 1, List.of("甲"), "Q1：当前", "PEER_LABEL", "PARAGRAPH_END"));
+    }
+
+    @Test
+    void stops_overlap_at_thematic_and_heading_boundaries() {
         assertNoOverlap(chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "THEMATIC_BREAK"),
                 chunk(2L, 1, List.of("甲"), "当前", "THEMATIC_BREAK", "PARAGRAPH_END"));
+        assertNoOverlap(chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "H2_SECTION"),
+                chunk(2L, 1, List.of("甲"), "当前", "H2_SECTION", "PARAGRAPH_END"));
+    }
+
+    @Test
+    void stops_overlap_when_previous_or_current_chunk_is_a_container() {
         assertNoOverlap(chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "CONTAINER_END"),
                 chunk(2L, 1, List.of("甲"), "当前", "PARAGRAPH_END", "PARAGRAPH_END"));
-        assertNoOverlap(chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "PARAGRAPH_END"),
-                chunk(2L, 2, List.of("甲"), "当前", "PARAGRAPH_END", "PARAGRAPH_END"));
+        for (String type : List.of("TABLE", "FENCED_CODE", "INDENTED_CODE")) {
+            DocumentChunk prose = chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "PARAGRAPH_END");
+            DocumentChunk container = chunk(2L, 1, List.of("甲"), "容器内容", "PARAGRAPH_END", "PARAGRAPH_END");
+            container.setSourceLocator(Map.of("type", type, "blockIds", List.of("markdown-2")));
+            assertNoOverlap(prose, container);
+        }
+    }
+
+    @Test
+    void does_not_bridge_a_deleted_position_gap_when_input_is_unsorted() {
+        DocumentChunk first = chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk afterDeletedChunk = chunk(2L, 2, List.of("甲"), "当前", "PARAGRAPH_END", "PARAGRAPH_END");
+
+        List<EnrichedChunk> enriched = enricher.enrich(List.of(afterDeletedChunk, first), new ContextPolicy(true, 40), 512);
+
+        assertEquals(0, enriched.get(0).chunk().getPosition());
+        assertEquals(2, enriched.get(1).chunk().getPosition());
+        assertNull(enriched.get(1).overlapContent());
     }
 
     @Test
@@ -78,6 +134,36 @@ class ChunkContextEnricherTest {
         assertNull(enriched.overlapContent());
         assertEquals(0, enriched.overlapTokenCount());
         assertEquals("0123456789", enriched.indexContent());
+    }
+
+    @Test
+    void omits_overlap_when_current_title_and_body_consume_the_budget() {
+        DocumentChunk first = chunk(11L, 0, List.of("标题"), "前句。", "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk second = chunk(12L, 1, List.of("标题"), "前句。", "PARAGRAPH_END", "PARAGRAPH_END");
+
+        EnrichedChunk enriched = enricher.enrich(List.of(first, second), new ContextPolicy(true, 40), 10).get(1);
+
+        assertNull(enriched.overlapContent());
+        assertEquals("标题：标题\n\n前句。", enriched.indexContent());
+    }
+
+    @Test
+    void rejects_current_title_and_body_that_exceed_the_supplied_budget() {
+        DocumentChunk current = chunk(12L, 0, List.of("标题"), "正文", "DOCUMENT_START", "PARAGRAPH_END");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> enricher.enrich(List.of(current), new ContextPolicy(true, 40), 5));
+    }
+
+    @Test
+    void counts_overlap_as_the_difference_between_complete_final_texts() {
+        DefaultChunkContextEnricher specialTokenEnricher = new DefaultChunkContextEnricher(new SpecialTokenCounter());
+        DocumentChunk first = chunk(1L, 0, List.of(), "前句。", "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk second = chunk(2L, 1, List.of(), "正文", "PARAGRAPH_END", "PARAGRAPH_END");
+
+        EnrichedChunk enriched = specialTokenEnricher.enrich(List.of(first, second), new ContextPolicy(true, 40), 512).get(1);
+
+        assertEquals(8, enriched.overlapTokenCount());
     }
 
     private void assertNoOverlap(DocumentChunk previous, DocumentChunk current) {
@@ -105,6 +191,18 @@ class ChunkContextEnricherTest {
         @Override
         public String id() {
             return "character-test";
+        }
+    }
+
+    private static final class SpecialTokenCounter implements TokenCounter {
+        @Override
+        public int count(String text) {
+            return text.codePointCount(0, text.length()) + 2;
+        }
+
+        @Override
+        public String id() {
+            return "special-token-test";
         }
     }
 }
