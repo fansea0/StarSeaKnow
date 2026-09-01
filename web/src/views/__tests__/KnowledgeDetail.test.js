@@ -37,7 +37,11 @@ function mountDetail(route = { params: { id: '11' } }) {
       stubs: {
         'el-icon': true,
         'el-button': { template: '<button @click="$emit(\'click\')"><slot /></button>' },
-        'el-upload': { template: '<div><slot /></div>' },
+        'el-upload': {
+          name: 'ElUpload',
+          props: ['httpRequest'],
+          template: '<div><slot /></div>',
+        },
         'el-switch': true,
         'el-form': true,
         'el-form-item': true,
@@ -58,6 +62,24 @@ describe('KnowledgeDetail', () => {
 
     expect(axios.get.mock.calls.filter(([url]) => url.endsWith('/knowledge/11'))).toHaveLength(1)
     expect(axios.get.mock.calls.filter(([url]) => url.endsWith('/knowledge/file/list'))).toHaveLength(1)
+  })
+
+  it('uploads documents through axios so auth interceptors can attach and refresh the access token', async () => {
+    const wrapper = mountDetail()
+    await flushPromises()
+    const file = new File(['# Guide'], 'guide.md', { type: 'text/markdown' })
+    const response = { code: 200, data: 23 }
+    axios.post.mockResolvedValue({ data: response })
+
+    const upload = wrapper.findComponent({ name: 'ElUpload' })
+    const result = await upload.props('httpRequest')({ file })
+
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringMatching(/\/file\/uploadToKnow\/11$/),
+      expect.any(FormData),
+    )
+    expect(axios.post.mock.calls[0][1].get('file')).toBe(file)
+    expect(result).toBe(response)
   })
 
   it('discards late knowledge and file responses from the previous reused route', async () => {

@@ -93,10 +93,9 @@
               <el-upload
                 class="kb-upload"
                 :action="uploadUrl"
+                :http-request="uploadDocument"
                 :show-file-list="false"
                 :before-upload="beforeUpload"
-                :data="{ knowledgeId }"
-                :headers="{ }"
                 :on-success="onUploadSuccess"
                 :on-error="onUploadError"
               >
@@ -407,6 +406,12 @@ export default {
     beforeUpload(file) {
       this.uploadContexts.set(file, this.currentRequestContext())
       return true
+    },
+    async uploadDocument({ file }) {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await axios.post(this.uploadUrl, formData)
+      return response.data
     },
     async onUploadSuccess(response, uploadFile) {
       const rawFile = uploadFile?.raw
