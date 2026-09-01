@@ -114,12 +114,13 @@ public class FileProcessingService {
                 Set.of(PipelineState.CHUNKING, PipelineState.ADJUSTING, PipelineState.CONFIRMED));
         transitions.put(PipelineState.ADJUSTING,
                 Set.of(PipelineState.CHUNKING, PipelineState.CONFIRMED,
-                        PipelineState.COMPLETED, PipelineState.FAILED));
+                        PipelineState.VECTORIZING, PipelineState.COMPLETED, PipelineState.FAILED));
         transitions.put(PipelineState.CONFIRMED,
                 Set.of(PipelineState.VECTORIZING, PipelineState.FAILED));
         transitions.put(PipelineState.VECTORIZING,
-                Set.of(PipelineState.COMPLETED, PipelineState.FAILED));
-        transitions.put(PipelineState.COMPLETED, Set.of(PipelineState.ADJUSTING));
+                Set.of(PipelineState.ADJUSTING, PipelineState.COMPLETED, PipelineState.FAILED));
+        transitions.put(PipelineState.COMPLETED,
+                Set.of(PipelineState.ADJUSTING, PipelineState.VECTORIZING));
         transitions.put(PipelineState.FAILED,
                 Set.of(PipelineState.CHUNKING, PipelineState.ADJUSTING,
                         PipelineState.CONFIRMED, PipelineState.VECTORIZING));

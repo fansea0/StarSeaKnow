@@ -133,6 +133,36 @@ class FileProcessingServiceTest {
     }
 
     @Test
+    void allows_only_the_single_reindex_vectorizing_edges_added_to_the_state_graph() {
+        FileProcessing adjusting = processing(
+                1L, 10L, 20L, PipelineState.ADJUSTING, 3);
+        when(mapper.selectById(20L)).thenReturn(adjusting);
+        when(mapper.transition(20L, 1L, 10L, PipelineState.ADJUSTING.code(),
+                PipelineState.VECTORIZING.code(), 0, 3, null, null)).thenReturn(1);
+
+        assertEquals(PipelineState.VECTORIZING, service.transition(
+                10L, 20L, PipelineState.ADJUSTING, PipelineState.VECTORIZING, 3).current());
+
+        FileProcessing completed = processing(
+                1L, 10L, 20L, PipelineState.COMPLETED, 7);
+        when(mapper.selectById(20L)).thenReturn(completed);
+        when(mapper.transition(20L, 1L, 10L, PipelineState.COMPLETED.code(),
+                PipelineState.VECTORIZING.code(), 0, 7, null, null)).thenReturn(1);
+
+        assertEquals(PipelineState.VECTORIZING, service.transition(
+                10L, 20L, PipelineState.COMPLETED, PipelineState.VECTORIZING, 7).current());
+
+        FileProcessing vectorizing = processing(
+                1L, 10L, 20L, PipelineState.VECTORIZING, 8);
+        when(mapper.selectById(20L)).thenReturn(vectorizing);
+        when(mapper.transition(20L, 1L, 10L, PipelineState.VECTORIZING.code(),
+                PipelineState.ADJUSTING.code(), 100, 8, null, null)).thenReturn(1);
+
+        assertEquals(PipelineState.ADJUSTING, service.transition(
+                10L, 20L, PipelineState.VECTORIZING, PipelineState.ADJUSTING, 8).current());
+    }
+
+    @Test
     void dispatcher_restores_full_external_auth_context_and_clears_worker_thread() {
         FileProcessingService processingService = mock(FileProcessingService.class);
         Executor executor = mock(Executor.class);

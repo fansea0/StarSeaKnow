@@ -97,8 +97,9 @@ public class ChunkVectorService {
             throw ChunkingException.notFound("Chunk was not found in the requested file");
         }
         long tenantId = requireTenantId();
+        SourceSnapshot source = readSourceOutsideTransaction(tenantId, knowledgeId, fileId);
         ChunkVectorWorker.SingleJob job = transactions.execute(status -> prepareSingle(
-                tenantId, knowledgeId, fileId, chunkPublicId));
+                tenantId, knowledgeId, fileId, chunkPublicId, source));
         if (job == null) {
             throw new IllegalStateException("Chunk reindex preparation returned no job");
         }
@@ -193,13 +194,18 @@ public class ChunkVectorService {
     }
 
     private ChunkVectorWorker.SingleJob prepareSingle(long tenantId, long knowledgeId, long fileId,
-                                                       UUID chunkPublicId) {
+                                                       UUID chunkPublicId, SourceSnapshot source) {
         FileProcessing processing = requireLockedProcessing(tenantId, knowledgeId, fileId);
         PipelineState current = pipelineState(processing);
         if (current != PipelineState.ADJUSTING && current != PipelineState.COMPLETED) {
             throw ChunkingException.conflict("Only an ADJUSTING or COMPLETED file can reindex one chunk");
         }
+        if (!Objects.equals(processing.getSourceHash(), source.hash())) {
+            throw ChunkingException.conflict(
+                    "The physical source changed after the chunk preview was generated");
+        }
         File file = requireFile(fileId);
+        requireSameFile(source.file(), file);
         List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(fileId, tenantId, knowledgeId);
         DocumentChunk target = chunks.stream()
                 .filter(chunk -> Objects.equals(chunk.getPublicId(), chunkPublicId))
@@ -215,12 +221,8 @@ public class ChunkVectorService {
         }
         chunks.forEach(this::requireStableChunk);
 
-        int adjustingLockVersion = value(processing.getLockVersion());
-        if (current == PipelineState.COMPLETED) {
-            adjustingLockVersion = stateService.transition(knowledgeId, fileId,
-                    PipelineState.COMPLETED, PipelineState.ADJUSTING,
-                    adjustingLockVersion).lockVersion();
-        }
+        int vectorizingLockVersion = stateService.transition(knowledgeId, fileId,
+                current, PipelineState.VECTORIZING, value(processing.getLockVersion())).lockVersion();
         ChunkVectorWorker.ChunkSnapshot targetSnapshot = markIndexing(
                 target, tenantId, knowledgeId, fileId);
         List<ChunkVectorWorker.ChunkSnapshot> allSnapshots = chunks.stream()
@@ -229,9 +231,9 @@ public class ChunkVectorService {
                         : ChunkVectorWorker.ChunkSnapshot.current(chunk))
                 .toList();
         return new ChunkVectorWorker.SingleJob(tenantId, knowledgeId, fileId,
-                adjustingLockVersion, processing.getSourceHash(), readContextPolicy(processing),
+                vectorizingLockVersion, source.hash(), readContextPolicy(processing),
                 ChunkVectorWorker.configuredMaximum(processing.getPolicySnapshot()),
-                ChunkVectorWorker.FileSnapshot.from(file), allSnapshots, targetSnapshot);
+                source.file(), allSnapshots, targetSnapshot);
     }
 
     private ChunkVectorWorker.ChunkSnapshot markIndexing(DocumentChunk chunk, long tenantId,

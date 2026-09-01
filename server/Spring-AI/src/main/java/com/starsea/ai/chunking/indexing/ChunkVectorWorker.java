@@ -174,7 +174,7 @@ public class ChunkVectorWorker {
 
     private void completeSingle(SingleJob job, PreparedBatch prepared) {
         FileProcessing processing = requireLockedProcessing(job.tenantId(), job.knowledgeId(),
-                job.fileId(), PipelineState.ADJUSTING, job.fileLockVersion());
+                job.fileId(), PipelineState.VECTORIZING, job.fileLockVersion());
         requireJobSnapshot(processing, job.sourceHash(), job.policy(), job.maxTokens());
         requireFileSnapshot(job.fileId(), job.file());
         List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(
@@ -186,10 +186,9 @@ public class ChunkVectorWorker {
         boolean allActive = chunks.stream().allMatch(chunk ->
                 Objects.equals(chunk.getId(), job.chunk().id())
                         || chunkStatus(chunk) == ChunkStatus.ACTIVE);
-        if (allActive) {
-            stateService.transition(job.knowledgeId(), job.fileId(), PipelineState.ADJUSTING,
-                    PipelineState.COMPLETED, job.fileLockVersion());
-        }
+        PipelineState targetState = allActive ? PipelineState.COMPLETED : PipelineState.ADJUSTING;
+        stateService.transition(job.knowledgeId(), job.fileId(), PipelineState.VECTORIZING,
+                targetState, job.fileLockVersion());
     }
 
     private void activate(DocumentChunk current, ChunkSnapshot snapshot, EnrichedChunk enriched) {
@@ -216,12 +215,11 @@ public class ChunkVectorWorker {
     private void restoreBatch(BatchJob job, RuntimeException original) {
         try {
             transactions.executeWithoutResult(status -> {
-                FileProcessing processing = requireLockedProcessing(job.tenantId(), job.knowledgeId(),
-                        job.fileId(), PipelineState.VECTORIZING, job.fileLockVersion());
-                requireJobSnapshot(processing, job.sourceHash(), job.policy(), job.maxTokens());
-                restoreDrafts(job.tenantId(), job.knowledgeId(), job.fileId(), job.chunks(), original);
+                FileProcessing processing = requireCompensatableProcessing(
+                        job.tenantId(), job.knowledgeId(), job.fileId());
+                restoreIndexingTargets(job.tenantId(), job.knowledgeId(), job.fileId(), job.chunks());
                 stateService.fail(job.knowledgeId(), job.fileId(), PipelineState.VECTORIZING,
-                        job.fileLockVersion(), 0, failureSummary(original));
+                        value(processing.getLockVersion()), 0, failureSummary(original));
             });
         } catch (RuntimeException compensationFailure) {
             original.addSuppressed(compensationFailure);
@@ -233,11 +231,12 @@ public class ChunkVectorWorker {
     private void restoreSingle(SingleJob job, RuntimeException original) {
         try {
             transactions.executeWithoutResult(status -> {
-                FileProcessing processing = requireLockedProcessing(job.tenantId(), job.knowledgeId(),
-                        job.fileId(), PipelineState.ADJUSTING, job.fileLockVersion());
-                requireJobSnapshot(processing, job.sourceHash(), job.policy(), job.maxTokens());
-                restoreDrafts(job.tenantId(), job.knowledgeId(), job.fileId(),
-                        List.of(job.chunk()), original);
+                FileProcessing processing = requireCompensatableProcessing(
+                        job.tenantId(), job.knowledgeId(), job.fileId());
+                restoreIndexingTargets(job.tenantId(), job.knowledgeId(), job.fileId(),
+                        List.of(job.chunk()));
+                stateService.transition(job.knowledgeId(), job.fileId(), PipelineState.VECTORIZING,
+                        PipelineState.ADJUSTING, value(processing.getLockVersion()));
             });
         } catch (RuntimeException compensationFailure) {
             original.addSuppressed(compensationFailure);
@@ -246,17 +245,33 @@ public class ChunkVectorWorker {
         }
     }
 
-    private void restoreDrafts(long tenantId, long knowledgeId, long fileId,
-                               List<ChunkSnapshot> snapshots, RuntimeException original) {
+    private void restoreIndexingTargets(long tenantId, long knowledgeId, long fileId,
+                                        List<ChunkSnapshot> snapshots) {
         List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(fileId, tenantId, knowledgeId);
-        Map<Long, DocumentChunk> currentById = byId(chunks);
+        Map<UUID, DocumentChunk> currentByPublicId = chunks.stream()
+                .filter(chunk -> chunk.getPublicId() != null)
+                .collect(Collectors.toMap(DocumentChunk::getPublicId, chunk -> chunk));
         for (ChunkSnapshot snapshot : snapshots) {
-            DocumentChunk current = currentById.get(snapshot.id());
-            requireSnapshot(current, snapshot);
+            DocumentChunk current = currentByPublicId.get(snapshot.publicId());
+            if (current == null
+                    || !Integer.valueOf(ChunkStatus.INDEXING.code()).equals(current.getStatus())) {
+                continue;
+            }
             DocumentChunk patch = new DocumentChunk();
             patch.setStatus(ChunkStatus.DRAFT.code());
-            patch.setLastError(failureSummary(original));
-            UpdateWrapper<DocumentChunk> update = chunkScope(current, snapshot)
+            UpdateWrapper<DocumentChunk> update = new UpdateWrapper<DocumentChunk>()
+                    .eq("id", current.getId())
+                    .eq("tenant_id", tenantId)
+                    .eq("knowledge_id", knowledgeId)
+                    .eq("file_id", fileId)
+                    .eq("public_id", snapshot.publicId())
+                    .eq("status", ChunkStatus.INDEXING.code())
+                    .eq("lock_version", current.getLockVersion())
+                    .set("overlap_content", null)
+                    .set("overlap_source_chunk_id", null)
+                    .set("overlap_token_count", 0)
+                    .set("index_content", null)
+                    .set("last_error", null)
                     .setSql("lock_version = lock_version + 1");
             if (chunkMapper.update(patch, update) != 1) {
                 throw ChunkingException.conflict("Chunk changed before failure restoration");
@@ -285,6 +300,21 @@ public class ChunkVectorWorker {
         if (pipelineState(processing) != expected
                 || !Integer.valueOf(lockVersion).equals(processing.getLockVersion())) {
             throw ChunkingException.conflict("Pipeline state or lock version changed during vectorization");
+        }
+        return processing;
+    }
+
+    private FileProcessing requireCompensatableProcessing(long tenantId, long knowledgeId,
+                                                           long fileId) {
+        FileProcessing processing = processingMapper.findScopedForUpdate(
+                fileId, tenantId, knowledgeId);
+        if (processing == null) {
+            throw ChunkingException.notFound(
+                    "File was not found in the current tenant and knowledge base");
+        }
+        if (pipelineState(processing) != PipelineState.VECTORIZING) {
+            throw ChunkingException.conflict(
+                    "File left VECTORIZING before vector failure could be compensated");
         }
         return processing;
     }

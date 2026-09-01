@@ -1,6 +1,7 @@
 package com.starsea.ai.chunking.indexing;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingApiModels.ConfirmRequest;
 import com.starsea.ai.chunking.api.ChunkingController;
@@ -128,6 +129,24 @@ class ChunkVectorServiceTest {
     }
 
     @Test
+    void single_reindex_hashes_physical_source_before_any_state_mutation() throws Exception {
+        Fixture fixture = fixture(PipelineState.ADJUSTING, 3, "stale-preview-hash",
+                List.of(chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "edited body")));
+
+        ChunkingException exception = assertThrows(ChunkingException.class,
+                () -> fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID));
+
+        assertEquals(409, exception.status().value());
+        assertEquals(1, fixture.transactionManager.begins());
+        assertEquals(0, fixture.transactionManager.commits());
+        assertEquals(1, fixture.transactionManager.rollbacks());
+        verify(fixture.stateService, never()).transition(
+                anyLong(), anyLong(), any(), any(), anyInt());
+        verify(fixture.processingMapper, never()).update(any(), any(Wrapper.class));
+        verify(fixture.chunkMapper, never()).update(any(), any(Wrapper.class));
+    }
+
+    @Test
     void confirmation_commits_context_and_indexing_before_dispatch() throws Exception {
         DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "first edited body");
         DocumentChunk second = chunk(2L, SECOND_PUBLIC_ID, ChunkStatus.ACTIVE, 4, "second body");
@@ -198,12 +217,12 @@ class ChunkVectorServiceTest {
     }
 
     @Test
-    void single_reindex_moves_completed_file_to_adjusting_and_rejects_indexing() throws Exception {
+    void single_reindex_moves_completed_file_to_vectorizing_and_rejects_indexing() throws Exception {
         DocumentChunk active = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.ACTIVE, 2, "body");
         Fixture fixture = fixture(PipelineState.COMPLETED, 7, sourceHash(), List.of(active));
         when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.COMPLETED,
-                PipelineState.ADJUSTING, 7)).thenReturn(new FileProcessingService.Transition(
-                KNOWLEDGE_ID, FILE_ID, PipelineState.COMPLETED, PipelineState.ADJUSTING,
+                PipelineState.VECTORIZING, 7)).thenReturn(new FileProcessingService.Transition(
+                KNOWLEDGE_ID, FILE_ID, PipelineState.COMPLETED, PipelineState.VECTORIZING,
                 8, 100, null, null));
 
         fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID);
@@ -212,7 +231,7 @@ class ChunkVectorServiceTest {
         verify(fixture.chunkMapper).update(patchCaptor.capture(), any(Wrapper.class));
         assertEquals(ChunkStatus.INDEXING.code(), patchCaptor.getValue().getStatus());
         verify(fixture.stateService).transition(KNOWLEDGE_ID, FILE_ID,
-                PipelineState.COMPLETED, PipelineState.ADJUSTING, 7);
+                PipelineState.COMPLETED, PipelineState.VECTORIZING, 7);
         assertTrue(fixture.dispatched.get() != null);
 
         active.setStatus(ChunkStatus.INDEXING.code());
@@ -253,6 +272,10 @@ class ChunkVectorServiceTest {
             assertFalse(transactionManager.active());
             return null;
         }).when(gateway).deleteAll(any());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            assertFalse(transactionManager.active());
+            return null;
+        }).when(gateway).delete(any());
         org.mockito.Mockito.doAnswer(invocation -> {
             assertFalse(transactionManager.active());
             return null;
@@ -328,7 +351,7 @@ class ChunkVectorServiceTest {
         ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
         TokenCounter tokenCounter = mock(TokenCounter.class);
         ChunkVectorGateway gateway = mock(ChunkVectorGateway.class);
-        FileProcessing processing = processing(PipelineState.ADJUSTING, 8, "hash");
+        FileProcessing processing = processing(PipelineState.VECTORIZING, 8, "hash");
         processing.setPolicySnapshot(Map.of("maxTokens", 400));
         processing.setContextPolicy(Map.of("overlapEnabled", false, "overlapTokens", 40));
         DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.INDEXING, 3, "edited body");
@@ -351,6 +374,8 @@ class ChunkVectorServiceTest {
         verify(chunkMapper).update(patchCaptor.capture(), any(Wrapper.class));
         assertEquals(ChunkStatus.DRAFT.code(), patchCaptor.getValue().getStatus());
         assertNull(patchCaptor.getValue().getContent());
+        verify(stateService).transition(KNOWLEDGE_ID, FILE_ID, PipelineState.VECTORIZING,
+                PipelineState.ADJUSTING, 8);
         verify(stateService, never()).fail(anyLong(), anyLong(), any(), anyInt(), anyInt(), any());
     }
 
@@ -365,7 +390,7 @@ class ChunkVectorServiceTest {
         ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
         TokenCounter tokenCounter = mock(TokenCounter.class);
         ChunkVectorGateway gateway = mock(ChunkVectorGateway.class);
-        FileProcessing processing = processing(PipelineState.ADJUSTING, 8, "hash");
+        FileProcessing processing = processing(PipelineState.VECTORIZING, 8, "hash");
         DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.INDEXING, 3, "body");
         when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(processing);
@@ -385,7 +410,50 @@ class ChunkVectorServiceTest {
         verify(chunkMapper).update(patchCaptor.capture(), any(Wrapper.class));
         assertEquals(ChunkStatus.ACTIVE.code(), patchCaptor.getValue().getStatus());
         assertEquals("body", patchCaptor.getValue().getIndexContent());
-        verify(stateService).transition(KNOWLEDGE_ID, FILE_ID, PipelineState.ADJUSTING,
+        verify(stateService).transition(KNOWLEDGE_ID, FILE_ID, PipelineState.VECTORIZING,
+                PipelineState.COMPLETED, 8);
+        assertEquals(1, transactionManager.commits());
+    }
+
+    @Test
+    void single_success_returns_to_adjusting_when_another_chunk_is_still_draft() {
+        RecordingTransactionManager transactionManager = new RecordingTransactionManager();
+        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        FileMapper fileMapper = mock(FileMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
+        TokenCounter tokenCounter = mock(TokenCounter.class);
+        ChunkVectorGateway gateway = mock(ChunkVectorGateway.class);
+        FileProcessing processing = processing(PipelineState.VECTORIZING, 8, "hash");
+        DocumentChunk target = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.INDEXING, 3, "body");
+        DocumentChunk draft = chunk(2L, SECOND_PUBLIC_ID, ChunkStatus.DRAFT, 4, "draft body");
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(List.of(target, draft));
+        when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
+        when(enricher.enrich(any(), eq(ContextPolicy.defaults()), eq(512)))
+                .thenReturn(List.of(new EnrichedChunk(target, null, null, 0, "body")));
+        when(tokenCounter.count("body")).thenReturn(2);
+        when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
+        ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
+                stateService, enricher, tokenCounter, gateway, transactions);
+        ChunkVectorWorker.ChunkSnapshot targetSnapshot =
+                ChunkVectorWorker.ChunkSnapshot.fromIndexing(target);
+        ChunkVectorWorker.SingleJob job = new ChunkVectorWorker.SingleJob(
+                TENANT_ID, KNOWLEDGE_ID, FILE_ID, 8, "hash", ContextPolicy.defaults(), 512,
+                new ChunkVectorWorker.FileSnapshot(
+                        FILE_PUBLIC_ID, tempDir.resolve("source.md").toString(), "md"),
+                List.of(targetSnapshot, ChunkVectorWorker.ChunkSnapshot.current(draft)),
+                targetSnapshot);
+
+        worker.vectorizeSingle(job);
+
+        verify(stateService).transition(KNOWLEDGE_ID, FILE_ID, PipelineState.VECTORIZING,
+                PipelineState.ADJUSTING, 8);
+        verify(stateService, never()).transition(KNOWLEDGE_ID, FILE_ID, PipelineState.VECTORIZING,
                 PipelineState.COMPLETED, 8);
         assertEquals(1, transactionManager.commits());
     }
@@ -421,7 +489,7 @@ class ChunkVectorServiceTest {
         assertEquals(PipelineState.COMPLETED.code(), fixture.processing.getPipelineState());
         assertEquals(ChunkStatus.ACTIVE.code(), fixture.chunk.getStatus());
         assertEquals("标题：Captured\n\ncaptured body", fixture.chunk.getIndexContent());
-        assertEquals(0, fixture.sourceReads()[0]);
+        assertEquals(1, fixture.sourceReads()[0]);
         assertEquals(1, fixture.enrichCalls()[0]);
         assertEquals(1, fixture.vectorAdds()[0]);
     }
@@ -431,6 +499,11 @@ class ChunkVectorServiceTest {
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
+        fixture.chunk.setOverlapContent("stale overlap");
+        fixture.chunk.setOverlapSourceChunkId(77L);
+        fixture.chunk.setOverlapTokenCount(9);
+        fixture.chunk.setIndexContent("stale index");
+        fixture.chunk.setLastError("stale error");
         fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
         fixture.chunk.setContent("mutated backing body");
         fixture.chunk.getSectionPath().set(0, "Mutated");
@@ -444,19 +517,68 @@ class ChunkVectorServiceTest {
     }
 
     @Test
-    void phase_three_snapshot_mismatch_rolls_back_without_activating_changed_row()
+    void batch_phase_three_snapshot_mismatch_compensates_without_stranding_state()
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
         fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
         fixture.chunk.setLockVersion(99);
+        fixture.chunk.setContent("concurrent batch edit");
         fixture.dispatched.get().run();
 
-        assertEquals(ChunkStatus.INDEXING.code(), fixture.chunk.getStatus());
-        assertTrue(fixture.transactionManager.rollbacks() >= 1);
-        assertEquals(1, fixture.transactionManager.commits());
+        assertEquals(ChunkStatus.DRAFT.code(), fixture.chunk.getStatus());
+        assertEquals("concurrent batch edit", fixture.chunk.getContent());
+        assertEquals("hash-1", fixture.chunk.getContentHash());
+        assertNull(fixture.chunk.getOverlapContent());
+        assertNull(fixture.chunk.getOverlapSourceChunkId());
+        assertEquals(0, fixture.chunk.getOverlapTokenCount());
+        assertNull(fixture.chunk.getIndexContent());
+        assertNull(fixture.chunk.getLastError());
+        assertEquals(PipelineState.FAILED.code(), fixture.processing.getPipelineState());
+        assertEquals(PipelineState.VECTORIZING.code(), fixture.processing.getFailedFromState());
+        assertEquals(1, fixture.transactionManager.rollbacks());
+        assertEquals(2, fixture.transactionManager.commits());
+        verify(fixture.gateway).delete(FIRST_PUBLIC_ID);
         verify(fixture.stateService, never()).transition(KNOWLEDGE_ID, FILE_ID,
                 PipelineState.VECTORIZING, PipelineState.COMPLETED, 5);
+    }
+
+    @Test
+    void single_phase_three_snapshot_mismatch_compensates_to_adjusting_without_losing_edits()
+            throws Exception {
+        TopologyFixture fixture = topologyFixture(false);
+
+        fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID);
+        fixture.chunk.setContent("concurrent single edit");
+        fixture.chunk.setContentHash("concurrent-single-hash");
+        fixture.dispatched.get().run();
+
+        assertEquals(ChunkStatus.DRAFT.code(), fixture.chunk.getStatus());
+        assertEquals("concurrent single edit", fixture.chunk.getContent());
+        assertEquals("concurrent-single-hash", fixture.chunk.getContentHash());
+        assertEquals(PipelineState.ADJUSTING.code(), fixture.processing.getPipelineState());
+        assertEquals(1, fixture.transactionManager.rollbacks());
+        assertEquals(2, fixture.transactionManager.commits());
+        verify(fixture.gateway).delete(FIRST_PUBLIC_ID);
+        verify(fixture.stateService, never()).transition(KNOWLEDGE_ID, FILE_ID,
+                PipelineState.VECTORIZING, PipelineState.COMPLETED, 4);
+    }
+
+    @Test
+    void compensation_leaves_non_indexing_target_untouched_but_marks_batch_failed()
+            throws Exception {
+        TopologyFixture fixture = topologyFixture(false);
+
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+        fixture.chunk.setStatus(ChunkStatus.ACTIVE.code());
+        fixture.chunk.setLockVersion(99);
+        fixture.chunk.setContent("concurrent active body");
+        fixture.dispatched.get().run();
+
+        assertEquals(ChunkStatus.ACTIVE.code(), fixture.chunk.getStatus());
+        assertEquals("concurrent active body", fixture.chunk.getContent());
+        assertEquals(PipelineState.FAILED.code(), fixture.processing.getPipelineState());
+        verify(fixture.gateway).delete(FIRST_PUBLIC_ID);
     }
 
     private TopologyFixture topologyFixture(boolean directExecution) throws Exception {
@@ -496,6 +618,7 @@ class ChunkVectorServiceTest {
         });
         when(chunkMapper.update(any(), any(Wrapper.class))).thenAnswer(invocation -> {
             DocumentChunk patch = invocation.getArgument(0);
+            UpdateWrapper<DocumentChunk> update = invocation.getArgument(1);
             if (patch.getStatus() != null) {
                 chunk.setStatus(patch.getStatus());
             }
@@ -514,6 +637,22 @@ class ChunkVectorServiceTest {
             if (patch.getLastError() != null) {
                 chunk.setLastError(patch.getLastError());
             }
+            String sqlSet = update.getSqlSet();
+            if (sqlSet != null && sqlSet.contains("overlap_content")) {
+                chunk.setOverlapContent(null);
+            }
+            if (sqlSet != null && sqlSet.contains("overlap_source_chunk_id")) {
+                chunk.setOverlapSourceChunkId(null);
+            }
+            if (sqlSet != null && sqlSet.contains("overlap_token_count")) {
+                chunk.setOverlapTokenCount(0);
+            }
+            if (sqlSet != null && sqlSet.contains("index_content")) {
+                chunk.setIndexContent(null);
+            }
+            if (sqlSet != null && sqlSet.contains("last_error")) {
+                chunk.setLastError(null);
+            }
             chunk.setLockVersion(chunk.getLockVersion() + 1);
             return 1;
         });
@@ -529,8 +668,25 @@ class ChunkVectorServiceTest {
                     return new FileProcessingService.Transition(KNOWLEDGE_ID, FILE_ID,
                             expected, target, lockVersion + 1, processing.getProgress(), null, null);
                 });
+        when(stateService.fail(anyLong(), anyLong(), any(), anyInt(), anyInt(), any()))
+                .thenAnswer(invocation -> {
+                    PipelineState expected = invocation.getArgument(2);
+                    int lockVersion = invocation.getArgument(3);
+                    String error = invocation.getArgument(5);
+                    assertEquals(PipelineState.VECTORIZING, expected);
+                    assertEquals(expected.code(), processing.getPipelineState());
+                    assertEquals(lockVersion, processing.getLockVersion());
+                    processing.setPipelineState(PipelineState.FAILED.code());
+                    processing.setLockVersion(lockVersion + 1);
+                    processing.setFailedFromState(expected.code());
+                    processing.setLastError(error);
+                    return new FileProcessingService.Transition(KNOWLEDGE_ID, FILE_ID,
+                            expected, PipelineState.FAILED, lockVersion + 1,
+                            processing.getProgress(), null, null);
+                });
         when(enricher.enrich(any(), any(), anyInt())).thenAnswer(invocation -> {
             assertFalse(transactionManager.active());
+            assertEquals(PipelineState.VECTORIZING.code(), processing.getPipelineState());
             enrichCalls[0]++;
             List<DocumentChunk> detached = invocation.getArgument(0);
             DocumentChunk captured = detached.get(0);
@@ -567,7 +723,7 @@ class ChunkVectorServiceTest {
                             .digest(Files.readAllBytes(path)));
                 });
         return new TopologyFixture(service, processingMapper, chunkMapper, stateService,
-                processing, file, chunk, transactionManager, dispatched, enrichedBody,
+                gateway, processing, file, chunk, transactionManager, dispatched, enrichedBody,
                 enrichedSectionPath, addedDocument, sourceReads, enrichCalls, vectorAdds);
     }
 
@@ -699,6 +855,7 @@ class ChunkVectorServiceTest {
             FileProcessingMapper processingMapper,
             DocumentChunkMapper chunkMapper,
             FileProcessingService stateService,
+            ChunkVectorGateway gateway,
             FileProcessing processing,
             File file,
             DocumentChunk chunk,
