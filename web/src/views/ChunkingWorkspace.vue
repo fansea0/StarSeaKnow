@@ -53,7 +53,7 @@
         </p>
 
         <section
-          v-if="isCompleted"
+          v-if="completionReady"
           class="completion-banner"
           data-testid="vectorization-complete"
           role="status"
@@ -67,7 +67,6 @@
           </div>
           <div class="completion-banner__actions">
             <el-button data-testid="back-to-knowledge" @click="backToKnowledge">返回知识库</el-button>
-            <el-button type="primary" plain data-testid="rebuild-index" @click="openConfirmDialog">重新建立索引</el-button>
           </div>
         </section>
 
@@ -100,7 +99,7 @@
       :server-error="confirmError"
       :server-conflict="confirmConflict"
       :reloading="confirmReloading"
-      :blocked="!canSubmitVectorization || confirmConflict"
+      :blocked="!canConfirm || confirmConflict"
       @confirm="submitVectorization"
       @reload="reloadConfirmState"
     />
@@ -215,17 +214,15 @@ export default {
     routeKey() { return `${String(this.knowledgeId)}:${String(this.fileId)}` },
     isProcessing() { return processingStates.has(Number(this.processing.state)) },
     isCompleted() { return Number(this.processing.state) === 6 },
+    completionReady() {
+      return this.processingLoaded && !this.processingLoading && !this.chunksLoading
+        && this.isCompleted && Boolean(this.chunksLoadedKey) && this.chunks.length > 0
+    },
     canPreview() {
       return this.processingLoaded && !this.processingLoading && previewStates.has(Number(this.processing.state))
     },
     canConfirm() {
       return this.processingLoaded && !this.processingLoading && confirmStates.has(Number(this.processing.state)) && this.chunks.length > 0
-    },
-    canRebuild() {
-      return this.processingLoaded && !this.processingLoading && this.isCompleted && this.chunks.length > 0
-    },
-    canSubmitVectorization() {
-      return this.canConfirm || this.canRebuild
     },
     canRetryPreview() {
       return this.processingLoaded && !this.processingLoading && this.showRetryPreview && this.retainedChunksLoaded
@@ -482,13 +479,13 @@ export default {
       }
     },
     openConfirmDialog() {
-      if (!this.canSubmitVectorization) return
+      if (!this.canConfirm) return
       this.confirmError = ''
       this.confirmConflict = false
       this.confirmDialogVisible = true
     },
     async submitVectorization(contextPolicy, isRetry = false) {
-      if (isRetry ? !this.canRetryVector : (!this.canSubmitVectorization || this.confirmConflict || this.confirmReloading)) return
+      if (isRetry ? !this.canRetryVector : (!this.canConfirm || this.confirmConflict || this.confirmReloading)) return
       const context = this.currentContext()
       this.confirmSubmitting = true
       this.submissionError = ''

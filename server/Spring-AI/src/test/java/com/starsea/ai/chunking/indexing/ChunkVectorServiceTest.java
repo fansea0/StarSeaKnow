@@ -215,34 +215,20 @@ class ChunkVectorServiceTest {
     }
 
     @Test
-    void completed_file_can_rebuild_all_chunks_through_adjusting_before_confirmation() throws Exception {
+    void completed_file_rejects_batch_confirmation_without_mutating_existing_index() throws Exception {
         DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.ACTIVE, 2, "first body");
         DocumentChunk second = chunk(2L, SECOND_PUBLIC_ID, ChunkStatus.ACTIVE, 4, "second body");
         Fixture fixture = fixture(PipelineState.COMPLETED, 7, sourceHash(), List.of(first, second));
-        when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.COMPLETED,
-                PipelineState.ADJUSTING, 7)).thenReturn(new FileProcessingService.Transition(
-                KNOWLEDGE_ID, FILE_ID, PipelineState.COMPLETED, PipelineState.ADJUSTING,
-                8, 100, null, null));
-        when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.ADJUSTING,
-                PipelineState.CONFIRMED, 8)).thenReturn(new FileProcessingService.Transition(
-                KNOWLEDGE_ID, FILE_ID, PipelineState.ADJUSTING, PipelineState.CONFIRMED,
-                9, 100, null, null));
-        when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.CONFIRMED,
-                PipelineState.VECTORIZING, 9)).thenReturn(new FileProcessingService.Transition(
-                KNOWLEDGE_ID, FILE_ID, PipelineState.CONFIRMED, PipelineState.VECTORIZING,
-                10, 0, null, null));
 
-        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(false, 40, 7));
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> fixture.service.confirm(KNOWLEDGE_ID, FILE_ID,
+                        new ConfirmRequest(false, 40, 7)));
 
-        var orderedStates = inOrder(fixture.stateService);
-        orderedStates.verify(fixture.stateService).transition(KNOWLEDGE_ID, FILE_ID,
-                PipelineState.COMPLETED, PipelineState.ADJUSTING, 7);
-        orderedStates.verify(fixture.stateService).transition(KNOWLEDGE_ID, FILE_ID,
-                PipelineState.ADJUSTING, PipelineState.CONFIRMED, 8);
-        orderedStates.verify(fixture.stateService).transition(KNOWLEDGE_ID, FILE_ID,
-                PipelineState.CONFIRMED, PipelineState.VECTORIZING, 9);
-        verify(fixture.chunkMapper, times(2)).update(any(), any(Wrapper.class));
-        assertTrue(fixture.dispatched.get() != null);
+        assertEquals(409, failure.status().value());
+        verify(fixture.stateService, never()).transition(
+                anyLong(), anyLong(), any(), any(), anyInt());
+        verify(fixture.chunkMapper, never()).update(any(), any(Wrapper.class));
+        verify(fixture.worker, never()).vectorizeBatch(any());
     }
 
     @Test

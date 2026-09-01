@@ -586,7 +586,7 @@ describe('ChunkingWorkspace', () => {
     expect(reindexChunk).not.toHaveBeenCalled()
   })
 
-  it('COMPLETED shows an indexed result with navigation and rebuild actions', async () => {
+  it('COMPLETED shows an indexed result with a navigation action', async () => {
     getProcessing.mockResolvedValue(processing(6))
     getChunks.mockResolvedValue({ data: [draftChunk] })
     const router = { push: vi.fn() }
@@ -597,30 +597,21 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="vectorization-complete"]').text()).toContain('索引建立完成')
     expect(wrapper.get('[data-testid="vectorization-complete"]').text()).toContain('1 个分块')
-    expect(wrapper.find('[data-testid="rebuild-index"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(true)
 
     await wrapper.get('[data-testid="back-to-knowledge"]').trigger('click')
     expect(router.push).toHaveBeenCalledWith({ name: 'KnowledgeDetail', params: { id: '11' } })
   })
 
-  it('COMPLETED can rebuild all existing chunks through the confirmation flow', async () => {
-    getProcessing.mockResolvedValue(processing(6, { lockVersion: 9 }))
-    getChunks.mockResolvedValue({ data: [{ ...draftChunk, status: 2, isModified: false }] })
+  it('does not claim completion or expose actions when completed chunks fail to load', async () => {
+    getProcessing.mockResolvedValue(processing(6))
+    getChunks.mockRejectedValue({ response: { status: 503, data: { msg: '分块读取失败' } } })
     const wrapper = mountWorkspace()
     await flushPromises()
 
-    await wrapper.get('[data-testid="rebuild-index"]').trigger('click')
-    await flushPromises()
-    expect(document.body.textContent).toContain('上下文补充')
-
-    document.body.querySelector('[data-testid="confirm-vectorization"]').click()
-    await flushPromises()
-    expect(confirmVectorization).toHaveBeenCalledWith('11', '22', {
-      overlapEnabled: false,
-      overlapTokens: 40,
-      lockVersion: 9,
-    })
+    expect(wrapper.text()).toContain('分块读取失败')
+    expect(wrapper.find('[data-testid="vectorization-complete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="back-to-knowledge"]').exists()).toBe(false)
   })
 
   it('ADJUSTING exposes per-chunk reindex for an edited DRAFT', async () => {
