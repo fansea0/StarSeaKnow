@@ -58,6 +58,11 @@ chunking:
   tokenizer:
     resource: tokenizer/bge-base-zh-v1.5-tokenizer.json
     sha256: 7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839
+  executor:
+    core-size: 2
+    max-size: 4
+    queue-capacity: 64
+    thread-name-prefix: chunking-
 
 jwt:
   secret: dev-secret-please-change-32bytes-minimum-length-required

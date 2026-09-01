@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -14,12 +15,28 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /** Installs the verified BGE tokenizer used by every token-budget calculation. */
 @Configuration
 public class ChunkingConfiguration {
 
     static final String TOKENIZER_ID = "BAAI/bge-base-zh-v1.5@7dfbf196";
+
+    @Bean(name = "chunkingTaskExecutor")
+    public ThreadPoolTaskExecutor chunkingTaskExecutor(
+            @Value("${chunking.executor.core-size}") int coreSize,
+            @Value("${chunking.executor.max-size}") int maxSize,
+            @Value("${chunking.executor.queue-capacity}") int queueCapacity,
+            @Value("${chunking.executor.thread-name-prefix}") String threadNamePrefix) {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(coreSize);
+        executor.setMaxPoolSize(maxSize);
+        executor.setQueueCapacity(queueCapacity);
+        executor.setThreadNamePrefix(threadNamePrefix);
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        return executor;
+    }
 
     @Bean(destroyMethod = "close")
     public TokenCounter bgeTokenCounter(

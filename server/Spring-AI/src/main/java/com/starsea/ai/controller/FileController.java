@@ -26,12 +26,6 @@ public class FileController {
     private final VectorStore vectorStore;
 
     @RequireRole("tenant_admin")
-    @PostMapping("/upload")
-    public AjaxResult uploadFile(MultipartFile file){
-        return AjaxResult.success(fileService.uploadDocument(file));
-    }
-
-    @RequireRole("tenant_admin")
     @PostMapping("/uploadToKnow/{knowledgeId}")
     public AjaxResult uploadFileToKnowledge(MultipartFile file, @PathVariable Long knowledgeId){
         return AjaxResult.success(fileService.uploadToKnowledge(file, knowledgeId));

@@ -4,11 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.starsea.ai.auth.RequireLogin;
 import com.starsea.ai.auth.RequireRole;
 import com.starsea.ai.domain.AgentKnowledge;
-import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.Knowledge;
 import com.starsea.ai.domain.KnowledgeFile;
 import com.starsea.ai.domain.dto.AjaxResult;
-import com.starsea.ai.domain.vo.FileVo;
 import com.starsea.ai.domain.vo.KnowledgeVo;
 import com.starsea.ai.service.AgentKnowledgeService;
 import com.starsea.ai.service.FileService;
@@ -43,14 +41,7 @@ public class KnowledgeController {
 
     @GetMapping("/file/list")
     public AjaxResult fileList(Long knowledgeId) {
-        List<KnowledgeFile> knowledgeFiles = knowledgeFileService.list(new LambdaQueryWrapper<KnowledgeFile>().eq(KnowledgeFile::getKnowledgeId, knowledgeId));
-        List<FileVo> files = knowledgeFiles.stream().map(k -> {
-            FileVo fileVo = new FileVo();
-            File file = fileService.getById(k.getFileId());
-            BeanUtils.copyProperties(file,fileVo, FileVo.class);
-            return fileVo;
-        }).toList();
-        return AjaxResult.success(files);
+        return AjaxResult.success(fileService.listByKnowledgeId(knowledgeId));
     }
 
     @GetMapping("/file/count")

@@ -3,6 +3,7 @@ package com.starsea.ai.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.starsea.ai.domain.File;
+import com.starsea.ai.domain.vo.FileVo;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -19,10 +20,12 @@ import java.util.Set;
 public interface FileMapper extends BaseMapper<File> {
     File selectByFileId(Long id);
 
+    List<FileVo> selectByKnowledgeId(@Param("tenantId") Long tenantId,
+                                     @Param("knowledgeId") Long knowledgeId);
+
     List<File> selectEnabledByKnowledgeIds(@Param("tenantId") Long tenantId,
                                            @Param("knowledgeIds") Set<Long> knowledgeIds);
 
 }
-
 
 

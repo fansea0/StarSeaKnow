@@ -17,6 +17,9 @@ public class FileVo {
     private Long size;
     private Integer status;
     private String type;
+    private Integer pipelineState;
+    private Integer progress;
+    private String processingError;
     private Date createTime;
     private Date updateTime;
 }
