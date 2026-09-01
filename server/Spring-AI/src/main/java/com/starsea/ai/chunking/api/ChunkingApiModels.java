@@ -5,6 +5,7 @@ import com.starsea.ai.chunking.registry.ChunkStrategyDescriptor;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 public final class ChunkingApiModels {
 
@@ -13,6 +14,18 @@ public final class ChunkingApiModels {
 
     public record PreviewRequest(String strategyCode, ChunkPolicy strategyConfig,
                                  boolean replaceEditedDrafts, int lockVersion) {
+    }
+
+    public record EditChunkRequest(String content, Integer lockVersion) {
+    }
+
+    public record ChunkResponse(UUID publicId, int position, String content,
+                                List<String> sectionPath, Map<String, Object> sourceLocator,
+                                int tokenCount, int status, boolean isModified, int lockVersion) {
+        public ChunkResponse {
+            sectionPath = sectionPath == null ? List.of() : List.copyOf(sectionPath);
+            sourceLocator = sourceLocator == null ? Map.of() : Map.copyOf(sourceLocator);
+        }
     }
 
     public record StrategyResponse(String fileType, List<ChunkStrategyDescriptor> strategies) {

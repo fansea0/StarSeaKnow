@@ -1,0 +1,116 @@
+package com.starsea.ai.chunking.api;
+
+import com.starsea.ai.chunking.api.ChunkingApiModels.ChunkResponse;
+import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
+import com.starsea.ai.chunking.preview.ChunkCommandService;
+import com.starsea.ai.chunking.preview.ChunkPreviewService;
+import com.starsea.ai.config.GlobalExceptionHandler;
+import org.junit.jupiter.api.Test;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.http.MediaType;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+class ChunkVisibilityTest {
+
+    @Test
+    void chunk_listing_serializes_only_the_nine_user_visible_fields() throws Exception {
+        ChunkPreviewService previewService = mock(ChunkPreviewService.class);
+        ChunkCommandService commandService = mock(ChunkCommandService.class);
+        UUID publicId = UUID.fromString("10000000-0000-0000-0000-000000000021");
+        when(commandService.list(10L, 20L)).thenReturn(List.of(new ChunkResponse(
+                publicId, 3, "Visible body", List.of("Guide", "Install"),
+                Map.of("startLine", 7, "endLine", 11), 4, 0, true, 2)));
+        MockMvc mockMvc = MockMvcBuilders
+                .standaloneSetup(new ChunkingController(previewService, commandService))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mockMvc.perform(get("/knowledge/{knowledgeId}/files/{fileId}/chunks", 10L, 20L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].publicId").value(publicId.toString()))
+                .andExpect(jsonPath("$[0].position").value(3))
+                .andExpect(jsonPath("$[0].content").value("Visible body"))
+                .andExpect(jsonPath("$[0].sectionPath[1]").value("Install"))
+                .andExpect(jsonPath("$[0].sourceLocator.startLine").value(7))
+                .andExpect(jsonPath("$[0].tokenCount").value(4))
+                .andExpect(jsonPath("$[0].status").value(0))
+                .andExpect(jsonPath("$[0].isModified").value(true))
+                .andExpect(jsonPath("$[0].lockVersion").value(2))
+                .andExpect(jsonPath("$[0].overlapContent").doesNotExist())
+                .andExpect(jsonPath("$[0].indexContent").doesNotExist())
+                .andExpect(jsonPath("$[0].overlapSourceChunkId").doesNotExist())
+                .andExpect(jsonPath("$[0].boundaryReason").doesNotExist())
+                .andExpect(jsonPath("$[0].id").doesNotExist())
+                .andExpect(jsonPath("$[0].tenantId").doesNotExist())
+                .andExpect(jsonPath("$[0].knowledgeId").doesNotExist())
+                .andExpect(jsonPath("$[0].fileId").doesNotExist());
+    }
+
+    @Test
+    void patch_and_delete_routes_forward_the_stable_public_id_and_lock_version() throws Exception {
+        ChunkPreviewService previewService = mock(ChunkPreviewService.class);
+        ChunkCommandService commandService = mock(ChunkCommandService.class);
+        UUID publicId = UUID.fromString("10000000-0000-0000-0000-000000000021");
+        ChunkResponse edited = new ChunkResponse(publicId, 0, "Edited", List.of(), Map.of(),
+                2, 0, true, 5);
+        when(commandService.edit(10L, 20L, publicId, new EditChunkRequest("Edited", 4)))
+                .thenReturn(edited);
+        MockMvc mockMvc = MockMvcBuilders
+                .standaloneSetup(new ChunkingController(previewService, commandService))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mockMvc.perform(patch("/knowledge/{knowledgeId}/files/{fileId}/chunks/{chunkPublicId}",
+                        10L, 20L, publicId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"Edited\",\"lockVersion\":4}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lockVersion").value(5));
+        mockMvc.perform(delete("/knowledge/{knowledgeId}/files/{fileId}/chunks/{chunkPublicId}",
+                        10L, 20L, publicId).param("lockVersion", "5"))
+                .andExpect(status().isNoContent());
+
+        verify(commandService).edit(10L, 20L, publicId, new EditChunkRequest("Edited", 4));
+        verify(commandService).delete(10L, 20L, publicId, 5);
+    }
+
+    @Test
+    void token_budget_error_exposes_separate_counts_in_the_422_response() throws Exception {
+        ChunkPreviewService previewService = mock(ChunkPreviewService.class);
+        ChunkCommandService commandService = mock(ChunkCommandService.class);
+        UUID publicId = UUID.fromString("10000000-0000-0000-0000-000000000021");
+        when(commandService.edit(eq(10L), eq(20L), eq(publicId),
+                eq(new EditChunkRequest("Too long", 4))))
+                .thenThrow(ChunkingException.unprocessable("Edited chunk exceeds the token budget", Map.of(
+                        "titleTokenCount", 10, "bodyTokenCount", 510,
+                        "totalTokenCount", 520, "maxTokens", 512)));
+        MockMvc mockMvc = MockMvcBuilders
+                .standaloneSetup(new ChunkingController(previewService, commandService))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mockMvc.perform(patch("/knowledge/{knowledgeId}/files/{fileId}/chunks/{chunkPublicId}",
+                        10L, 20L, publicId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"Too long\",\"lockVersion\":4}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.data.titleTokenCount").value(10))
+                .andExpect(jsonPath("$.data.bodyTokenCount").value(510))
+                .andExpect(jsonPath("$.data.totalTokenCount").value(520))
+                .andExpect(jsonPath("$.data.maxTokens").value(512));
+    }
+}

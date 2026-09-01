@@ -4,6 +4,7 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.preview.ChunkPreviewService;
+import com.starsea.ai.chunking.preview.ChunkCommandService;
 import com.starsea.ai.chunking.preview.ChunkPreviewWorker;
 import com.starsea.ai.chunking.processing.ChunkTaskDispatcher;
 import com.starsea.ai.chunking.processing.FileProcessingService;
@@ -92,7 +93,8 @@ class ChunkingControllerTest {
                 new DocumentStructureParserRegistry(List.of(markdownParser)),
                 dispatcher,
                 worker);
-        mockMvc = MockMvcBuilders.standaloneSetup(new ChunkingController(service))
+        mockMvc = MockMvcBuilders.standaloneSetup(new ChunkingController(
+                        service, mock(ChunkCommandService.class)))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
 

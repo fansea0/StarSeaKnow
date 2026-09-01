@@ -65,7 +65,10 @@ public class GlobalExceptionHandler
     @ExceptionHandler(ChunkingException.class)
     public ResponseEntity<AjaxResult> handleChunking(ChunkingException exception)
     {
-        return ResponseEntity.status(exception.status()).body(AjaxResult.error(exception.getMessage()));
+        AjaxResult result = exception.details().isEmpty()
+                ? AjaxResult.error(exception.getMessage())
+                : AjaxResult.error(exception.getMessage(), exception.details());
+        return ResponseEntity.status(exception.status()).body(result);
     }
 
     @ExceptionHandler(ResponseStatusException.class)

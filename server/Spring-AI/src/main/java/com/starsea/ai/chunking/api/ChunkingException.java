@@ -2,17 +2,29 @@ package com.starsea.ai.chunking.api;
 
 import org.springframework.http.HttpStatus;
 
+import java.util.Map;
+
 public final class ChunkingException extends RuntimeException {
 
     private final HttpStatus status;
+    private final Map<String, Object> details;
 
     private ChunkingException(HttpStatus status, String message) {
+        this(status, message, Map.of());
+    }
+
+    private ChunkingException(HttpStatus status, String message, Map<String, Object> details) {
         super(message);
         this.status = status;
+        this.details = details == null ? Map.of() : Map.copyOf(details);
     }
 
     public HttpStatus status() {
         return status;
+    }
+
+    public Map<String, Object> details() {
+        return details;
     }
 
     public static ChunkingException notFound(String message) {
@@ -25,5 +37,9 @@ public final class ChunkingException extends RuntimeException {
 
     public static ChunkingException unprocessable(String message) {
         return new ChunkingException(HttpStatus.UNPROCESSABLE_ENTITY, message);
+    }
+
+    public static ChunkingException unprocessable(String message, Map<String, Object> details) {
+        return new ChunkingException(HttpStatus.UNPROCESSABLE_ENTITY, message, details);
     }
 }
