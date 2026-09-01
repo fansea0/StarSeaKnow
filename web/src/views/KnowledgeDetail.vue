@@ -325,6 +325,7 @@ export default {
       statusLoadingId: null,
       saveLoading: false,
       requestGeneration: 0,
+      uploadContexts: new WeakMap(),
     }
   },
   computed: {
@@ -404,9 +405,14 @@ export default {
       }
     },
     beforeUpload(file) {
+      this.uploadContexts.set(file, this.currentRequestContext())
       return true
     },
     async onUploadSuccess(response, uploadFile) {
+      const rawFile = uploadFile?.raw
+      const context = rawFile ? this.uploadContexts.get(rawFile) : null
+      if (rawFile) this.uploadContexts.delete(rawFile)
+      if (!context || !this.isCurrentRequest(context)) return
       const fileId = this.normalizeUploadFileId(response?.data)
       if (!this.isUploadSuccessCode(response?.code) || fileId === null) {
         this.$message.error(response?.msg || '上传失败')
@@ -414,9 +420,10 @@ export default {
       }
 
       this.$message.success('上传成功')
-      await this.fetchDocList()
+      await this.fetchDocList(context)
+      if (!this.isCurrentRequest(context)) return
       if (this.isMarkdown(uploadFile)) {
-        this.openChunkingWorkspace(fileId)
+        this.openChunkingWorkspace(fileId, context.knowledgeId)
       }
     },
     onUploadError() {
@@ -429,10 +436,10 @@ export default {
       }
       this.$message.info('当前仅支持 Markdown 智能分块，其他文件类型暂不支持。')
     },
-    openChunkingWorkspace(fileId) {
+    openChunkingWorkspace(fileId, knowledgeId = this.knowledgeId) {
       return this.$router.push({
         name: 'ChunkingWorkspace',
-        params: { knowledgeId: String(this.knowledgeId), fileId: String(fileId) },
+        params: { knowledgeId: String(knowledgeId), fileId: String(fileId) },
       })
     },
     isMarkdown(file) {

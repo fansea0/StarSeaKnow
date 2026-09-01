@@ -137,7 +137,7 @@ describe('KnowledgeDetail', () => {
     const wrapper = mountDetail()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
 
-    await wrapper.vm.onUploadSuccess({ code: 200, data: 23 }, { name: 'new-guide.md' })
+    await completeUpload(wrapper, { code: 200, data: 23 })
     await flushPromises()
 
     expect(refresh).toHaveBeenCalledTimes(1)
@@ -145,6 +145,32 @@ describe('KnowledgeDetail', () => {
       name: 'ChunkingWorkspace',
       params: { knowledgeId: '11', fileId: '23' },
     })
+  })
+
+  it('ignores an upload from knowledge A when its success arrives after navigating to knowledge B', async () => {
+    const route = reactive({ params: { id: '11' } })
+    const wrapper = mountDetail(route)
+    await flushPromises()
+    const rawFile = { name: 'late-guide.md' }
+    wrapper.vm.beforeUpload(rawFile)
+
+    route.params.id = '12'
+    await nextTick()
+    await flushPromises()
+    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
+    wrapper.vm.$router.push.mockClear()
+    wrapper.vm.$message.success.mockClear()
+
+    await wrapper.vm.onUploadSuccess(
+      { code: 200, data: 23 },
+      { name: 'late-guide.md', raw: rawFile },
+    )
+    await flushPromises()
+
+    expect(refresh).not.toHaveBeenCalled()
+    expect(wrapper.vm.$router.push).not.toHaveBeenCalled()
+    expect(wrapper.vm.$message.success).not.toHaveBeenCalled()
+    expect(wrapper.vm.knowledgeId).toBe(12)
   })
 
   it.each([
@@ -192,7 +218,7 @@ describe('KnowledgeDetail', () => {
     const wrapper = mountDetail()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
 
-    await wrapper.vm.onUploadSuccess(response, { name: 'new-guide.md' })
+    await completeUpload(wrapper, response)
 
     expect(refresh).toHaveBeenCalledTimes(succeeds ? 1 : 0)
     expect(wrapper.vm.$router.push).toHaveBeenCalledTimes(succeeds ? 1 : 0)
@@ -213,7 +239,7 @@ describe('KnowledgeDetail', () => {
       resolveRefresh = resolve
     }))
 
-    const upload = wrapper.vm.onUploadSuccess({ code: 200, data: 42 }, { name: 'new-guide.md' })
+    const upload = completeUpload(wrapper, { code: 200, data: 42 })
 
     expect(refresh).toHaveBeenCalledTimes(1)
     expect(wrapper.vm.$router.push).not.toHaveBeenCalled()
@@ -228,7 +254,7 @@ describe('KnowledgeDetail', () => {
     const wrapper = mountDetail()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
 
-    await wrapper.vm.onUploadSuccess({ code: 500, msg: '文件解析失败', data: 23 }, { name: 'new-guide.md' })
+    await completeUpload(wrapper, { code: 500, msg: '文件解析失败', data: 23 })
 
     expect(wrapper.vm.$message.error).toHaveBeenCalledWith('文件解析失败')
     expect(wrapper.vm.$message.success).not.toHaveBeenCalled()
@@ -240,7 +266,7 @@ describe('KnowledgeDetail', () => {
     const wrapper = mountDetail()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
 
-    await wrapper.vm.onUploadSuccess({ code: 200, data: null }, { name: 'new-guide.md' })
+    await completeUpload(wrapper, { code: 200, data: null })
 
     expect(wrapper.vm.$message.error).toHaveBeenCalledWith('上传失败')
     expect(wrapper.vm.$message.success).not.toHaveBeenCalled()
@@ -253,4 +279,10 @@ function deferred() {
   let resolve
   const promise = new Promise(res => { resolve = res })
   return { promise, resolve }
+}
+
+function completeUpload(wrapper, response, name = 'new-guide.md') {
+  const raw = { name }
+  wrapper.vm.beforeUpload(raw)
+  return wrapper.vm.onUploadSuccess(response, { name, raw })
 }
