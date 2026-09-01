@@ -32,6 +32,21 @@
         <result property="sourceFileType" column="source_file_type" jdbcType="VARCHAR"/>
     </resultMap>
 
+    <update id="restoreIndexingByFile">
+        UPDATE document_chunk
+        SET status = 0,
+            overlap_content = NULL,
+            overlap_source_chunk_id = NULL,
+            overlap_token_count = 0,
+            index_content = NULL,
+            last_error = 'Vectorization interrupted by application restart',
+            lock_version = lock_version + 1
+        WHERE tenant_id = #{tenantId}
+          AND knowledge_id = #{knowledgeId}
+          AND file_id = #{fileId}
+          AND status = 1
+    </update>
+
     <select id="findActiveByPublicIds" resultMap="DocumentChunkResultMap">
         SELECT dc.*,
                f.public_id AS source_document_public_id,

@@ -22,6 +22,14 @@
         <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
     </resultMap>
 
+    <select id="findTimedOutAsync" resultMap="FileProcessingResultMap">
+        SELECT *
+        FROM file_processing
+        WHERE pipeline_state IN (1, 5)
+          AND update_time &lt; #{cutoff}
+        ORDER BY update_time, file_id
+    </select>
+
     <select id="findScopedForUpdate" resultMap="FileProcessingResultMap">
         SELECT *
         FROM file_processing
@@ -37,7 +45,8 @@
             progress = #{progress},
             last_error = #{lastError},
             failed_from_state = #{failedFromState},
-            lock_version = lock_version + 1
+            lock_version = lock_version + 1,
+            update_time = CURRENT_TIMESTAMP
         WHERE tenant_id = #{tenantId}
           AND knowledge_id = #{knowledgeId}
           AND file_id = #{fileId}

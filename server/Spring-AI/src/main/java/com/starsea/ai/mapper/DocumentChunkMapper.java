@@ -12,6 +12,10 @@ import java.util.UUID;
 @Mapper
 public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
 
+    int restoreIndexingByFile(@Param("fileId") long fileId,
+                              @Param("tenantId") long tenantId,
+                              @Param("knowledgeId") long knowledgeId);
+
     List<DocumentChunk> findActiveByPublicIds(@Param("tenantId") long tenantId,
                                               @Param("knowledgeIds") Set<Long> knowledgeIds,
                                               @Param("publicIds") List<UUID> publicIds);

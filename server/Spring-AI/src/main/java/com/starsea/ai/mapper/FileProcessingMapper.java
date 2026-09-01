@@ -5,8 +5,13 @@ import com.starsea.ai.domain.FileProcessing;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.OffsetDateTime;
+import java.util.List;
+
 @Mapper
 public interface FileProcessingMapper extends BaseMapper<FileProcessing> {
+
+    List<FileProcessing> findTimedOutAsync(@Param("cutoff") OffsetDateTime cutoff);
 
     FileProcessing findScopedForUpdate(@Param("fileId") long fileId,
                                        @Param("tenantId") long tenantId,
