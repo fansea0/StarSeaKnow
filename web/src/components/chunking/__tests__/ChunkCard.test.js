@@ -62,6 +62,7 @@ describe('ChunkCard', () => {
     expect(wrapper.find('[data-testid="section-path"] input').exists()).toBe(false)
     expect(wrapper.find('textarea').exists()).toBe(false)
     expect(wrapper.get('[data-testid="chunk-body"]').text()).toBe('原始正文')
+    expect(wrapper.text()).toContain('正文 18 Token')
 
     await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
 

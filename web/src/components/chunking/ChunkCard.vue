@@ -40,7 +40,7 @@
 
     <footer class="chunk-card__footer">
       <div class="chunk-metadata">
-        <span>{{ localChunk.tokenCount }} Token</span>
+        <span>正文 {{ localChunk.tokenCount }} Token</span>
         <span v-if="saveStatus" data-testid="save-status" aria-live="polite">{{ saveStatus }}</span>
       </div>
       <div class="chunk-actions">

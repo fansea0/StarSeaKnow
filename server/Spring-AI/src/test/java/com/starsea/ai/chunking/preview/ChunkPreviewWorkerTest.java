@@ -53,6 +53,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -97,6 +98,9 @@ class ChunkPreviewWorkerTest {
         when(processingMapper.selectById(20L)).thenReturn(processing());
         TokenCounter tokenCounter = mock(TokenCounter.class);
         when(tokenCounter.id()).thenReturn("BAAI/bge-base-zh-v1.5@test-sha");
+        when(tokenCounter.count(anyString())).thenAnswer(invocation ->
+                ((String) invocation.getArgument(0)).codePointCount(0,
+                        ((String) invocation.getArgument(0)).length()));
         worker = new ChunkPreviewWorker(
                 fileMapper,
                 processingMapper,
@@ -133,7 +137,28 @@ class ChunkPreviewWorkerTest {
                         "targetTokens", 400,
                         "maxTokens", 512,
                         "tokenizer", "BAAI/bge-base-zh-v1.5@test-sha")),
-                eq(List.of(draft)));
+                eq(List.of(draft("Body", 4))));
+    }
+
+    @Test
+    void rejects_a_malicious_planner_that_underreports_title_and_body_tokens() {
+        FileResource resource = new FileResource(1L, 10L, 20L, null, "source.md", "md", source);
+        ParsedStructure structure = new ParsedStructure(resource, List.of());
+        String oversized = "x".repeat(510);
+        ChunkDraft dishonest = new ChunkDraft(
+                List.of("Title"), oversized,
+                new SourceLocator("markdown", List.of("b1"), 0, oversized.length(),
+                        1, 1, null, null, List.of()),
+                1, Map.of());
+        when(parser.parse(any(FileResource.class))).thenReturn(structure);
+        when(planner.plan(structure, new ChunkPolicy(100, 400, 512)))
+                .thenReturn(List.of(dishonest));
+
+        worker.generate(job());
+
+        verify(persistence, never()).replace(any(), any(), any(), any(), any());
+        verify(processingService).fail(eq(10L), eq(20L), eq(PipelineState.CHUNKING),
+                eq(1), eq(0), org.mockito.ArgumentMatchers.contains("token budget"));
     }
 
     @Test

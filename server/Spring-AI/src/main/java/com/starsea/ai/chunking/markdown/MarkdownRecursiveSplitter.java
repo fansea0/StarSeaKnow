@@ -42,11 +42,131 @@ public final class MarkdownRecursiveSplitter {
             parts = splitGuidedContainer(unit, structuralBlock, maxTokens);
         }
 
-        SourceLocator locator = sourceLocator(unit.blocks());
-        return parts.stream().filter(part -> !part.isBlank())
-                .map(part -> new SplitPart(part, locator, true,
-                        structuralBlock.type() == BlockType.PARAGRAPH ? "SENTENCE_END" : "CONTAINER_END"))
-                .toList();
+        List<String> nonBlankParts = parts.stream().filter(part -> !part.isBlank()).toList();
+        List<SourceLocator> locators = projectSourceLocators(
+                unit, structuralBlock.type(), content, nonBlankParts);
+        List<SplitPart> result = new ArrayList<>(nonBlankParts.size());
+        for (int index = 0; index < nonBlankParts.size(); index++) {
+            result.add(new SplitPart(nonBlankParts.get(index), locators.get(index), true,
+                    structuralBlock.type() == BlockType.PARAGRAPH
+                            ? "SENTENCE_END" : "CONTAINER_END"));
+        }
+        return List.copyOf(result);
+    }
+
+    private List<SourceLocator> projectSourceLocators(SemanticUnit unit, BlockType type,
+                                                       String sourceText, List<String> parts) {
+        SourceLocator whole = sourceLocator(unit.blocks());
+        if (parts.size() <= 1 || whole.startOffset() == null || whole.startLine() == null) {
+            return java.util.Collections.nCopies(parts.size(), whole);
+        }
+        NormalizedText normalizedSource = normalizeLineEndings(sourceText);
+        List<SourceLocator> result = new ArrayList<>(parts.size());
+        int cursor = 0;
+        for (int index = 0; index < parts.size(); index++) {
+            String normalizedPart = normalizeLineEndings(parts.get(index)).text();
+            String owned = ownedSourceText(type, normalizedSource.text(), normalizedPart,
+                    index, parts.size());
+            int start = owned.isEmpty() ? -1 : normalizedSource.text().indexOf(owned, cursor);
+            if (start < 0) {
+                return java.util.Collections.nCopies(parts.size(), whole);
+            }
+            int end = start + owned.length();
+            result.add(project(whole, sourceText,
+                    normalizedSource.boundaries().get(start),
+                    normalizedSource.boundaries().get(end)));
+            cursor = end;
+        }
+        return List.copyOf(result);
+    }
+
+    private NormalizedText normalizeLineEndings(String value) {
+        StringBuilder normalized = new StringBuilder(value.length());
+        List<Integer> boundaries = new ArrayList<>();
+        boundaries.add(0);
+        int index = 0;
+        while (index < value.length()) {
+            char current = value.charAt(index);
+            if (current == '\r') {
+                normalized.append('\n');
+                index += index + 1 < value.length() && value.charAt(index + 1) == '\n' ? 2 : 1;
+            } else {
+                normalized.append(current);
+                index++;
+            }
+            boundaries.add(index);
+        }
+        return new NormalizedText(normalized.toString(), List.copyOf(boundaries));
+    }
+
+    private String ownedSourceText(BlockType type, String sourceText, String renderedPart,
+                                   int index, int partCount) {
+        if (type == BlockType.TABLE) {
+            int firstLineEnd = sourceText.indexOf('\n');
+            int secondLineEnd = firstLineEnd < 0 ? -1 : sourceText.indexOf('\n', firstLineEnd + 1);
+            String header = firstLineEnd < 0 ? sourceText
+                    : sourceText.substring(0, secondLineEnd < 0 ? sourceText.length() : secondLineEnd);
+            if (index > 0 && renderedPart.startsWith(header)) {
+                String owned = renderedPart.substring(header.length());
+                return owned.startsWith("\n") ? owned.substring(1) : owned;
+            }
+            return renderedPart;
+        }
+        if (type == BlockType.FENCED_CODE) {
+            int openingEnd = sourceText.indexOf('\n');
+            if (openingEnd < 0) {
+                return renderedPart;
+            }
+            String opening = sourceText.substring(0, openingEnd);
+            Fence fence = parseOpeningFence(opening);
+            if (fence == null) {
+                return renderedPart;
+            }
+            int lastLineStart = sourceText.lastIndexOf('\n');
+            String originalLastLine = lastLineStart < 0 ? sourceText : sourceText.substring(lastLineStart + 1);
+            boolean ownsClosing = isMatchingClosingFence(originalLastLine, fence);
+            String synthesizedClosing = String.valueOf(fence.marker()).repeat(fence.length());
+            String body = renderedPart;
+            String prefix = opening + "\n";
+            if (body.startsWith(prefix)) {
+                body = body.substring(prefix.length());
+            }
+            String renderedSuffix = "\n" + (ownsClosing ? originalLastLine : synthesizedClosing);
+            if (body.endsWith(renderedSuffix)) {
+                body = body.substring(0, body.length() - renderedSuffix.length());
+            }
+            if (index == 0) {
+                body = prefix + body;
+            }
+            if (index == partCount - 1 && ownsClosing) {
+                body = body + "\n" + originalLastLine;
+            }
+            return body;
+        }
+        return renderedPart;
+    }
+
+    private SourceLocator project(SourceLocator whole, String sourceText,
+                                  int relativeStart, int relativeEnd) {
+        int startLine = whole.startLine() + newlineCount(sourceText, 0, relativeStart);
+        int lastCharacter = Math.max(relativeStart, relativeEnd - 1);
+        int endLine = whole.startLine() + newlineCount(sourceText, 0, lastCharacter);
+        return new SourceLocator(
+                whole.type(), whole.blockIds(),
+                whole.startOffset() + relativeStart,
+                whole.startOffset() + relativeEnd,
+                startLine, endLine,
+                whole.startPage(), whole.endPage(), whole.regions());
+    }
+
+    private int newlineCount(String value, int start, int end) {
+        int count = 0;
+        for (int index = start; index < end; index++) {
+            if (value.charAt(index) == '\n') {
+                count++;
+            }
+        }
+        return count;
     }
 
     private List<String> splitGuidedContainer(SemanticUnit unit, StructuredBlock container, int maxTokens) {
@@ -328,5 +448,8 @@ public final class MarkdownRecursiveSplitter {
     }
 
     private record Fence(char marker, int length) {
+    }
+
+    private record NormalizedText(String text, List<Integer> boundaries) {
     }
 }

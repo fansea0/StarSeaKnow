@@ -1,6 +1,7 @@
 package com.starsea.ai.chunking.preview;
 
 import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.FileResource;
@@ -85,8 +86,7 @@ public class ChunkPreviewWorker {
                     source.file().getType(),
                     snapshotPath);
             ParsedStructure structure = parser.parse(resource);
-            List<ChunkDraft> drafts = planner.plan(structure, job.policy());
-            validateDrafts(drafts, job.policy());
+            List<ChunkDraft> drafts = validateDrafts(planner.plan(structure, job.policy()), job.policy());
             persistence.replace(job, sourceHash, planner.plannerVersion(),
                     policySnapshot(job.policy()), drafts);
         } catch (Exception exception) {
@@ -143,16 +143,28 @@ public class ChunkPreviewWorker {
         return new ScopedSource(processing, file, Path.of(file.getPath()));
     }
 
-    private void validateDrafts(List<ChunkDraft> drafts, ChunkPolicy policy) {
+    private List<ChunkDraft> validateDrafts(List<ChunkDraft> drafts, ChunkPolicy policy) {
         if (drafts == null || drafts.isEmpty()) {
             throw new IllegalArgumentException("The source document produced no chunks");
         }
+        List<ChunkDraft> normalized = new java.util.ArrayList<>(drafts.size());
         for (ChunkDraft draft : drafts) {
-            if (draft == null || draft.content() == null || draft.content().isBlank()
-                    || draft.tokenCount() < 0 || draft.tokenCount() > policy.maxTokens()) {
+            if (draft == null || draft.content() == null || draft.content().isBlank()) {
                 throw new IllegalArgumentException("The planner produced an invalid chunk");
             }
+            int bodyTokens = tokenCounter.count(draft.content());
+            int totalTokens = tokenCounter.count(
+                    ChunkIndexContentBuilder.preview(draft.sectionPath(), draft.content()));
+            if (bodyTokens < 0 || totalTokens < 0
+                    || totalTokens > policy.maxTokens()
+                    || totalTokens > ChunkPolicy.MAX_ALLOWED_TOKENS) {
+                throw new IllegalArgumentException(
+                        "The planner produced a chunk that exceeds the token budget");
+            }
+            normalized.add(new ChunkDraft(draft.sectionPath(), draft.content(),
+                    draft.sourceLocator(), bodyTokens, draft.boundaryReason()));
         }
+        return List.copyOf(normalized);
     }
 
     private Map<String, Object> policySnapshot(ChunkPolicy policy) {

@@ -53,6 +53,9 @@ CREATE INDEX idx_file_processing_scope_state
 CREATE INDEX idx_document_chunk_scope_status
     ON document_chunk(tenant_id, knowledge_id, file_id, status);
 
+COMMENT ON COLUMN document_chunk.token_count IS
+    'Token count of persisted body content only; excludes title path and overlap context';
+
 CREATE TRIGGER trigger_update_file_processing_timestamp BEFORE UPDATE ON file_processing
     FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 CREATE TRIGGER trigger_update_document_chunk_timestamp BEFORE UPDATE ON document_chunk

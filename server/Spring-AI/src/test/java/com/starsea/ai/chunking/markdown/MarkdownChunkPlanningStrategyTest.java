@@ -10,7 +10,10 @@ import com.starsea.ai.chunking.model.SourceLocator;
 import com.starsea.ai.chunking.model.StructuredBlock;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,6 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MarkdownChunkPlanningStrategyTest {
+
+    @TempDir
+    Path tempDir;
 
     private final TokenCounter counter = new CharacterTokenCounter();
     private final MarkdownChunkPlanningStrategy strategy = new MarkdownChunkPlanningStrategy(counter);
@@ -43,6 +49,18 @@ class MarkdownChunkPlanningStrategyTest {
                 block("h2", BlockType.HEADING, "## 空章节", "空章节", 2, List.of("文档", "空章节"))));
 
         assertTrue(strategy.plan(structure, new ChunkPolicy(5, 20, 40)).isEmpty());
+    }
+
+    @Test
+    void persisted_token_count_measures_body_only_while_fit_includes_the_title_path() {
+        ParsedStructure structure = structure(List.of(
+                block("p1", BlockType.PARAGRAPH, "正文", "正文", null,
+                        List.of("很长的标题"))));
+
+        ChunkDraft chunk = strategy.plan(structure, new ChunkPolicy(1, 30, 40)).get(0);
+
+        assertEquals(2, chunk.tokenCount());
+        assertEquals(12, counter.count(indexText(chunk)));
     }
 
     @Test
@@ -97,6 +115,21 @@ class MarkdownChunkPlanningStrategyTest {
         assertEquals(labels.size(), units.size());
         assertEquals(labels, units.stream().map(unit -> unit.blocks().get(0).plainText()).toList());
         assertTrue(units.stream().allMatch(unit -> "PEER_LABEL".equals(unit.attributes().get("start"))));
+    }
+
+    @Test
+    void oversized_window_prefers_a_high_scored_boundary_after_minimum_over_the_farthest_fit() {
+        List<String> path = List.of();
+        ParsedStructure structure = structure(List.of(
+                block("p1", BlockType.PARAGRAPH, "abcdefghij", "abcdefghij", null, path),
+                block("p2", BlockType.PARAGRAPH, "Q1：abcdef", "Q1：abcdef", null, path),
+                block("p3", BlockType.PARAGRAPH, "klmnopqrst", "klmnopqrst", null, path),
+                block("p4", BlockType.PARAGRAPH, "uvwxyzABCD", "uvwxyzABCD", null, path)));
+
+        List<ChunkDraft> chunks = strategy.plan(structure, new ChunkPolicy(5, 35, 38));
+
+        assertEquals("abcdefghij", chunks.get(0).content());
+        assertEquals("PEER_LABEL", chunks.get(0).boundaryReason().get("end"));
     }
 
     @Test
@@ -255,6 +288,87 @@ class MarkdownChunkPlanningStrategyTest {
         assertEquals(List.of("😀bcd", "e"), chunks.stream().map(ChunkDraft::content).toList());
         assertEquals(content, chunks.stream().map(ChunkDraft::content).reduce("", String::concat));
         assertTrue(chunks.stream().allMatch(chunk -> nonMonotonicCounter.count(indexText(chunk)) <= 10));
+    }
+
+    @Test
+    void oversized_paragraph_parts_have_exact_non_repeated_source_ranges() throws IOException {
+        String source = "第一句内容完整结束。第二句内容同样完整结束。第三句内容也完整结束。";
+
+        List<ChunkDraft> chunks = strategy.plan(parse(source), new ChunkPolicy(5, 16, 24));
+
+        assertTrue(chunks.size() >= 2);
+        for (ChunkDraft chunk : chunks) {
+            SourceLocator locator = chunk.sourceLocator();
+            assertEquals(chunk.content(), source.substring(locator.startOffset(), locator.endOffset()));
+        }
+        assertStrictlyIncreasingRanges(chunks);
+    }
+
+    @Test
+    void oversized_fenced_code_parts_own_disjoint_body_lines_not_synthetic_fences() throws IOException {
+        String source = "```text\nalpha-alpha-alpha\nbeta-beta-beta\ngamma-gamma-gamma\n```";
+
+        List<ChunkDraft> chunks = strategy.plan(parse(source), new ChunkPolicy(5, 20, 30));
+
+        assertTrue(chunks.size() >= 2);
+        assertEquals(0, chunks.get(0).sourceLocator().startOffset());
+        assertEquals(source.length(), chunks.get(chunks.size() - 1).sourceLocator().endOffset());
+        for (int index = 1; index < chunks.size(); index++) {
+            SourceLocator locator = chunks.get(index).sourceLocator();
+            assertFalse(source.substring(locator.startOffset(), locator.endOffset()).contains("```text"));
+        }
+        assertStrictlyIncreasingRanges(chunks);
+    }
+
+    @Test
+    void repeated_table_headers_are_context_only_and_later_parts_start_on_owned_rows() throws IOException {
+        String header = "| 项目 | 说明 |\n| --- | --- |";
+        String source = header + "\n| A | 第一项内容很长 |\n| B | 第二项内容很长 |\n| C | 第三项内容很长 |";
+
+        List<ChunkDraft> chunks = strategy.plan(parse(source), new ChunkPolicy(8, 30, 45));
+
+        assertTrue(chunks.size() >= 2);
+        assertTrue(source.substring(chunks.get(0).sourceLocator().startOffset(),
+                chunks.get(0).sourceLocator().endOffset()).contains(header));
+        for (int index = 1; index < chunks.size(); index++) {
+            SourceLocator locator = chunks.get(index).sourceLocator();
+            String ownedSource = source.substring(locator.startOffset(), locator.endOffset());
+            assertFalse(ownedSource.contains("| 项目 | 说明 |"));
+            assertTrue(locator.startLine() >= 3);
+        }
+        assertStrictlyIncreasingRanges(chunks);
+    }
+
+    @Test
+    void recursive_locator_projection_preserves_original_crlf_offsets() throws IOException {
+        String source = "| A | B |\r\n| --- | --- |\r\n| 1 | row-one-long |\r\n"
+                + "| 2 | row-two-long |\r\n| 3 | row-three-long |";
+
+        List<ChunkDraft> chunks = strategy.plan(parse(source), new ChunkPolicy(8, 25, 38));
+
+        assertTrue(chunks.size() >= 2);
+        SourceLocator second = chunks.get(1).sourceLocator();
+        assertFalse(source.substring(second.startOffset(), second.endOffset()).contains("| A | B |"));
+        assertTrue(second.startLine() >= 3);
+        assertStrictlyIncreasingRanges(chunks);
+    }
+
+    private ParsedStructure parse(String source) throws IOException {
+        Path path = tempDir.resolve(UUID.randomUUID() + ".md");
+        Files.writeString(path, source);
+        FileResource resource = new FileResource(1, 2, 3, UUID.randomUUID(),
+                path.getFileName().toString(), "md", path);
+        return new MarkdownStructureParser(counter).parse(resource);
+    }
+
+    private void assertStrictlyIncreasingRanges(List<ChunkDraft> chunks) {
+        int previousEnd = -1;
+        for (ChunkDraft chunk : chunks) {
+            SourceLocator locator = chunk.sourceLocator();
+            assertTrue(locator.startOffset() >= previousEnd);
+            assertTrue(locator.endOffset() > locator.startOffset());
+            previousEnd = locator.endOffset();
+        }
     }
 
     private ParsedStructure structure(List<StructuredBlock> blocks) {

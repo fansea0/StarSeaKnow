@@ -1,5 +1,6 @@
 package com.starsea.ai.chunking.markdown;
 
+import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.BoundaryReason;
 import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPolicy;
@@ -113,8 +114,8 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
         return List.copyOf(merged);
     }
 
-    static String previewIndexText(List<String> path, String content) {
-        return path.isEmpty() ? content : "标题：" + String.join(" > ", path) + "\n\n" + content;
+    public static String previewIndexText(List<String> path, String content) {
+        return ChunkIndexContentBuilder.preview(path, content);
     }
 
     private void flushSegment(List<PlanningAtom> segment, ChunkPolicy policy, List<ChunkDraft> output) {
@@ -131,13 +132,9 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
             int end;
             boolean remainingFits = farthest == segment.size() - 1;
             int allTokens = count(segment, start, farthest);
-            if (remainingFits && allTokens <= policy.targetTokens()) {
-                end = farthest;
-            } else if (!remainingFits) {
-                end = farthest;
-            } else {
-                end = bestScoredBoundary(segment, start, farthest, policy);
-            }
+            end = remainingFits && allTokens <= policy.targetTokens()
+                    ? farthest
+                    : bestScoredBoundary(segment, start, farthest, policy);
             output.add(combine(segment, start, end));
             start = end + 1;
         }
@@ -157,7 +154,7 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
 
     private int bestScoredBoundary(List<PlanningAtom> atoms, int start, int farthest, ChunkPolicy policy) {
         List<BoundaryCandidate> candidates = new ArrayList<>();
-        for (int end = start; end < farthest; end++) {
+        for (int end = start; end <= farthest && end + 1 < atoms.size(); end++) {
             int tokens = count(atoms, start, end);
             if (tokens >= policy.minTokens()) {
                 PlanningAtom current = atoms.get(end);
@@ -234,7 +231,7 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
 
     private ChunkDraft draft(List<String> path, String content, SourceLocator locator,
                              String startReason, String endReason, boolean forcedSplit) {
-        int tokens = tokenCounter.count(previewIndexText(path, content));
+        int tokens = tokenCounter.count(content);
         return new ChunkDraft(path, content, locator, tokens,
                 new BoundaryReason(startReason, endReason, forcedSplit).asMap());
     }
