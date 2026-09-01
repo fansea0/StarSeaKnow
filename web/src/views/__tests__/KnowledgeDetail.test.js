@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick, reactive } from 'vue'
 import axios from 'axios'
 import KnowledgeDetail from '../KnowledgeDetail.vue'
 
@@ -25,12 +26,11 @@ const markdownFile = {
   createTime: '2026-09-01T00:00:00Z',
 }
 
-function mountDetail() {
-  axios.get.mockResolvedValue({ data: { code: 200, data: [] } })
+function mountDetail(route = { params: { id: '11' } }) {
   return mount(KnowledgeDetail, {
     global: {
       mocks: {
-        $route: { params: { id: '11' } },
+        $route: route,
         $router: { push: vi.fn() },
         $message: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
       },
@@ -48,6 +48,58 @@ function mountDetail() {
 }
 
 describe('KnowledgeDetail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    axios.get.mockResolvedValue({ data: { code: 200, data: [] } })
+  })
+  it('loads each route exactly once instead of duplicating watcher and mounted initialization', async () => {
+    mountDetail()
+    await flushPromises()
+
+    expect(axios.get.mock.calls.filter(([url]) => url.endsWith('/knowledge/11'))).toHaveLength(1)
+    expect(axios.get.mock.calls.filter(([url]) => url.endsWith('/knowledge/file/list'))).toHaveLength(1)
+  })
+
+  it('discards late knowledge and file responses from the previous reused route', async () => {
+    const route = reactive({ params: { id: '11' } })
+    const oldInfo = deferred()
+    const oldFiles = deferred()
+    axios.get.mockImplementation((url, options) => {
+      if (url.endsWith('/knowledge/11')) return oldInfo.promise
+      if (url.endsWith('/knowledge/12')) {
+        return Promise.resolve({ data: { code: 200, data: { name: '知识库 B', description: 'B' } } })
+      }
+      if (url.endsWith('/knowledge/file/list') && options?.params?.knowledgeId === 11) return oldFiles.promise
+      if (url.endsWith('/knowledge/file/list') && options?.params?.knowledgeId === 12) {
+        return Promise.resolve({ data: { code: 200, data: [{ ...markdownFile, id: 120, fileName: 'b.md' }] } })
+      }
+      return Promise.resolve({ data: { code: 200, data: [] } })
+    })
+    const wrapper = mountDetail(route)
+    await flushPromises()
+
+    route.params.id = '12'
+    await nextTick()
+    await flushPromises()
+    oldInfo.resolve({ data: { code: 200, data: { name: '知识库 A', description: 'A' } } })
+    oldFiles.resolve({ data: { code: 200, data: [{ ...markdownFile, id: 110, fileName: 'a.md' }] } })
+    await flushPromises()
+
+    expect(wrapper.vm.kbInfo.name).toBe('知识库 B')
+    expect(wrapper.vm.docList.map(row => row.fileName)).toEqual(['b.md'])
+  })
+
+  it('renders non-Markdown embedding as unavailable without calling the removed endpoint', async () => {
+    const wrapper = mountDetail()
+    await flushPromises()
+    await wrapper.setData({ docList: [{ ...markdownFile, id: 31, type: 'pdf', fileName: 'guide.pdf' }] })
+
+    const action = wrapper.get('[data-testid="file-primary-action-31"]')
+    expect(action.text()).toContain('暂不支持')
+    expect(action.attributes('disabled')).toBeDefined()
+    await action.trigger('click')
+    expect(axios.post).not.toHaveBeenCalled()
+  })
   it('opens a Markdown row in the chunking workspace without the legacy embedding POST', async () => {
     const wrapper = mountDetail()
     await flushPromises()
@@ -196,3 +248,9 @@ describe('KnowledgeDetail', () => {
     expect(wrapper.vm.$router.push).not.toHaveBeenCalled()
   })
 })
+
+function deferred() {
+  let resolve
+  const promise = new Promise(res => { resolve = res })
+  return { promise, resolve }
+}

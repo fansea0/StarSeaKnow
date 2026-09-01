@@ -172,11 +172,11 @@
                         size="small"
                         class="kb-action kb-action--primary"
                         :data-testid="`file-primary-action-${row.id}`"
-                        :loading="!isMarkdown(row) && embedLoadingId === row.id"
+                        :disabled="!isMarkdown(row)"
                         @click="handleFileAction(row)"
                       >
                         <el-icon><MagicStick /></el-icon>
-                        <span>{{ isMarkdown(row) ? '分块管理' : '文本嵌入' }}</span>
+                        <span>{{ isMarkdown(row) ? '分块管理' : '暂不支持' }}</span>
                       </el-button>
                       <el-button
                         text
@@ -321,10 +321,10 @@ export default {
       docList: [],
       knowledgeId: null,
       uploadUrl: '',
-      embedLoadingId: null,
       deleteLoadingId: null,
       statusLoadingId: null,
       saveLoading: false,
+      requestGeneration: 0,
     }
   },
   computed: {
@@ -349,49 +349,58 @@ export default {
       return Math.round((done / this.docList.length) * 100)
     },
   },
-  mounted() {
-    this.setKnowledgeId()
-    this.fetchKnowledgeInfo()
-    this.fetchDocList()
-  },
   watch: {
     '$route.params.id': {
       immediate: true,
-      handler() {
-        this.setKnowledgeId()
-        this.fetchKnowledgeInfo()
-        this.fetchDocList()
+      handler(id) {
+        this.startKnowledgeRoute(id)
       },
     },
   },
   methods: {
-    setKnowledgeId() {
-      this.knowledgeId = parseInt(this.$route.params.id)
+    startKnowledgeRoute(routeId) {
+      this.requestGeneration += 1
+      this.setKnowledgeId(routeId)
+      const context = this.currentRequestContext()
+      this.fetchKnowledgeInfo(context)
+      this.fetchDocList(context)
+    },
+    currentRequestContext() {
+      return { generation: this.requestGeneration, knowledgeId: this.knowledgeId }
+    },
+    isCurrentRequest(context) {
+      return context?.generation === this.requestGeneration
+        && context?.knowledgeId === this.knowledgeId
+    },
+    setKnowledgeId(routeId = this.$route.params.id) {
+      this.knowledgeId = parseInt(routeId)
       this.uploadUrl = apiUrl(`/file/uploadToKnow/${this.knowledgeId}`)
     },
-    async fetchKnowledgeInfo() {
+    async fetchKnowledgeInfo(context = this.currentRequestContext()) {
       try {
-        const res = await axios.get(apiUrl(`/knowledge/${this.knowledgeId}`))
+        const res = await axios.get(apiUrl(`/knowledge/${context.knowledgeId}`))
+        if (!this.isCurrentRequest(context)) return
         if (res.data && res.data.code === 200 && res.data.data) {
           this.kbInfo.name = res.data.data.name
           this.kbInfo.desc = res.data.data.description
         }
       } catch (e) {
-        this.$message.error('获取知识库信息失败')
+        if (this.isCurrentRequest(context)) this.$message.error('获取知识库信息失败')
       }
     },
-    async fetchDocList() {
+    async fetchDocList(context = this.currentRequestContext()) {
       try {
         const res = await axios.get(apiUrl('/knowledge/file/list'), {
-          params: { knowledgeId: parseInt(this.knowledgeId) },
+          params: { knowledgeId: parseInt(context.knowledgeId) },
         })
+        if (!this.isCurrentRequest(context)) return
         if (res.data && res.data.code === 200) {
           this.docList = Array.isArray(res.data.data) ? res.data.data : []
         } else {
           this.$message.error(res.data.msg || '获取文件列表失败')
         }
       } catch (e) {
-        this.$message.error('网络错误，获取文件列表失败')
+        if (this.isCurrentRequest(context)) this.$message.error('网络错误，获取文件列表失败')
       }
     },
     beforeUpload(file) {
@@ -418,7 +427,7 @@ export default {
         this.openChunkingWorkspace(row.id)
         return
       }
-      return this.embedFile(row)
+      this.$message.info('当前仅支持 Markdown 智能分块，其他文件类型暂不支持。')
     },
     openChunkingWorkspace(fileId) {
       return this.$router.push({
@@ -446,24 +455,6 @@ export default {
 
       const numericId = Number(normalized)
       return Number.isSafeInteger(numericId) && numericId > 0 ? numericId : null
-    },
-    async embedFile(row) {
-      this.embedLoadingId = row.id
-      try {
-        const res = await axios.post(apiUrl('/knowledge/file'), null, {
-          params: { fileId: row.id, knowledgeId: this.knowledgeId },
-        })
-        if (res.data && res.data.code === 200) {
-          this.$message.success('文本嵌入成功')
-          this.fetchDocList()
-        } else {
-          this.$message.error(res.data.msg || '嵌入失败')
-        }
-      } catch (e) {
-        this.$message.error('网络错误，嵌入失败')
-      } finally {
-        this.embedLoadingId = null
-      }
     },
     async deleteFile(row) {
       this.deleteLoadingId = row.id

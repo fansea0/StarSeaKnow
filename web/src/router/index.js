@@ -77,7 +77,8 @@ export const routes = [
   {
     path: '/knowledge/:knowledgeId/files/:fileId/chunks',
     name: 'ChunkingWorkspace',
-    component: () => import('../views/ChunkingWorkspace.vue')
+    component: () => import('../views/ChunkingWorkspace.vue'),
+    meta: { requiresAdmin: true },
   },
   {
     path: '/agent/:id',
