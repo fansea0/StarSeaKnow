@@ -1,6 +1,8 @@
 package com.starsea.ai.chunking.preview;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.plugins.InterceptorIgnoreHelper;
+import com.baomidou.mybatisplus.extension.plugins.inner.TenantLineInnerInterceptor;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkDraft;
@@ -16,6 +18,7 @@ import com.starsea.ai.chunking.registry.DocumentStructureParserRegistry;
 import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
 import com.starsea.ai.chunking.spi.DocumentStructureParser;
 import com.starsea.ai.chunking.spi.TokenCounter;
+import com.starsea.ai.config.TenantLineHandlerImpl;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.FileProcessing;
@@ -30,6 +33,7 @@ import org.apache.ibatis.builder.xml.XMLMapperBuilder;
 import org.apache.ibatis.mapping.BoundSql;
 import org.apache.ibatis.mapping.MappedStatement;
 import org.apache.ibatis.session.Configuration;
+import org.apache.ibatis.session.RowBounds;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
@@ -423,12 +427,24 @@ class ChunkPreviewWorkerTest {
                 "com.starsea.ai.mapper.FileProcessingMapper.findScopedForUpdate");
         String chunksSql = sql(configuration,
                 "com.starsea.ai.mapper.DocumentChunkMapper.findByFileForUpdate");
+        MappedStatement chunksStatement = configuration.getMappedStatement(
+                "com.starsea.ai.mapper.DocumentChunkMapper.findByFileForUpdate");
+        BoundSql interceptedChunks = chunksStatement.getBoundSql(Map.of(
+                "fileId", 20L, "tenantId", 1L, "knowledgeId", 10L));
+        InterceptorIgnoreHelper.initSqlParserInfoCache(null,
+                DocumentChunkMapper.class.getName(),
+                DocumentChunkMapper.class.getMethod("findByFileForUpdate",
+                        long.class, long.class, long.class));
+        new TenantLineInnerInterceptor(new TenantLineHandlerImpl()).beforeQuery(
+                null, chunksStatement, Map.of(), RowBounds.DEFAULT, null, interceptedChunks);
+        String finalChunksSql = interceptedChunks.getSql().replaceAll("\\s+", " ").trim();
 
         assertTrue(processingSql.contains("tenant_id = ?"));
         assertTrue(processingSql.endsWith("FOR UPDATE"));
         assertTrue(chunksSql.contains("tenant_id = ?"));
         assertTrue(chunksSql.contains("knowledge_id = ?"));
         assertTrue(chunksSql.endsWith("FOR UPDATE"));
+        assertTrue(finalChunksSql.endsWith("ORDER BY position FOR UPDATE"), finalChunksSql);
     }
 
     private static ChunkPreviewWorker.Job job() {

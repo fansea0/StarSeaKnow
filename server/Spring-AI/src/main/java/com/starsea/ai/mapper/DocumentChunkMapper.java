@@ -1,5 +1,6 @@
 package com.starsea.ai.mapper;
 
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.starsea.ai.domain.DocumentChunk;
 import org.apache.ibatis.annotations.Mapper;
@@ -24,6 +25,7 @@ public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
                                    @Param("tenantId") long tenantId,
                                    @Param("knowledgeId") long knowledgeId);
 
+    @InterceptorIgnore(tenantLine = "true")
     List<DocumentChunk> findByFileForUpdate(@Param("fileId") long fileId,
                                             @Param("tenantId") long tenantId,
                                             @Param("knowledgeId") long knowledgeId);
