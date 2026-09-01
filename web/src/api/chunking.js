@@ -1,4 +1,5 @@
 import { http } from './http'
+import { normalizeStrategyCode } from '../features/chunking/normalization'
 
 const localOnlyStrategyCodes = new Set(['GENERAL', 'PARENT_CHILD'])
 
@@ -7,7 +8,7 @@ function filePath(knowledgeId, fileId, suffix = '') {
 }
 
 function requireBackendStrategy(strategyCode) {
-  if (localOnlyStrategyCodes.has(strategyCode)) {
+  if (localOnlyStrategyCodes.has(normalizeStrategyCode(strategyCode))) {
     throw new Error('该分块策略暂未开放，不能提交到后端')
   }
 }

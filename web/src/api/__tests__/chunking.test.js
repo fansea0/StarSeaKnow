@@ -47,8 +47,8 @@ describe('chunking API client', () => {
     expect(http.post).toHaveBeenNthCalledWith(3, '/knowledge/11/files/22/chunks/chunk-1/reindex')
   })
 
-  it('rejects local-only placeholder strategies before a preview request is sent', () => {
-    expect(() => createPreview(11, 22, { strategyCode: 'GENERAL' })).toThrow('暂未开放')
+  it.each(['GENERAL', ' general ', 'PaReNt_ChIlD '])('rejects local-only strategy code %s before a preview request is sent', (strategyCode) => {
+    expect(() => createPreview(11, 22, { strategyCode })).toThrow('暂未开放')
     expect(http.post).not.toHaveBeenCalled()
   })
 })

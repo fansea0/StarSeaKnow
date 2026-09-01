@@ -71,6 +71,8 @@ describe('KnowledgeDetail', () => {
     [5, '向量化中'],
     [6, '已完成'],
     [7, '失败'],
+    [null, '未知'],
+    [99, '未知'],
   ])('renders pipeline state %i as %s', async (pipelineState, label) => {
     const wrapper = mountDetail()
     await flushPromises()
@@ -91,5 +93,29 @@ describe('KnowledgeDetail', () => {
       name: 'ChunkingWorkspace',
       params: { knowledgeId: '11', fileId: '23' },
     })
+  })
+
+  it('does not refresh or navigate when an HTTP-success upload envelope has a business error', async () => {
+    const wrapper = mountDetail()
+    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
+
+    await wrapper.vm.onUploadSuccess({ code: 500, msg: '文件解析失败', data: 23 }, { name: 'new-guide.md' })
+
+    expect(wrapper.vm.$message.error).toHaveBeenCalledWith('文件解析失败')
+    expect(wrapper.vm.$message.success).not.toHaveBeenCalled()
+    expect(refresh).not.toHaveBeenCalled()
+    expect(wrapper.vm.$router.push).not.toHaveBeenCalled()
+  })
+
+  it('does not treat a successful envelope without a valid file id as uploaded', async () => {
+    const wrapper = mountDetail()
+    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
+
+    await wrapper.vm.onUploadSuccess({ code: 200, data: null }, { name: 'new-guide.md' })
+
+    expect(wrapper.vm.$message.error).toHaveBeenCalledWith('上传失败')
+    expect(wrapper.vm.$message.success).not.toHaveBeenCalled()
+    expect(refresh).not.toHaveBeenCalled()
+    expect(wrapper.vm.$router.push).not.toHaveBeenCalled()
   })
 })

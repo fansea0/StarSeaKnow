@@ -270,6 +270,7 @@
 <script>
 import axios from 'axios'
 import { apiUrl } from '../api/http'
+import { normalizeFileType } from '../features/chunking/normalization'
 import {
   Check,
   Close,
@@ -397,10 +398,15 @@ export default {
       return true
     },
     async onUploadSuccess(response, uploadFile) {
+      const fileId = response?.data
+      if (response?.code !== 200 || !this.isValidFileId(fileId)) {
+        this.$message.error(response?.msg || '上传失败')
+        return
+      }
+
       this.$message.success('上传成功')
       await this.fetchDocList()
-      const fileId = response?.data
-      if (fileId && this.isMarkdown(uploadFile)) {
+      if (this.isMarkdown(uploadFile)) {
         this.openChunkingWorkspace(fileId)
       }
     },
@@ -421,10 +427,14 @@ export default {
       })
     },
     isMarkdown(file) {
-      const type = String(file?.type || '').toLowerCase()
+      const type = normalizeFileType(file?.type)
       if (type) return type === 'md' || type === 'markdown'
       const name = String(file?.name || file?.fileName || '')
       return /\.(md|markdown)$/i.test(name)
+    },
+    isValidFileId(fileId) {
+      const normalized = Number(fileId)
+      return Number.isSafeInteger(normalized) && normalized > 0
     },
     async embedFile(row) {
       this.embedLoadingId = row.id
@@ -533,7 +543,7 @@ export default {
         6: '已完成',
         7: '失败',
       }
-      return labels[state] || '待分块'
+      return labels[state] ?? '未知'
     },
     pipelineClass(state) {
       if (state === 6) return 'ok'
