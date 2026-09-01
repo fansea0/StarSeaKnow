@@ -184,6 +184,21 @@ class MarkdownChunkingWorkflowTest {
             assertEquals(savedQ1.getIndexContent(), result.content(),
                     "retrieval must use saved index_content instead of stale vector text");
             assertEquals(savedQ1.getSourceLocator(), result.sourceLocator());
+
+            DocumentChunk last = repository.chunks.stream()
+                    .max(Comparator.comparing(DocumentChunk::getPosition))
+                    .orElseThrow();
+            String reedited = last.getContent() + "\n\n补充说明。";
+            services.commands().edit(KNOWLEDGE_ID, FILE_ID, last.getPublicId(),
+                    new EditChunkRequest(reedited, last.getLockVersion()));
+            assertEquals(PipelineState.ADJUSTING.code(), repository.processing.getPipelineState());
+            assertEquals(ChunkStatus.DRAFT.code(), repository.byPublicId(last.getPublicId()).getStatus());
+
+            services.vectors().reindex(KNOWLEDGE_ID, FILE_ID, last.getPublicId());
+
+            assertEquals(PipelineState.COMPLETED.code(), repository.processing.getPipelineState());
+            assertEquals(ChunkStatus.ACTIVE.code(), repository.byPublicId(last.getPublicId()).getStatus());
+            assertTrue(repository.byPublicId(last.getPublicId()).getIndexContent().contains(reedited));
         }
     }
 

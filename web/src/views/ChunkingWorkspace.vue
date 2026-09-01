@@ -139,10 +139,15 @@ function validPolicySnapshot(snapshot) {
 function shouldLoadChunks(processing) {
   return terminalChunkStates.has(Number(processing.state))
     || isRetainedChunksFailure(processing)
+    || isMutableDraftFailure(processing)
 }
 
 function isRetainedChunksFailure(processing) {
   return Number(processing.state) === 7 && Number(processing.failedFromState) === 1
+}
+
+function isMutableDraftFailure(processing) {
+  return Number(processing.state) === 7 && [3, 5].includes(Number(processing.failedFromState))
 }
 
 export default {
@@ -203,7 +208,8 @@ export default {
       return this.processingLoaded && !this.processingLoading && Number(this.processing.state) === 7 && Number(this.processing.failedFromState) === 5
     },
     chunkActionsDisabled() {
-      return !this.processingLoaded || this.processingLoading || !mutableChunkStates.has(Number(this.processing.state))
+      return !this.processingLoaded || this.processingLoading
+        || !(mutableChunkStates.has(Number(this.processing.state)) || isMutableDraftFailure(this.processing))
     },
     processingLabel() {
       return Number(this.processing.state) === 1 ? '正在生成分块' : '正在建立索引'
@@ -523,7 +529,7 @@ export default {
     async handleReindex(chunk) {
       if (
         this.chunkActionsDisabled
-        || Number(this.processing.state) !== 6
+        || ![3, 6].includes(Number(this.processing.state))
         || Number(chunk.status) !== 0
         || !chunk.isModified
         || this.reindexingChunkIds.has(chunk.publicId)

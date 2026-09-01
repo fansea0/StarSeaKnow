@@ -74,7 +74,9 @@ const props = defineProps({
 defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm'])
 
 function canReindex(chunk) {
-  return Number(props.fileState) === 6 && Number(chunk.status) === 0 && Boolean(chunk.isModified)
+  return [3, 6].includes(Number(props.fileState))
+    && Number(chunk.status) === 0
+    && Boolean(chunk.isModified)
 }
 
 function isReindexing(chunk) {

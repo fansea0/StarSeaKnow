@@ -112,8 +112,9 @@ public class ChunkCommandService {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
         }
         invalidateDependent(dependent, target, tenantId);
-        moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
-        scheduleVectorCleanup(tenantId, fileId, vectorIds(target, dependent));
+        int adjustingLockVersion = moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
+        scheduleVectorCleanup(tenantId, knowledgeId, fileId, adjustingLockVersion,
+                vectorIds(target, dependent));
 
         return new ChunkResponse(target.getPublicId(), value(target.getPosition()), request.content(),
                 target.getSectionPath(), target.getSourceLocator(), budget.body(),
@@ -133,8 +134,9 @@ public class ChunkCommandService {
         if (deleted != 1) {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
         }
-        moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
-        scheduleVectorCleanup(tenantId, fileId, vectorIds(target, dependent));
+        int adjustingLockVersion = moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
+        scheduleVectorCleanup(tenantId, knowledgeId, fileId, adjustingLockVersion,
+                vectorIds(target, dependent));
     }
 
     /** Task 9 calls this before confirmation so an empty set can never be vectorized. */
@@ -183,8 +185,11 @@ public class ChunkCommandService {
                     "File was not found in the current tenant and knowledge base");
         }
         PipelineState state = pipelineState(processing);
+        boolean recoverableFailure = state == PipelineState.FAILED
+                && (Integer.valueOf(PipelineState.VECTORIZING.code()).equals(processing.getFailedFromState())
+                || Integer.valueOf(PipelineState.ADJUSTING.code()).equals(processing.getFailedFromState()));
         if (state != PipelineState.CHUNKED && state != PipelineState.ADJUSTING
-                && state != PipelineState.COMPLETED) {
+                && state != PipelineState.COMPLETED && !recoverableFailure) {
             throw ChunkingException.conflict("The current processing state cannot mutate chunks");
         }
         return processing;
@@ -249,13 +254,21 @@ public class ChunkCommandService {
         }
     }
 
-    private void moveToAdjustingIfNeeded(FileProcessing processing,
-                                         long knowledgeId, long fileId) {
+    private int moveToAdjustingIfNeeded(FileProcessing processing,
+                                        long knowledgeId, long fileId) {
         PipelineState current = pipelineState(processing);
         if (current == PipelineState.CHUNKED || current == PipelineState.COMPLETED) {
-            stateService.transition(knowledgeId, fileId, current, PipelineState.ADJUSTING,
+            FileProcessingService.Transition transition = stateService.transition(
+                    knowledgeId, fileId, current, PipelineState.ADJUSTING,
                     value(processing.getLockVersion()));
+            return transition == null ? value(processing.getLockVersion()) + 1 : transition.lockVersion();
         }
+        if (current == PipelineState.FAILED) {
+            FileProcessingService.Transition transition = stateService.recoverFailedDraftMutation(
+                    knowledgeId, fileId, value(processing.getLockVersion()));
+            return transition == null ? value(processing.getLockVersion()) + 1 : transition.lockVersion();
+        }
+        return value(processing.getLockVersion());
     }
 
     private TokenBudget tokenBudget(FileProcessing processing, List<String> sectionPath, String body) {
@@ -288,11 +301,13 @@ public class ChunkCommandService {
         return List.copyOf(ids);
     }
 
-    private void scheduleVectorCleanup(long tenantId, long fileId, List<UUID> publicIds) {
+    private void scheduleVectorCleanup(long tenantId, long knowledgeId, long fileId,
+                                       int adjustingLockVersion, List<UUID> publicIds) {
         if (publicIds.isEmpty()) {
             return;
         }
-        Runnable cleanup = () -> publicIds.forEach(id -> deleteVectorWithRetry(tenantId, fileId, id));
+        Runnable cleanup = () -> publicIds.forEach(id -> deleteVectorWithRetry(
+                tenantId, knowledgeId, fileId, adjustingLockVersion, id));
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             cleanup.run();
             return;
@@ -305,7 +320,8 @@ public class ChunkCommandService {
         });
     }
 
-    private void deleteVectorWithRetry(long tenantId, long fileId, UUID publicId) {
+    private void deleteVectorWithRetry(long tenantId, long knowledgeId, long fileId,
+                                       int adjustingLockVersion, UUID publicId) {
         RuntimeException lastFailure = null;
         for (int attempt = 0; attempt < RETRY_DELAYS_MILLIS.length; attempt++) {
             try {
@@ -323,6 +339,14 @@ public class ChunkCommandService {
         }
         log.error("chunk_vector_delete_failed tenant_id={} file_id={} chunk_public_id={}",
                 tenantId, fileId, publicId, lastFailure);
+        String detail = lastFailure == null || lastFailure.getMessage() == null
+                ? "unknown error" : lastFailure.getMessage();
+        try {
+            stateService.fail(knowledgeId, fileId, PipelineState.ADJUSTING,
+                    adjustingLockVersion, 100, "Vector cleanup failed: " + detail);
+        } catch (RuntimeException stateFailure) {
+            log.error("Unable to mark vector cleanup failure for file {}", fileId, stateFailure);
+        }
     }
 
     private ChunkResponse toResponse(DocumentChunk chunk) {

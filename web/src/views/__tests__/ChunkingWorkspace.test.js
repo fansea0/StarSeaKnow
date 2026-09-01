@@ -597,13 +597,24 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(true)
   })
 
-  it('ADJUSTING keeps full confirmation but does not expose per-chunk reindex', async () => {
+  it('ADJUSTING exposes per-chunk reindex for an edited DRAFT', async () => {
     getProcessing.mockResolvedValue(processing(3))
     getChunks.mockResolvedValue({ data: [draftChunk] })
     const wrapper = mountWorkspace()
     await flushPromises()
 
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(true)
+  })
+
+  it('FAILED vectorization keeps DRAFT chunks editable and reindexable after recovery edit', async () => {
+    getProcessing.mockResolvedValue(processing(7, { failedFromState: 5, lastError: '向量服务不可用' }))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="edit-chunk"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="delete-chunk"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(false)
   })
 
@@ -671,6 +682,27 @@ describe('ChunkingWorkspace', () => {
     expect(dialog.textContent).toContain('补充 Token 不合法')
     expect(dialog.querySelector('[role="alert"]')).not.toBeNull()
     expect(document.body.querySelector('[data-testid="confirm-vectorization"]')).not.toBeNull()
+  })
+
+  it('keeps the source-change 422 visible so the user can regenerate the preview', async () => {
+    getProcessing.mockResolvedValue(processing(3, { lockVersion: 9 }))
+    getChunks.mockResolvedValue({ data: [{ ...draftChunk, isModified: false }] })
+    confirmVectorization.mockRejectedValue({
+      response: { status: 422, data: { msg: '源文件已发生变化，请重新生成分块预览' } },
+    })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="open-confirm"]').trigger('click')
+    await flushPromises()
+    document.body.querySelector('[data-testid="confirm-vectorization"]').click()
+    await flushPromises()
+
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog.textContent).toContain('源文件已发生变化，请重新生成分块预览')
+    expect(dialog.querySelector('[role="alert"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="confirm-vectorization"]')).not.toBeNull()
+    wrapper.unmount()
   })
 
   it('reloads processing and chunks from a confirm 409, then submits the refreshed file lock', async () => {

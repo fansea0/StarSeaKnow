@@ -49,6 +49,29 @@ public class FileProcessingService {
                 PipelineState.ADJUSTING, lockVersion, 100, null, lastError);
     }
 
+    public Transition recoverFailedDraftMutation(long knowledgeId, long fileId, int lockVersion) {
+        long tenantId = requireTenantId();
+        FileProcessing processing = mapper.selectById(fileId);
+        requireOwnership(processing, tenantId, knowledgeId, fileId);
+        Integer failedFrom = processing.getFailedFromState();
+        if (!Integer.valueOf(PipelineState.FAILED.code()).equals(processing.getPipelineState())
+                || !Integer.valueOf(lockVersion).equals(processing.getLockVersion())
+                || !(Integer.valueOf(PipelineState.VECTORIZING.code()).equals(failedFrom)
+                || Integer.valueOf(PipelineState.ADJUSTING.code()).equals(failedFrom))) {
+            throw new StateConflictException(
+                    "Only a retained DRAFT from vectorization or cleanup failure can be edited");
+        }
+        int updated = mapper.transition(fileId, tenantId, knowledgeId,
+                PipelineState.FAILED.code(), PipelineState.ADJUSTING.code(), 100,
+                lockVersion, null, null);
+        if (updated != 1) {
+            throw new StateConflictException("Pipeline state or lock version changed concurrently");
+        }
+        return new Transition(knowledgeId, fileId, PipelineState.FAILED,
+                PipelineState.ADJUSTING, lockVersion + 1, processing.getProgress(),
+                processing.getFailedFromState(), processing.getLastError());
+    }
+
     public void restoreAfterRejectedDispatch(long knowledgeId, long fileId,
                                              PipelineState asynchronousState,
                                              PipelineState previousState,
@@ -73,12 +96,7 @@ public class FileProcessingService {
                                   Integer failedFromState, String lastError) {
         long tenantId = requireTenantId();
         FileProcessing processing = mapper.selectById(fileId);
-        if (processing == null
-                || !Long.valueOf(tenantId).equals(processing.getTenantId())
-                || !Long.valueOf(knowledgeId).equals(processing.getKnowledgeId())
-                || !Long.valueOf(fileId).equals(processing.getFileId())) {
-            throw new OwnershipException("File does not belong to the current tenant and knowledge base");
-        }
+        requireOwnership(processing, tenantId, knowledgeId, fileId);
         if (!LEGAL_TRANSITIONS.getOrDefault(expected, Set.of()).contains(target)) {
             throw new StateConflictException("Illegal pipeline transition: " + expected + " -> " + target);
         }
@@ -106,6 +124,16 @@ public class FileProcessingService {
             throw new OwnershipException("A tenant context is required");
         }
         return context.getTenantId();
+    }
+
+    private void requireOwnership(FileProcessing processing, long tenantId,
+                                  long knowledgeId, long fileId) {
+        if (processing == null
+                || !Long.valueOf(tenantId).equals(processing.getTenantId())
+                || !Long.valueOf(knowledgeId).equals(processing.getKnowledgeId())
+                || !Long.valueOf(fileId).equals(processing.getFileId())) {
+            throw new OwnershipException("File does not belong to the current tenant and knowledge base");
+        }
     }
 
     private static int defaultProgress(PipelineState target) {

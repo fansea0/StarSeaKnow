@@ -176,6 +176,26 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void failed_vectorization_draft_can_be_edited_and_returns_file_to_adjusting() {
+        FileProcessing failed = processing(PipelineState.FAILED, 5);
+        failed.setFailedFromState(PipelineState.VECTORIZING.code());
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(failed);
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
+        target.setSectionPath(List.of());
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
+                "Recovered", 9, sha256("Recovered"), 2)).thenReturn(1);
+
+        var response = service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                new EditChunkRequest("Recovered", 2));
+
+        assertEquals(ChunkStatus.DRAFT.code(), response.status());
+        verify(stateService).recoverFailedDraftMutation(KNOWLEDGE_ID, FILE_ID, 5);
+    }
+
+    @Test
     void edit_never_mutates_an_indexing_chunk() {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.INDEXING, 2, "Old");
         when(chunkMapper.findScopedByPublicIdForUpdate(
@@ -259,6 +279,23 @@ class ChunkCommandServiceTest {
 
         assertEquals("Edited", response.content());
         verify(vectorGateway, times(3)).delete(CHUNK_ID);
+    }
+
+    @Test
+    void exhausted_vector_cleanup_marks_the_adjusting_file_failed() {
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing(PipelineState.ADJUSTING, 5));
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
+                "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
+        doThrow(new IllegalStateException("vector unavailable")).when(vectorGateway).delete(CHUNK_ID);
+
+        service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, new EditChunkRequest("Edited", 2));
+
+        verify(stateService).fail(KNOWLEDGE_ID, FILE_ID, PipelineState.ADJUSTING, 5, 100,
+                "Vector cleanup failed: vector unavailable");
     }
 
     @Test
