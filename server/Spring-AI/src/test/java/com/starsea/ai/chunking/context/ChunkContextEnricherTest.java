@@ -87,6 +87,20 @@ class ChunkContextEnricherTest {
     }
 
     @Test
+    void never_selects_dotted_title_or_initial_fragments_under_a_tight_budget() {
+        assertNoOverlapWithinBudget("研究 Ph.D. 项目。", 10);
+        assertNoOverlapWithinBudget("研究 U.S.A. 项目。", 10);
+        assertNoOverlapWithinBudget("A. Smith arrived.", 10);
+    }
+
+    @Test
+    void keeps_dotted_titles_and_initials_inside_the_later_complete_sentence() {
+        assertWholeSentenceOverlap("研究 Ph.D. 项目。", 40);
+        assertWholeSentenceOverlap("研究 U.S.A. 项目。", 40);
+        assertWholeSentenceOverlap("A. Smith arrived.", 40);
+    }
+
+    @Test
     void stops_overlap_at_a_peer_label_on_the_same_title_path() {
         assertNoOverlap(chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "PEER_LABEL"),
                 chunk(2L, 1, List.of("甲"), "Q1：当前", "PEER_LABEL", "PARAGRAPH_END"));
@@ -104,10 +118,10 @@ class ChunkContextEnricherTest {
     void stops_overlap_when_previous_or_current_chunk_is_a_container() {
         assertNoOverlap(chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "CONTAINER_END"),
                 chunk(2L, 1, List.of("甲"), "当前", "PARAGRAPH_END", "PARAGRAPH_END"));
-        for (String type : List.of("TABLE", "FENCED_CODE", "INDENTED_CODE")) {
+        for (String content : List.of("| 标题 | 值 |\n| --- | --- |", "```java\nrun();\n```", "    run();")) {
             DocumentChunk prose = chunk(1L, 0, List.of("甲"), "前句。", "DOCUMENT_START", "PARAGRAPH_END");
-            DocumentChunk container = chunk(2L, 1, List.of("甲"), "容器内容", "PARAGRAPH_END", "PARAGRAPH_END");
-            container.setSourceLocator(Map.of("type", type, "blockIds", List.of("markdown-2")));
+            DocumentChunk container = chunk(2L, 1, List.of("甲"), content, "PARAGRAPH_END", "CONTAINER_END");
+            container.setSourceLocator(Map.of("type", "markdown", "blockIds", List.of("markdown-2")));
             assertNoOverlap(prose, container);
         }
     }
@@ -170,6 +184,24 @@ class ChunkContextEnricherTest {
         EnrichedChunk enriched = enricher.enrich(List.of(previous, current), new ContextPolicy(true, 40), 512).get(1);
         assertNull(enriched.overlapSourceChunkId());
         assertNull(enriched.overlapContent());
+    }
+
+    private void assertNoOverlapWithinBudget(String previousBody, int overlapBudget) {
+        DocumentChunk previous = chunk(1L, 0, List.of(), previousBody, "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk current = chunk(2L, 1, List.of(), "正文", "PARAGRAPH_END", "PARAGRAPH_END");
+
+        EnrichedChunk enriched = enricher.enrich(List.of(previous, current), new ContextPolicy(true, overlapBudget), 512).get(1);
+
+        assertNull(enriched.overlapContent());
+    }
+
+    private void assertWholeSentenceOverlap(String previousBody, int overlapBudget) {
+        DocumentChunk previous = chunk(1L, 0, List.of(), previousBody, "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk current = chunk(2L, 1, List.of(), "正文", "PARAGRAPH_END", "PARAGRAPH_END");
+
+        EnrichedChunk enriched = enricher.enrich(List.of(previous, current), new ContextPolicy(true, overlapBudget), 512).get(1);
+
+        assertEquals(previousBody, enriched.overlapContent());
     }
 
     private DocumentChunk chunk(long id, int position, List<String> path, String content, String start, String end) {

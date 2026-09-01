@@ -71,7 +71,24 @@ public final class SentenceBoundaryDetector {
             end++;
         }
         String word = text.substring(start, end).toLowerCase(Locale.ROOT);
-        return word.matches("(?:[a-z]\\.){2,}") || COMMON_ABBREVIATIONS.contains(word);
+        return containsAnotherDot(word) || isSingleLetterInitialWithFollowingText(text, end, word)
+                || COMMON_ABBREVIATIONS.contains(word);
+    }
+
+    private boolean containsAnotherDot(String word) {
+        int firstDot = word.indexOf('.');
+        return firstDot >= 0 && firstDot != word.lastIndexOf('.');
+    }
+
+    private boolean isSingleLetterInitialWithFollowingText(String text, int offset, String word) {
+        if (!word.matches("[a-z]\\.")) {
+            return false;
+        }
+        int next = offset;
+        while (next < text.length() && Character.isWhitespace(text.charAt(next))) {
+            next++;
+        }
+        return next < text.length() && Character.isLetter(text.charAt(next));
     }
 
     private boolean isAsciiLetterOrDot(char value) {
