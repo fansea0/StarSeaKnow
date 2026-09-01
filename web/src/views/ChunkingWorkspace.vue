@@ -214,9 +214,12 @@ export default {
     routeKey() { return `${String(this.knowledgeId)}:${String(this.fileId)}` },
     isProcessing() { return processingStates.has(Number(this.processing.state)) },
     isCompleted() { return Number(this.processing.state) === 6 },
+    currentChunksKey() {
+      return `${this.routeKey}:${this.processing.state}:${this.processing.lockVersion}`
+    },
     completionReady() {
       return this.processingLoaded && !this.processingLoading && !this.chunksLoading
-        && this.isCompleted && Boolean(this.chunksLoadedKey) && this.chunks.length > 0
+        && this.isCompleted && this.chunksLoadedKey === this.currentChunksKey && this.chunks.length > 0
     },
     canPreview() {
       return this.processingLoaded && !this.processingLoading && previewStates.has(Number(this.processing.state))

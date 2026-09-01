@@ -614,6 +614,24 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find('[data-testid="back-to-knowledge"]').exists()).toBe(false)
   })
 
+  it('does not reuse cached adjusting chunks when the completed snapshot fails to load', async () => {
+    getProcessing
+      .mockResolvedValueOnce(processing(3, { lockVersion: 3 }))
+      .mockResolvedValueOnce(processing(6, { lockVersion: 4 }))
+    getChunks
+      .mockResolvedValueOnce({ data: [draftChunk] })
+      .mockRejectedValueOnce({ response: { status: 503, data: { msg: '完成态分块读取失败' } } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.vm.refreshProcessing(false, wrapper.vm.currentContext())
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('完成态分块读取失败')
+    expect(wrapper.find('[data-testid="vectorization-complete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="back-to-knowledge"]').exists()).toBe(false)
+  })
+
   it('ADJUSTING exposes per-chunk reindex for an edited DRAFT', async () => {
     getProcessing.mockResolvedValue(processing(3))
     getChunks.mockResolvedValue({ data: [draftChunk] })
