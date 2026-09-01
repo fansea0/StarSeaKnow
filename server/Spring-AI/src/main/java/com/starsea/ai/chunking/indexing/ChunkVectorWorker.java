@@ -73,7 +73,7 @@ public class ChunkVectorWorker {
             writeVectors(prepared);
             transactions.executeWithoutResult(status -> completeBatch(job, prepared));
         } catch (RuntimeException failure) {
-            cleanupEvery(job.chunks());
+            cleanupEvery(job.chunks(), failure);
             restoreBatch(job, failure);
         }
     }
@@ -85,18 +85,19 @@ public class ChunkVectorWorker {
             writeVectors(prepared);
             transactions.executeWithoutResult(status -> completeSingle(job, prepared));
         } catch (RuntimeException failure) {
-            cleanupEvery(List.of(job.chunk()));
+            cleanupEvery(List.of(job.chunk()), failure);
             restoreSingle(job, failure);
+            throw failure;
         }
     }
 
     public void failBatchDispatch(BatchJob job, RuntimeException failure) {
-        cleanupEvery(job.chunks());
+        cleanupEvery(job.chunks(), failure);
         restoreBatch(job, failure);
     }
 
     public void failSingleDispatch(SingleJob job, RuntimeException failure) {
-        cleanupEvery(List.of(job.chunk()));
+        cleanupEvery(List.of(job.chunk()), failure);
         restoreSingle(job, failure);
     }
 
@@ -217,12 +218,13 @@ public class ChunkVectorWorker {
             transactions.executeWithoutResult(status -> {
                 FileProcessing processing = requireCompensatableProcessing(
                         job.tenantId(), job.knowledgeId(), job.fileId());
-                restoreIndexingTargets(job.tenantId(), job.knowledgeId(), job.fileId(), job.chunks());
+                restoreIndexingTargets(job.tenantId(), job.knowledgeId(), job.fileId(),
+                        job.chunks(), null);
                 stateService.fail(job.knowledgeId(), job.fileId(), PipelineState.VECTORIZING,
                         value(processing.getLockVersion()), 0, failureSummary(original));
             });
         } catch (RuntimeException compensationFailure) {
-            original.addSuppressed(compensationFailure);
+            addSuppressedUnlessSame(original, compensationFailure);
             log.error("Unable to restore failed batch vectorization for file {}",
                     job.fileId(), original);
         }
@@ -230,23 +232,24 @@ public class ChunkVectorWorker {
 
     private void restoreSingle(SingleJob job, RuntimeException original) {
         try {
+            String error = failureSummary(original);
             transactions.executeWithoutResult(status -> {
                 FileProcessing processing = requireCompensatableProcessing(
                         job.tenantId(), job.knowledgeId(), job.fileId());
                 restoreIndexingTargets(job.tenantId(), job.knowledgeId(), job.fileId(),
-                        List.of(job.chunk()));
-                stateService.transition(job.knowledgeId(), job.fileId(), PipelineState.VECTORIZING,
-                        PipelineState.ADJUSTING, value(processing.getLockVersion()));
+                        List.of(job.chunk()), error);
+                stateService.recoverSingleVectorizationFailure(job.knowledgeId(), job.fileId(),
+                        value(processing.getLockVersion()), error);
             });
         } catch (RuntimeException compensationFailure) {
-            original.addSuppressed(compensationFailure);
+            addSuppressedUnlessSame(original, compensationFailure);
             log.error("Unable to restore failed chunk reindex for file {} chunk {}",
                     job.fileId(), job.chunk().publicId(), original);
         }
     }
 
     private void restoreIndexingTargets(long tenantId, long knowledgeId, long fileId,
-                                        List<ChunkSnapshot> snapshots) {
+                                        List<ChunkSnapshot> snapshots, String lastError) {
         List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(fileId, tenantId, knowledgeId);
         Map<UUID, DocumentChunk> currentByPublicId = chunks.stream()
                 .filter(chunk -> chunk.getPublicId() != null)
@@ -259,6 +262,7 @@ public class ChunkVectorWorker {
             }
             DocumentChunk patch = new DocumentChunk();
             patch.setStatus(ChunkStatus.DRAFT.code());
+            patch.setLastError(lastError);
             UpdateWrapper<DocumentChunk> update = new UpdateWrapper<DocumentChunk>()
                     .eq("id", current.getId())
                     .eq("tenant_id", tenantId)
@@ -271,19 +275,22 @@ public class ChunkVectorWorker {
                     .set("overlap_source_chunk_id", null)
                     .set("overlap_token_count", 0)
                     .set("index_content", null)
-                    .set("last_error", null)
                     .setSql("lock_version = lock_version + 1");
+            if (lastError == null) {
+                update.set("last_error", null);
+            }
             if (chunkMapper.update(patch, update) != 1) {
                 throw ChunkingException.conflict("Chunk changed before failure restoration");
             }
         }
     }
 
-    private void cleanupEvery(List<ChunkSnapshot> snapshots) {
+    private void cleanupEvery(List<ChunkSnapshot> snapshots, RuntimeException original) {
         for (ChunkSnapshot snapshot : snapshots) {
             try {
                 gateway.delete(snapshot.publicId());
             } catch (RuntimeException cleanupFailure) {
+                addSuppressedUnlessSame(original, cleanupFailure);
                 log.error("Unable to delete vector after indexing failure for chunk {}",
                         snapshot.publicId(), cleanupFailure);
             }
@@ -302,6 +309,13 @@ public class ChunkVectorWorker {
             throw ChunkingException.conflict("Pipeline state or lock version changed during vectorization");
         }
         return processing;
+    }
+
+    private void addSuppressedUnlessSame(RuntimeException original,
+                                         RuntimeException secondary) {
+        if (secondary != original) {
+            original.addSuppressed(secondary);
+        }
     }
 
     private FileProcessing requireCompensatableProcessing(long tenantId, long knowledgeId,

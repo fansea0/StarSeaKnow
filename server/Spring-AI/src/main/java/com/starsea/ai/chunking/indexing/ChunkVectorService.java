@@ -221,8 +221,15 @@ public class ChunkVectorService {
         }
         chunks.forEach(this::requireStableChunk);
 
+        int adjustingLockVersion = value(processing.getLockVersion());
+        if (current == PipelineState.COMPLETED) {
+            adjustingLockVersion = stateService.transition(knowledgeId, fileId,
+                    PipelineState.COMPLETED, PipelineState.ADJUSTING,
+                    adjustingLockVersion).lockVersion();
+        }
         int vectorizingLockVersion = stateService.transition(knowledgeId, fileId,
-                current, PipelineState.VECTORIZING, value(processing.getLockVersion())).lockVersion();
+                PipelineState.ADJUSTING, PipelineState.VECTORIZING,
+                adjustingLockVersion).lockVersion();
         ChunkVectorWorker.ChunkSnapshot targetSnapshot = markIndexing(
                 target, tenantId, knowledgeId, fileId);
         List<ChunkVectorWorker.ChunkSnapshot> allSnapshots = chunks.stream()

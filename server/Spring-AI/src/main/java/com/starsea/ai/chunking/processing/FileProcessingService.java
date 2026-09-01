@@ -40,6 +40,15 @@ public class FileProcessingService {
                 progress, expected.code(), lastError);
     }
 
+    public Transition recoverSingleVectorizationFailure(long knowledgeId, long fileId,
+                                                         int lockVersion, String lastError) {
+        if (lastError == null || lastError.isBlank()) {
+            throw new IllegalArgumentException("A vectorization recovery requires an error summary");
+        }
+        return transition(knowledgeId, fileId, PipelineState.VECTORIZING,
+                PipelineState.ADJUSTING, lockVersion, 100, null, lastError);
+    }
+
     public void restoreAfterRejectedDispatch(long knowledgeId, long fileId,
                                              PipelineState asynchronousState,
                                              PipelineState previousState,
@@ -119,8 +128,7 @@ public class FileProcessingService {
                 Set.of(PipelineState.VECTORIZING, PipelineState.FAILED));
         transitions.put(PipelineState.VECTORIZING,
                 Set.of(PipelineState.ADJUSTING, PipelineState.COMPLETED, PipelineState.FAILED));
-        transitions.put(PipelineState.COMPLETED,
-                Set.of(PipelineState.ADJUSTING, PipelineState.VECTORIZING));
+        transitions.put(PipelineState.COMPLETED, Set.of(PipelineState.ADJUSTING));
         transitions.put(PipelineState.FAILED,
                 Set.of(PipelineState.CHUNKING, PipelineState.ADJUSTING,
                         PipelineState.CONFIRMED, PipelineState.VECTORIZING));

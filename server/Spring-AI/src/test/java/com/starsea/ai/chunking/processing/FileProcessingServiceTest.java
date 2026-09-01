@@ -133,7 +133,7 @@ class FileProcessingServiceTest {
     }
 
     @Test
-    void allows_only_the_single_reindex_vectorizing_edges_added_to_the_state_graph() {
+    void allows_only_adjusting_to_vectorizing_and_vectorizing_to_adjusting_new_edges() {
         FileProcessing adjusting = processing(
                 1L, 10L, 20L, PipelineState.ADJUSTING, 3);
         when(mapper.selectById(20L)).thenReturn(adjusting);
@@ -143,15 +143,6 @@ class FileProcessingServiceTest {
         assertEquals(PipelineState.VECTORIZING, service.transition(
                 10L, 20L, PipelineState.ADJUSTING, PipelineState.VECTORIZING, 3).current());
 
-        FileProcessing completed = processing(
-                1L, 10L, 20L, PipelineState.COMPLETED, 7);
-        when(mapper.selectById(20L)).thenReturn(completed);
-        when(mapper.transition(20L, 1L, 10L, PipelineState.COMPLETED.code(),
-                PipelineState.VECTORIZING.code(), 0, 7, null, null)).thenReturn(1);
-
-        assertEquals(PipelineState.VECTORIZING, service.transition(
-                10L, 20L, PipelineState.COMPLETED, PipelineState.VECTORIZING, 7).current());
-
         FileProcessing vectorizing = processing(
                 1L, 10L, 20L, PipelineState.VECTORIZING, 8);
         when(mapper.selectById(20L)).thenReturn(vectorizing);
@@ -160,6 +151,38 @@ class FileProcessingServiceTest {
 
         assertEquals(PipelineState.ADJUSTING, service.transition(
                 10L, 20L, PipelineState.VECTORIZING, PipelineState.ADJUSTING, 8).current());
+    }
+
+    @Test
+    void direct_completed_to_vectorizing_remains_illegal() {
+        FileProcessing completed = processing(
+                1L, 10L, 20L, PipelineState.COMPLETED, 7);
+        when(mapper.selectById(20L)).thenReturn(completed);
+
+        assertThrows(FileProcessingService.StateConflictException.class, () -> service.transition(
+                10L, 20L, PipelineState.COMPLETED, PipelineState.VECTORIZING, 7));
+
+        verify(mapper, never()).transition(20L, 1L, 10L,
+                PipelineState.COMPLETED.code(), PipelineState.VECTORIZING.code(),
+                0, 7, null, null);
+    }
+
+    @Test
+    void single_vectorization_failure_returns_to_adjusting_with_the_original_error() {
+        FileProcessing vectorizing = processing(
+                1L, 10L, 20L, PipelineState.VECTORIZING, 8);
+        when(mapper.selectById(20L)).thenReturn(vectorizing);
+        when(mapper.transition(20L, 1L, 10L, PipelineState.VECTORIZING.code(),
+                PipelineState.ADJUSTING.code(), 100, 8, null,
+                "embedding unavailable")).thenReturn(1);
+
+        FileProcessingService.Transition transition = service.recoverSingleVectorizationFailure(
+                10L, 20L, 8, "embedding unavailable");
+
+        assertEquals(PipelineState.ADJUSTING, transition.current());
+        verify(mapper).transition(20L, 1L, 10L,
+                PipelineState.VECTORIZING.code(), PipelineState.ADJUSTING.code(),
+                100, 8, null, "embedding unavailable");
     }
 
     @Test
