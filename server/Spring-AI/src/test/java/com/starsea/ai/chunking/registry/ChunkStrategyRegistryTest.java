@@ -3,8 +3,10 @@ package com.starsea.ai.chunking.registry;
 import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ContextPolicy;
+import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
+import com.starsea.ai.chunking.spi.DocumentStructureParser;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -39,16 +41,50 @@ class ChunkStrategyRegistryTest {
                 () -> registry.require("MARKDOWN_OPTIMIZED", "pdf"));
     }
 
+    @Test
+    void rejects_strategies_with_the_same_normalized_code_and_file_type() {
+        assertThrows(IllegalArgumentException.class, () -> new ChunkStrategyRegistry(List.of(
+                new MarkdownStrategy("MARKDOWN_OPTIMIZED", Set.of("md")),
+                new MarkdownStrategy("markdown_optimized", Set.of(".MD")))));
+    }
+
+    @Test
+    void allows_one_strategy_to_support_multiple_distinct_file_types() {
+        ChunkStrategyRegistry registry = new ChunkStrategyRegistry(List.of(
+                new MarkdownStrategy("MARKDOWN_OPTIMIZED", Set.of("md", "markdown"))));
+
+        assertEquals("MARKDOWN_OPTIMIZED", registry.require("MARKDOWN_OPTIMIZED", "markdown").code());
+    }
+
+    @Test
+    void rejects_parsers_with_the_same_normalized_file_type() {
+        assertThrows(IllegalArgumentException.class, () -> new DocumentStructureParserRegistry(List.of(
+                new TestParser(Set.of("md")),
+                new TestParser(Set.of(".MD")))));
+    }
+
     private static final class MarkdownStrategy implements ChunkPlanningStrategy {
+
+        private final String code;
+        private final Set<String> supportedFileTypes;
+
+        private MarkdownStrategy() {
+            this("MARKDOWN_OPTIMIZED", Set.of("md"));
+        }
+
+        private MarkdownStrategy(String code, Set<String> supportedFileTypes) {
+            this.code = code;
+            this.supportedFileTypes = supportedFileTypes;
+        }
 
         @Override
         public String code() {
-            return "MARKDOWN_OPTIMIZED";
+            return code;
         }
 
         @Override
         public Set<String> supportedFileTypes() {
-            return Set.of("md");
+            return supportedFileTypes;
         }
 
         @Override
@@ -64,6 +100,14 @@ class ChunkStrategyRegistryTest {
         @Override
         public List<ChunkDraft> plan(ParsedStructure structure, ChunkPolicy policy) {
             return List.of();
+        }
+    }
+
+    private record TestParser(Set<String> supportedFileTypes) implements DocumentStructureParser {
+
+        @Override
+        public ParsedStructure parse(FileResource resource) {
+            throw new UnsupportedOperationException("Not needed for registry lookup tests");
         }
     }
 }
