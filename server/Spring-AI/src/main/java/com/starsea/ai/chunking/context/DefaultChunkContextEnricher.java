@@ -5,6 +5,7 @@ import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -24,6 +25,7 @@ public final class DefaultChunkContextEnricher implements ChunkContextEnricher {
     private final ChunkIndexContentBuilder contentBuilder;
     private final SentenceBoundaryDetector sentenceBoundaryDetector;
 
+    @Autowired
     public DefaultChunkContextEnricher(TokenCounter tokenCounter) {
         this(tokenCounter, new ChunkIndexContentBuilder(), new SentenceBoundaryDetector());
     }
