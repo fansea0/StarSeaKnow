@@ -1,0 +1,179 @@
+import { mount, flushPromises } from '@vue/test-utils'
+import ElementPlus, { ElMessageBox } from 'element-plus'
+import { nextTick } from 'vue'
+import { deleteChunk, updateChunk } from '../../../api/chunking'
+import ChunkCard from '../ChunkCard.vue'
+
+vi.mock('../../../api/chunking', () => ({
+  updateChunk: vi.fn(),
+  deleteChunk: vi.fn(),
+}))
+
+const chunk = {
+  publicId: 'chunk-1',
+  position: 0,
+  content: '原始正文',
+  sectionPath: ['产品手册', '安装'],
+  sourceLocator: { startLine: 8, endLine: 12 },
+  tokenCount: 18,
+  status: 0,
+  isModified: false,
+  lockVersion: 4,
+}
+
+function mountCard(overrides = {}) {
+  return mount(ChunkCard, {
+    props: {
+      knowledgeId: '11',
+      fileId: '22',
+      chunk: { ...chunk, ...overrides },
+    },
+    global: { plugins: [ElementPlus] },
+  })
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+describe('ChunkCard', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('renders a readonly semantic path and only reveals an editor after 编辑', async () => {
+    const wrapper = mountCard()
+
+    expect(wrapper.get('[data-testid="section-path"]').text()).toContain('产品手册')
+    expect(wrapper.get('[data-testid="section-path"]').text()).toContain('安装')
+    expect(wrapper.find('[data-testid="section-path"] input').exists()).toBe(false)
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="chunk-body"]').text()).toBe('原始正文')
+
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+
+    expect(wrapper.get('textarea').element.value).toBe('原始正文')
+  })
+
+  it('debounces edits for 650ms, sends content plus lockVersion, then reports saved', async () => {
+    const pending = deferred()
+    updateChunk.mockReturnValue(pending.promise)
+    const wrapper = mountCard()
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('更新后的正文')
+
+    await vi.advanceTimersByTimeAsync(649)
+    expect(updateChunk).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(updateChunk).toHaveBeenCalledWith('11', '22', 'chunk-1', {
+      content: '更新后的正文',
+      lockVersion: 4,
+    })
+    expect(wrapper.get('[data-testid="save-status"]').text()).toBe('保存中')
+
+    pending.resolve({ data: { ...chunk, content: '更新后的正文', lockVersion: 5, isModified: true } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="save-status"]').text()).toBe('已保存')
+    expect(wrapper.emitted('updated')?.[0]?.[0]).toMatchObject({ content: '更新后的正文', lockVersion: 5 })
+  })
+
+  it('shows a 409 conflict with an explicit reload action', async () => {
+    updateChunk.mockRejectedValue({ response: { status: 409, data: { msg: '版本已经变化' } } })
+    const wrapper = mountCard()
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('冲突正文')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('版本已经变化')
+    expect(wrapper.get('[data-testid="reload-chunk"]').text()).toContain('重新加载')
+    await wrapper.get('[data-testid="reload-chunk"]').trigger('click')
+    expect(wrapper.emitted('reload')).toHaveLength(1)
+  })
+
+  it('serializes edits made during a save and sends the latest body with the returned lockVersion', async () => {
+    const firstSave = deferred()
+    updateChunk
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce({ data: { ...chunk, content: '第二次正文', lockVersion: 6, isModified: true } })
+    const wrapper = mountCard()
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+
+    await wrapper.get('textarea').setValue('第一次正文')
+    await vi.advanceTimersByTimeAsync(650)
+    await wrapper.get('textarea').setValue('第二次正文')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(updateChunk).toHaveBeenCalledTimes(1)
+
+    firstSave.resolve({ data: { ...chunk, content: '第一次正文', lockVersion: 5, isModified: true } })
+    await flushPromises()
+
+    expect(updateChunk).toHaveBeenNthCalledWith(2, '11', '22', 'chunk-1', {
+      content: '第二次正文',
+      lockVersion: 5,
+    })
+    expect(wrapper.get('textarea').element.value).toBe('第二次正文')
+    expect(wrapper.get('[data-testid="save-status"]').text()).toBe('已保存')
+  })
+
+  it('keeps a rejected body visible and explains blank and 422 validation failures', async () => {
+    const wrapper = mountCard()
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('   ')
+    await vi.advanceTimersByTimeAsync(650)
+
+    expect(updateChunk).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="alert"]').text()).toContain('正文不能为空')
+
+    updateChunk.mockRejectedValue({ response: { status: 422, data: { msg: '正文超过 Token 上限' } } })
+    await wrapper.get('textarea').setValue('仍需人工调整的正文')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+
+    expect(wrapper.get('textarea').element.value).toBe('仍需人工调整的正文')
+    expect(wrapper.get('[role="alert"]').text()).toContain('正文超过 Token 上限')
+  })
+
+  it('deletes only after the real Element Plus confirmation resolves', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    confirm.mockRejectedValueOnce(new Error('cancelled'))
+    const cancelled = mountCard()
+    await cancelled.get('[data-testid="delete-chunk"]').trigger('click')
+    await flushPromises()
+    expect(deleteChunk).not.toHaveBeenCalled()
+
+    confirm.mockResolvedValueOnce('confirm')
+    deleteChunk.mockResolvedValue({ status: 204 })
+    const confirmed = mountCard()
+    await confirmed.get('[data-testid="delete-chunk"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteChunk).toHaveBeenCalledWith('11', '22', 'chunk-1', 4)
+    expect(confirmed.emitted('deleted')).toHaveLength(1)
+  })
+
+  it('never renders overlap or index-only properties and clears pending saves on unmount', async () => {
+    const wrapper = mountCard({ overlapContent: '机密重叠内容', indexContent: '机密索引内容' })
+    expect(wrapper.text()).not.toContain('机密重叠内容')
+    expect(wrapper.text()).not.toContain('机密索引内容')
+
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('不会保存')
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(650)
+    expect(updateChunk).not.toHaveBeenCalled()
+  })
+})
