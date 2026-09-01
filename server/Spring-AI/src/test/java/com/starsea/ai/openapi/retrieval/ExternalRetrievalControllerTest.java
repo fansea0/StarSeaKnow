@@ -108,6 +108,24 @@ class ExternalRetrievalControllerTest {
         assertEquals(12, record.metadata().get("end_line"));
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidEndLineValues")
+    void rejects_each_invalid_end_line_while_preserving_valid_start_line(
+            String description, Object sourceValue) throws Exception {
+        Map<String, Object> locator = new LinkedHashMap<>();
+        locator.put("startLine", 9);
+        locator.put("endLine", sourceValue);
+
+        ExternalRetrievalController.RetrievalRecord record = retrieve(
+                List.of(retrieved("invalid end " + description, locator))).records().get(0);
+
+        assertPublicMetadataKeys(record.metadata());
+        assertEquals(Integer.class, record.metadata().get("start_line").getClass());
+        assertEquals(9, record.metadata().get("start_line"));
+        assertTrue(record.metadata().containsKey("end_line"));
+        assertNull(record.metadata().get("end_line"));
+    }
+
     @Test
     void omits_retrieved_chunks_with_null_empty_or_blank_content() throws Exception {
         ExternalRetrievalController.RetrievalResponse payload = retrieve(List.of(
@@ -207,10 +225,25 @@ class ExternalRetrievalControllerTest {
                 Arguments.of("long above integer maximum", Long.valueOf(aboveMaximum)),
                 Arguments.of("big integer above integer maximum", BigInteger.valueOf(aboveMaximum)),
                 Arguments.of("big decimal above integer maximum", BigDecimal.valueOf(aboveMaximum)),
+                Arguments.of("float above integer maximum", Float.valueOf(2_147_483_648f)),
                 Arguments.of("double above integer maximum", Double.valueOf((double) aboveMaximum)),
                 Arguments.of("numeric string", "7"),
                 Arguments.of("map", Map.of("line", 7)),
                 Arguments.of("list", List.of(7)),
                 Arguments.of("null", (Object) null));
+    }
+
+    private static Stream<Arguments> invalidEndLineValues() {
+        return Stream.of(
+                Arguments.of("map", Map.of("line", 11)),
+                Arguments.of("list", List.of(11)),
+                Arguments.of("string", "11"),
+                Arguments.of("zero", Integer.valueOf(0)),
+                Arguments.of("negative", Long.valueOf(-1L)),
+                Arguments.of("fractional", new BigDecimal("11.5")),
+                Arguments.of("NaN", Double.valueOf(Double.NaN)),
+                Arguments.of("positive infinity", Float.valueOf(Float.POSITIVE_INFINITY)),
+                Arguments.of("long overflow", Long.valueOf((long) Integer.MAX_VALUE + 1L)),
+                Arguments.of("float overflow", Float.valueOf(2_147_483_648f)));
     }
 }
