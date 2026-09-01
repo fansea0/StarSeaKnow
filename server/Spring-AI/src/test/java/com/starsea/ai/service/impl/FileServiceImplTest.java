@@ -33,6 +33,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -81,7 +83,7 @@ class FileServiceImplTest {
         knowledge.setId(10L);
         when(knowledgeMapper.selectById(10L)).thenAnswer(invocation -> {
             assertFalse(transactionManager.isActive());
-            assertTrue(Files.exists(uploadDirectory.resolve("guide.md")));
+            assertEquals(1, storedFileCount());
             return knowledge;
         });
         doAnswer(invocation -> {
@@ -102,7 +104,7 @@ class FileServiceImplTest {
         long fileId = service.uploadToKnowledge(markdown("guide.md"), 10L);
 
         assertEquals(20L, fileId);
-        assertTrue(Files.exists(uploadDirectory.resolve("guide.md")));
+        assertEquals(1, storedFileCount());
         var order = inOrder(fileMapper, knowledgeFileMapper, processingMapper);
         order.verify(fileMapper).insert(any(com.starsea.ai.domain.File.class));
         order.verify(knowledgeFileMapper).insert(any(KnowledgeFile.class));
@@ -118,13 +120,42 @@ class FileServiceImplTest {
     }
 
     @Test
+    void identical_original_names_across_tenants_and_knowledge_bases_use_distinct_physical_paths() {
+        Knowledge knowledge = new Knowledge();
+        knowledge.setId(10L);
+        when(knowledgeMapper.selectById(org.mockito.ArgumentMatchers.anyLong())).thenReturn(knowledge);
+        AtomicLong ids = new AtomicLong(20L);
+        List<com.starsea.ai.domain.File> rows = new ArrayList<>();
+        doAnswer(invocation -> {
+            com.starsea.ai.domain.File row = invocation.getArgument(0);
+            row.setId(ids.getAndIncrement());
+            rows.add(row);
+            return 1;
+        }).when(fileMapper).insert(any(com.starsea.ai.domain.File.class));
+        when(knowledgeFileMapper.insert(any(KnowledgeFile.class))).thenReturn(1);
+        when(processingMapper.insert(any(FileProcessing.class))).thenReturn(1);
+
+        service.uploadToKnowledge(markdown("guide.md"), 10L);
+        AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 8L, 2L,
+                "tenant_admin", "jti-2"));
+        service.uploadToKnowledge(markdown("guide.md"), 11L);
+
+        assertEquals(List.of("guide.md", "guide.md"), rows.stream()
+                .map(com.starsea.ai.domain.File::getFileName).toList());
+        assertEquals(2, rows.stream().map(com.starsea.ai.domain.File::getPath).distinct().count());
+        assertTrue(rows.stream().allMatch(row -> Files.exists(Path.of(row.getPath()))));
+        assertTrue(rows.get(0).getPath().contains("1" + java.io.File.separator + "10"));
+        assertTrue(rows.get(1).getPath().contains("2" + java.io.File.separator + "11"));
+    }
+
+    @Test
     void commit_failure_rolls_back_all_three_inserts_and_removes_only_the_new_file() {
         transactionManager.failCommit();
         Knowledge knowledge = new Knowledge();
         knowledge.setId(10L);
         when(knowledgeMapper.selectById(10L)).thenAnswer(invocation -> {
             assertFalse(transactionManager.isActive());
-            assertTrue(Files.exists(uploadDirectory.resolve("commit-failed.md")));
+            assertEquals(1, storedFileCount());
             return knowledge;
         });
         doAnswer(invocation -> {
@@ -145,7 +176,7 @@ class FileServiceImplTest {
         assertThrows(TransactionSystemException.class,
                 () -> service.uploadToKnowledge(markdown("commit-failed.md"), 10L));
 
-        assertFalse(Files.exists(uploadDirectory.resolve("commit-failed.md")));
+        assertEquals(0, storedFileCount());
         verify(fileMapper).insert(any(com.starsea.ai.domain.File.class));
         verify(knowledgeFileMapper).insert(any(KnowledgeFile.class));
         verify(processingMapper).insert(any(FileProcessing.class));
@@ -176,11 +207,11 @@ class FileServiceImplTest {
     }
 
     @Test
-    void filename_collision_never_deletes_the_preexisting_file() throws Exception {
+    void preexisting_original_name_is_never_used_or_deleted() throws Exception {
         Path existing = uploadDirectory.resolve("existing.md");
         Files.writeString(existing, "original content");
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(IllegalArgumentException.class,
                 () -> service.uploadToKnowledge(markdown("existing.md"), 10L));
 
         assertTrue(Files.exists(existing));
@@ -264,6 +295,14 @@ class FileServiceImplTest {
     private MockMultipartFile markdown(String filename) {
         return new MockMultipartFile("file", filename, "text/markdown",
                 "# Guide\n\nBody".getBytes(StandardCharsets.UTF_8));
+    }
+
+    private long storedFileCount() {
+        try (var paths = Files.walk(uploadDirectory)) {
+            return paths.filter(Files::isRegularFile).count();
+        } catch (IOException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private static final class TestTransactionManager extends AbstractPlatformTransactionManager {

@@ -29,6 +29,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.Map;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import static com.starsea.ai.util.FileUtil.getFileTypeByExtension;
 
 /**
@@ -65,8 +66,13 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
         long tenantId = requireTenantId();
         String fileName = requireSafeFilename(file.getOriginalFilename());
         Path uploadRoot = Path.of(path).toAbsolutePath().normalize();
-        Path createdPath = uploadRoot.resolve(fileName).normalize();
-        if (!createdPath.getParent().equals(uploadRoot)) {
+        String fileType = getFileTypeByExtension(fileName);
+        String suffix = "another".equals(fileType) ? "" : "." + fileType;
+        Path createdPath = uploadRoot.resolve(Long.toString(tenantId))
+                .resolve(Long.toString(knowledgeId))
+                .resolve(UUID.randomUUID() + suffix)
+                .normalize();
+        if (!createdPath.startsWith(uploadRoot)) {
             throw new IllegalArgumentException("文件名非法!");
         }
         writePhysicalFile(file, uploadRoot, createdPath);
@@ -101,7 +107,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
     private void writePhysicalFile(MultipartFile file, Path uploadRoot, Path createdPath) {
         boolean ownsCreatedPath = false;
         try {
-            Files.createDirectories(uploadRoot);
+            Files.createDirectories(createdPath.getParent());
             try (InputStream input = file.getInputStream();
                  OutputStream output = Files.newOutputStream(createdPath,
                          StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
