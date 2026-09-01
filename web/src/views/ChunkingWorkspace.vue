@@ -106,7 +106,7 @@ const terminalChunkStates = new Set([2, 3, 6])
 const processingStates = new Set([1, 5])
 const previewStates = new Set([0, 2, 3])
 const confirmStates = new Set([2, 3])
-const chunkActionDisabledStates = new Set([1, 4, 5])
+const mutableChunkStates = new Set([2, 3, 6])
 const defaultStrategyConfig = Object.freeze({ minTokens: 100, targetTokens: 400, maxTokens: 512 })
 
 function initialProcessing() {
@@ -148,6 +148,7 @@ export default {
       strategies: [],
       selectedStrategy: '',
       strategyConfig: { ...defaultStrategyConfig },
+      strategyConfigHydrated: false,
       configValid: true,
       chunks: [],
       processing: initialProcessing(),
@@ -193,7 +194,7 @@ export default {
       return this.processingLoaded && !this.processingLoading && Number(this.processing.state) === 7 && Number(this.processing.failedFromState) === 5
     },
     chunkActionsDisabled() {
-      return !this.processingLoaded || this.processingLoading || chunkActionDisabledStates.has(Number(this.processing.state))
+      return !this.processingLoaded || this.processingLoading || !mutableChunkStates.has(Number(this.processing.state))
     },
     processingLabel() {
       return Number(this.processing.state) === 1 ? '正在生成分块' : '正在建立索引'
@@ -229,6 +230,7 @@ export default {
       this.strategies = []
       this.selectedStrategy = ''
       this.strategyConfig = { ...defaultStrategyConfig }
+      this.strategyConfigHydrated = false
       this.configValid = true
       this.chunks = []
       this.processing = initialProcessing()
@@ -299,8 +301,11 @@ export default {
           this.processing = { ...this.processing, ...(response?.data || {}) }
           this.processingLoaded = true
           this.syncSelectedStrategy()
-          const restoredConfig = validPolicySnapshot(this.processing.policySnapshot)
-          if (restoredConfig) this.strategyConfig = restoredConfig
+          if (!this.strategyConfigHydrated) {
+            const restoredConfig = validPolicySnapshot(this.processing.policySnapshot)
+            if (restoredConfig) this.strategyConfig = restoredConfig
+            this.strategyConfigHydrated = true
+          }
           if (forceChunkLoad) this.chunksLoadedKey = ''
           if (shouldLoadChunks(this.processing)) {
             this.stopPolling()

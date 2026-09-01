@@ -289,6 +289,12 @@ describe('ChunkingWorkspace', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('人工修改后的正文')
+    expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('true')
+    expect(wrapper.get('[data-testid="edit-chunk"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="delete-chunk"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
     await wrapper.get('[data-testid="retry-chunking"]').trigger('click')
     await flushPromises()
 
@@ -320,6 +326,57 @@ describe('ChunkingWorkspace', () => {
     expect(createPreview).toHaveBeenCalledWith('11', '22', expect.objectContaining({
       strategyConfig: { minTokens: 64, targetTokens: 256, maxTokens: 480 },
     }))
+  })
+
+  it('keeps local token edits through chunk-save refresh and hydrates the next route snapshot', async () => {
+    const route = routeFor('22')
+    const oldSnapshot = { minTokens: 64, targetTokens: 256, maxTokens: 480 }
+    const nextSnapshot = { minTokens: 90, targetTokens: 300, maxTokens: 500 }
+    getProcessing.mockImplementation((knowledgeId, fileId) => processing(3, {
+      lockVersion: fileId === '22' ? 3 : 8,
+      policySnapshot: fileId === '22' ? oldSnapshot : nextSnapshot,
+    }))
+    getChunks.mockImplementation((knowledgeId, fileId) => Promise.resolve({
+      data: [{
+        ...draftChunk,
+        publicId: fileId === '22' ? 'chunk-1' : 'chunk-next',
+        content: fileId === '22' ? '人工修改后的正文' : '下一文件正文',
+      }],
+    }))
+    updateChunk.mockResolvedValue({ data: { ...draftChunk, content: '触发刷新后的正文', lockVersion: 6 } })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const wrapper = mountWorkspace(route)
+    await flushPromises()
+
+    const setToken = async (testId, value) => {
+      const input = wrapper.get(`[data-testid="${testId}"] input`)
+      await input.setValue(String(value))
+      await input.trigger('change')
+      await nextTick()
+    }
+    await setToken('min-tokens', 80)
+    await setToken('target-tokens', 300)
+    await setToken('max-tokens', 500)
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('触发刷新后的正文')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="min-tokens"] input').element.value).toBe('80')
+    expect(wrapper.get('[data-testid="target-tokens"] input').element.value).toBe('300')
+    expect(wrapper.get('[data-testid="max-tokens"] input').element.value).toBe('500')
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await flushPromises()
+    expect(createPreview).toHaveBeenLastCalledWith('11', '22', expect.objectContaining({
+      strategyConfig: { minTokens: 80, targetTokens: 300, maxTokens: 500 },
+    }))
+
+    route.params.fileId = '33'
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="min-tokens"] input').element.value).toBe('90')
+    expect(wrapper.get('[data-testid="target-tokens"] input').element.value).toBe('300')
+    expect(wrapper.get('[data-testid="max-tokens"] input').element.value).toBe('500')
   })
 
   it('offers an explicit reload on a preview 409 and preserves config on a 422', async () => {
@@ -440,7 +497,7 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
   })
 
-  it.each([1, 4, 5])('disables every retained chunk action in file state %s', async (state) => {
+  it.each([0, 1, 4, 5, 7])('disables every retained chunk action in file state %s', async (state) => {
     getProcessing
       .mockResolvedValueOnce(processing(6))
       .mockResolvedValueOnce(processing(state))
