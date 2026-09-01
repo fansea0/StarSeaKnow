@@ -122,7 +122,7 @@
                   <th scope="col" class="kb-col-size">大小</th>
                   <th scope="col" class="kb-col-type">类型</th>
                   <th scope="col" class="kb-col-status">状态</th>
-                  <th scope="col" class="kb-col-embed">嵌入状态</th>
+                  <th scope="col" class="kb-col-embed">分块状态</th>
                   <th scope="col" class="kb-col-actions" style="text-align:right">操作</th>
                 </tr>
               </thead>
@@ -157,12 +157,12 @@
                     />
                   </td>
                   <td class="kb-col-embed">
-                    <span class="kb-embed" :class="`kb-embed--${embedClass(row.embeddingStatus)}`">
+                    <span class="kb-embed" :class="`kb-embed--${pipelineClass(row.pipelineState)}`">
                       <span class="kb-embed__dot"></span>
-                      <el-icon v-if="row.embeddingStatus === 2" class="kb-embed__icon"><Check /></el-icon>
-                      <el-icon v-else-if="row.embeddingStatus === 1" class="kb-embed__icon"><Close /></el-icon>
+                      <el-icon v-if="row.pipelineState === 6" class="kb-embed__icon"><Check /></el-icon>
+                      <el-icon v-else-if="row.pipelineState === 7" class="kb-embed__icon"><Close /></el-icon>
                       <el-icon v-else class="kb-embed__icon"><Minus /></el-icon>
-                      <span>{{ embedLabel(row.embeddingStatus) }}</span>
+                      <span>{{ pipelineLabel(row.pipelineState) }}</span>
                     </span>
                   </td>
                   <td class="kb-col-actions">
@@ -171,11 +171,12 @@
                         type="primary"
                         size="small"
                         class="kb-action kb-action--primary"
-                        :loading="embedLoadingId === row.id"
-                        @click="embedFile(row)"
+                        :data-testid="`file-primary-action-${row.id}`"
+                        :loading="!isMarkdown(row) && embedLoadingId === row.id"
+                        @click="handleFileAction(row)"
                       >
                         <el-icon><MagicStick /></el-icon>
-                        <span>文本嵌入</span>
+                        <span>{{ isMarkdown(row) ? '分块管理' : '文本嵌入' }}</span>
                       </el-button>
                       <el-button
                         text
@@ -343,7 +344,7 @@ export default {
     },
     embedProgress() {
       if (!this.docList.length) return 0
-      const done = this.docList.filter((r) => r.embeddingStatus === 2).length
+      const done = this.docList.filter((r) => r.pipelineState === 6).length
       return Math.round((done / this.docList.length) * 100)
     },
   },
@@ -395,12 +396,35 @@ export default {
     beforeUpload(file) {
       return true
     },
-    onUploadSuccess() {
+    async onUploadSuccess(response, uploadFile) {
       this.$message.success('上传成功')
-      this.fetchDocList()
+      await this.fetchDocList()
+      const fileId = response?.data
+      if (fileId && this.isMarkdown(uploadFile)) {
+        this.openChunkingWorkspace(fileId)
+      }
     },
     onUploadError() {
       this.$message.error('上传失败')
+    },
+    handleFileAction(row) {
+      if (this.isMarkdown(row)) {
+        this.openChunkingWorkspace(row.id)
+        return
+      }
+      return this.embedFile(row)
+    },
+    openChunkingWorkspace(fileId) {
+      return this.$router.push({
+        name: 'ChunkingWorkspace',
+        params: { knowledgeId: String(this.knowledgeId), fileId: String(fileId) },
+      })
+    },
+    isMarkdown(file) {
+      const type = String(file?.type || '').toLowerCase()
+      if (type) return type === 'md' || type === 'markdown'
+      const name = String(file?.name || file?.fileName || '')
+      return /\.(md|markdown)$/i.test(name)
     },
     async embedFile(row) {
       this.embedLoadingId = row.id
@@ -498,14 +522,22 @@ export default {
     goBackToList() {
       this.$router.push('/knowledge')
     },
-    embedLabel(status) {
-      if (status === 2) return '已嵌入'
-      if (status === 1) return '失败'
-      return '未嵌入'
+    pipelineLabel(state) {
+      const labels = {
+        0: '待分块',
+        1: '分块中',
+        2: '待调整',
+        3: '待调整',
+        4: '待调整',
+        5: '向量化中',
+        6: '已完成',
+        7: '失败',
+      }
+      return labels[state] || '待分块'
     },
-    embedClass(status) {
-      if (status === 2) return 'ok'
-      if (status === 1) return 'fail'
+    pipelineClass(state) {
+      if (state === 6) return 'ok'
+      if (state === 7) return 'fail'
       return 'pending'
     },
   },

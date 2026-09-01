@@ -75,6 +75,11 @@ export const routes = [
     component: () => import('../views/KnowledgeDetail.vue')
   },
   {
+    path: '/knowledge/:knowledgeId/files/:fileId/chunks',
+    name: 'ChunkingWorkspace',
+    component: () => import('../views/ChunkingWorkspace.vue')
+  },
+  {
     path: '/agent/:id',
     name: 'AgentDetail',
     component: () => import('../views/AgentDetail.vue')
