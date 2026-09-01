@@ -8,15 +8,15 @@
     <div class="token-fields">
       <label data-testid="min-tokens">
         <span>最小 Token</span>
-        <el-input-number v-model="values.minTokens" :min="1" :max="9999" controls-position="right" />
+        <el-input-number v-model="values.minTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" />
       </label>
       <label data-testid="target-tokens">
         <span>推荐 Token</span>
-        <el-input-number v-model="values.targetTokens" :min="1" :max="9999" controls-position="right" />
+        <el-input-number v-model="values.targetTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" />
       </label>
       <label data-testid="max-tokens">
         <span>最大 Token</span>
-        <el-input-number v-model="values.maxTokens" :min="1" :max="9999" controls-position="right" />
+        <el-input-number v-model="values.maxTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" />
       </label>
     </div>
 
@@ -30,6 +30,7 @@ import { computed, reactive, watch } from 'vue'
 
 const props = defineProps({
   initialValues: { type: Object, default: () => ({ minTokens: 100, targetTokens: 400, maxTokens: 512 }) },
+  disabled: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['config-change', 'validity-change'])

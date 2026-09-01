@@ -14,6 +14,7 @@
         :strategies="strategies"
         :selected-code="selectedStrategy"
         :strategy-config="strategyConfig"
+        :config-disabled="!strategyConfigHydrated"
         :config-valid="configValid"
         :loading="capabilityLoading"
         :submitting="previewSubmitting"
@@ -33,9 +34,9 @@
             <span>{{ processing.lastError || '文件处理失败，请按失败阶段重试。' }}</span>
           </div>
           <el-button
-            v-if="canRetryPreview"
+            v-if="showRetryPreview"
             data-testid="retry-chunking"
-            :disabled="!configValid || previewSubmitting"
+            :disabled="!canRetryPreview || !configValid || previewSubmitting"
             @click="submitPreview(true)"
           >重试分块</el-button>
           <el-button
@@ -137,7 +138,11 @@ function validPolicySnapshot(snapshot) {
 
 function shouldLoadChunks(processing) {
   return terminalChunkStates.has(Number(processing.state))
-    || (Number(processing.state) === 7 && Number(processing.failedFromState) === 1)
+    || isRetainedChunksFailure(processing)
+}
+
+function isRetainedChunksFailure(processing) {
+  return Number(processing.state) === 7 && Number(processing.failedFromState) === 1
 }
 
 export default {
@@ -169,6 +174,7 @@ export default {
       processingRequest: null,
       chunksRequest: null,
       chunksLoadedKey: '',
+      retainedChunksLoaded: false,
       chunkReloadEpochs: {},
       reindexingChunkIds: new Set(),
       requestGeneration: 0,
@@ -188,7 +194,10 @@ export default {
       return this.processingLoaded && !this.processingLoading && confirmStates.has(Number(this.processing.state)) && this.chunks.length > 0
     },
     canRetryPreview() {
-      return this.processingLoaded && !this.processingLoading && Number(this.processing.state) === 7 && Number(this.processing.failedFromState) === 1
+      return this.processingLoaded && !this.processingLoading && this.showRetryPreview && this.retainedChunksLoaded
+    },
+    showRetryPreview() {
+      return isRetainedChunksFailure(this.processing)
     },
     canRetryVector() {
       return this.processingLoaded && !this.processingLoading && Number(this.processing.state) === 7 && Number(this.processing.failedFromState) === 5
@@ -250,6 +259,7 @@ export default {
       this.processingRequest = null
       this.chunksRequest = null
       this.chunksLoadedKey = ''
+      this.retainedChunksLoaded = false
       this.chunkReloadEpochs = {}
       this.reindexingChunkIds = new Set()
       const context = this.currentContext()
@@ -300,6 +310,8 @@ export default {
           if (!this.isCurrent(context)) return false
           this.processing = { ...this.processing, ...(response?.data || {}) }
           this.processingLoaded = true
+          const retainedChunksFailure = isRetainedChunksFailure(this.processing)
+          this.retainedChunksLoaded = false
           this.syncSelectedStrategy()
           if (!this.strategyConfigHydrated) {
             const restoredConfig = validPolicySnapshot(this.processing.policySnapshot)
@@ -310,6 +322,9 @@ export default {
           if (shouldLoadChunks(this.processing)) {
             this.stopPolling()
             const chunksLoaded = await this.loadChunks({ force: forceChunkLoad }, context)
+            if (this.isCurrent(context) && retainedChunksFailure) {
+              this.retainedChunksLoaded = Boolean(chunksLoaded)
+            }
             return Boolean(chunksLoaded && this.isCurrent(context))
           } else if (this.isProcessing) {
             this.schedulePoll(context)

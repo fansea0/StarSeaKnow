@@ -187,8 +187,14 @@ describe('ChunkingWorkspace', () => {
 
     expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('正在读取文件处理状态')
-    initialProcessing.resolve(processing(0, { lockVersion: 7 }))
+    expect(wrapper.get('[data-testid="min-tokens"] input').attributes('disabled')).toBeDefined()
+    initialProcessing.resolve(processing(0, {
+      lockVersion: 7,
+      policySnapshot: { minTokens: 64, targetTokens: 256, maxTokens: 480 },
+    }))
     await flushPromises()
+    expect(wrapper.get('[data-testid="min-tokens"] input').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="min-tokens"] input').element.value).toBe('64')
     expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
@@ -307,6 +313,63 @@ describe('ChunkingWorkspace', () => {
       replaceEditedDrafts: true,
       lockVersion: 3,
     }))
+  })
+
+  it('keeps FAILED CHUNKING retry disabled after retained chunks fail, then unlocks after reload', async () => {
+    getProcessing.mockResolvedValue(processing(7, {
+      failedFromState: 1,
+      lastError: 'Markdown 解析失败',
+    }))
+    getChunks
+      .mockRejectedValueOnce({ response: { status: 503, data: { msg: '保留草稿读取失败' } } })
+      .mockResolvedValueOnce({ data: [draftChunk] })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    const retry = wrapper.get('[data-testid="retry-chunking"]')
+    expect(retry.attributes('disabled')).toBeDefined()
+    await retry.trigger('click')
+    expect(createPreview).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="retry-processing-load"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="retry-chunking"]').attributes('disabled')).toBeUndefined()
+    await wrapper.get('[data-testid="retry-chunking"]').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(createPreview).toHaveBeenCalledWith('11', '22', expect.objectContaining({
+      replaceEditedDrafts: true,
+    }))
+  })
+
+  it('does not let an old retained-chunks response unlock the new route retry', async () => {
+    const route = routeFor('22')
+    const oldChunks = deferred()
+    const newChunks = deferred()
+    getProcessing.mockResolvedValue(processing(7, {
+      failedFromState: 1,
+      lastError: 'Markdown 解析失败',
+    }))
+    getChunks.mockImplementation((knowledgeId, fileId) => (
+      fileId === '22' ? oldChunks.promise : newChunks.promise
+    ))
+    const wrapper = mountWorkspace(route)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="retry-chunking"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="retry-chunking"]').attributes('disabled')).toBeDefined()
+    route.params.fileId = '33'
+    await nextTick()
+    await flushPromises()
+
+    oldChunks.resolve({ data: [draftChunk] })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="retry-chunking"]').attributes('disabled')).toBeDefined()
+
+    newChunks.resolve({ data: [{ ...draftChunk, publicId: 'chunk-new' }] })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="retry-chunking"]').attributes('disabled')).toBeUndefined()
   })
 
   it('restores a valid non-default Markdown policy snapshot into the inputs and retry payload', async () => {
@@ -550,12 +613,18 @@ describe('ChunkingWorkspace', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('状态服务不可用')
+    expect(wrapper.get('[data-testid="min-tokens"] input').attributes('disabled')).toBeDefined()
     expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
 
-    getProcessing.mockResolvedValueOnce(processing(0, { lockVersion: 12 }))
+    getProcessing.mockResolvedValueOnce(processing(0, {
+      lockVersion: 12,
+      policySnapshot: { minTokens: 72, targetTokens: 288, maxTokens: 504 },
+    }))
     await wrapper.get('[data-testid="retry-processing-load"]').trigger('click')
     await flushPromises()
+    expect(wrapper.get('[data-testid="min-tokens"] input').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="min-tokens"] input').element.value).toBe('72')
     expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
   })
 
