@@ -1,8 +1,5 @@
 package com.starsea.ai.chunking.indexing;
 
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.UUID;
 
@@ -11,19 +8,28 @@ import java.util.UUID;
 public interface ChunkVectorGateway {
 
     void delete(UUID publicId);
-}
 
-@Component
-final class SpringAiChunkVectorGateway implements ChunkVectorGateway {
-
-    private final VectorStore vectorStore;
-
-    SpringAiChunkVectorGateway(VectorStore vectorStore) {
-        this.vectorStore = vectorStore;
+    default void add(List<VectorDocument> documents) {
+        throw new UnsupportedOperationException("Vector addition is not configured");
     }
 
-    @Override
-    public void delete(UUID publicId) {
-        vectorStore.delete(List.of(publicId.toString()));
+    default void deleteAll(List<UUID> publicIds) {
+        publicIds.forEach(this::delete);
+    }
+
+    record VectorDocument(
+            UUID publicId,
+            String indexContent,
+            long tenantId,
+            long knowledgeId,
+            long fileId,
+            UUID documentPublicId,
+            int chunkIndex,
+            String fileType,
+            List<String> sectionPath) {
+
+        public VectorDocument {
+            sectionPath = sectionPath == null ? List.of() : List.copyOf(sectionPath);
+        }
     }
 }

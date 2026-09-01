@@ -1,6 +1,5 @@
 package com.starsea.ai.service;
 
-import com.starsea.ai.domain.File;
 import com.starsea.ai.openapi.retrieval.RetrievalQuery;
 import com.starsea.ai.openapi.retrieval.RetrievedChunk;
 import org.springframework.ai.document.Document;
@@ -14,10 +13,6 @@ import java.util.List;
  * @Date:2025/4/26 11:20
  */
 public interface RagService {
-
-    // 向量化处理
-    void vectorize(File file, Long knowledgeId);
-
 
     // 匹配相似文档内容
     List<Document> search(String keyword,String knowledgeId);

@@ -19,6 +19,9 @@ public final class ChunkingApiModels {
     public record EditChunkRequest(String content, Integer lockVersion) {
     }
 
+    public record ConfirmRequest(boolean overlapEnabled, int overlapTokens, int lockVersion) {
+    }
+
     public record ChunkResponse(UUID publicId, int position, String content,
                                 List<String> sectionPath, Map<String, Object> sourceLocator,
                                 int tokenCount, int status, boolean isModified, int lockVersion) {

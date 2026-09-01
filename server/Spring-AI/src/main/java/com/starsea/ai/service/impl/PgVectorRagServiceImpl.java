@@ -14,19 +14,9 @@ import com.starsea.ai.service.RagService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.reader.ExtractedTextFormatter;
-import org.springframework.ai.reader.TextReader;
-import org.springframework.ai.reader.markdown.MarkdownDocumentReader;
-import org.springframework.ai.reader.markdown.config.MarkdownDocumentReaderConfig;
-import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
-import org.springframework.ai.reader.pdf.config.PdfDocumentReaderConfig;
-import org.springframework.ai.reader.tika.TikaDocumentReader;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 
 import java.util.Collection;
@@ -55,14 +45,6 @@ public class PgVectorRagServiceImpl implements RagService {
     @Lazy
     private final FileService fileService;
 
-
-    @Override
-    public void vectorize(File file, Long knowledgeId) {
-        // TODO: 文件分块 ---> 向量化处理 ---> 存入pgvector
-        List<Document> documents = handle(file.getPath(), file.getId(), knowledgeId,
-                Objects.requireNonNull(file.getPublicId(), "file publicId must not be null"), file.getType());
-        this.vectorStore.accept(documents);
-    }
 
     @Override
     public List<RetrievedChunk> retrieve(RetrievalQuery query) {
@@ -187,89 +169,6 @@ public class PgVectorRagServiceImpl implements RagService {
     }
 
 
-    List<Document> handle(String path, Long fileId, Long knowledgeId, UUID documentPublicId, String fileType) {
-        // 解析当前请求的租户ID,所有写入pgvector的Document必须携带tenantId,
-        // 否则后续search的 tenantId == N 过滤无法命中任何数据(数据隔离)。
-        AuthContext ctx = AuthContext.current();
-        if (ctx == null || ctx.getTenantId() == null) {
-            throw new AuthException(AuthErrorCode.MISSING_TOKEN, "login required");
-        }
-        Long tenantId = ctx.getTenantId();
-
-        // 将文件路径path转化为Resource
-        Resource resource = new FileSystemResource(path);
-        TokenTextSplitter tokenTextSplitter = null;
-        if (path.endsWith(".pdf")) {
-            PagePdfDocumentReader documentReader = new PagePdfDocumentReader(resource,
-                    PdfDocumentReaderConfig.builder()
-                            .withPageExtractedTextFormatter(ExtractedTextFormatter.builder()
-                                    .withNumberOfBottomTextLinesToDelete(3)
-                                    .withNumberOfTopPagesToSkipBeforeDelete(1)
-                                    .build())
-                            .withPagesPerDocument(1)
-                            .build());
-            // 对于pdf文件采用大分块方法，适用于一章内容都在一页的PDF
-            tokenTextSplitter = new TokenTextSplitter();
-            // 兜底注入tenantId/knowledgeId/fileId(PagePdfDocumentReader不会自动设置这些metadata)
-            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId,
-                    documentPublicId, fileType);
-        }else if(path.endsWith(".txt")){
-            TextReader documentReader = new TextReader(resource);
-            documentReader.getCustomMetadata().put("knowledgeId",knowledgeId);
-            documentReader.getCustomMetadata().put("fileId",fileId);
-            // 对于txt文件采用小分块方法
-            tokenTextSplitter = new TokenTextSplitter(150,100,5,10000,true);
-            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId,
-                    documentPublicId, fileType);
-        }else if (path.endsWith(".md")||path.endsWith(".markdown")){
-            MarkdownDocumentReaderConfig config = MarkdownDocumentReaderConfig.builder()
-                    .withHorizontalRuleCreateDocument(true)
-                    .withIncludeCodeBlock(false)
-                    .withIncludeBlockquote(true)
-                    .withAdditionalMetadata("knowledgeId", knowledgeId)
-                    .withAdditionalMetadata("fileId", fileId)
-                    .build();
-            MarkdownDocumentReader reader = new MarkdownDocumentReader(resource, config);
-            printDocument(reader.get());
-            tokenTextSplitter = new TokenTextSplitter();
-            List<Document> documentList = tokenTextSplitter.apply(reader.get());
-            printDocument(documentList);
-            return applyMetadata(documentList, tenantId, knowledgeId, fileId, documentPublicId, fileType);
-        } else if (path.endsWith(".doc")||path.endsWith(".docx")||path.endsWith(".ppt")||path.endsWith(".pptx")||path.endsWith(".html")){
-            TikaDocumentReader documentReader = new TikaDocumentReader(resource);
-            tokenTextSplitter = new TokenTextSplitter();
-            // TikaReader不暴露customMetadata,需要在生成Document后兜底注入
-            return applyMetadata(tokenTextSplitter.apply(documentReader.get()), tenantId, knowledgeId, fileId,
-                    documentPublicId, fileType);
-        }else {
-            throw new RuntimeException("不支持的文件类型");
-        }
-    }
-
-    /**
-     * 对 Document 列表统一写入租户、来源与稳定分块 metadata。
-     * 用于保证后续 search() 的 tenantId == N 过滤能够命中本租户的所有文件类型向量。
-     */
-    private static List<Document> applyMetadata(List<Document> documents, Long tenantId, Long knowledgeId, Long fileId,
-                                                UUID documentPublicId, String fileType) {
-        if (documents == null) return null;
-        for (int index = 0; index < documents.size(); index++) {
-            Document doc = documents.get(index);
-            doc.getMetadata().put("tenantId", tenantId);
-            doc.getMetadata().put("knowledgeId", knowledgeId);
-            doc.getMetadata().put("fileId", fileId);
-            doc.getMetadata().put("documentPublicId", documentPublicId.toString());
-            doc.getMetadata().put("chunkId", doc.getId());
-            doc.getMetadata().put("chunkIndex", index);
-            doc.getMetadata().put("fileType", fileType);
-            Object pageNumber = firstMetadata(doc, "pageNumber", "page_number", "start_page_number", "page");
-            if (pageNumber != null) {
-                doc.getMetadata().put("pageNumber", pageNumber);
-            }
-        }
-        return documents;
-    }
-
     private static RetrievedChunk toRetrievedChunk(ScoredDocument result, Map<Long, File> files) {
         Document document = result.document();
         File file = files.get(metadataLong(document, "fileId"));
@@ -364,11 +263,4 @@ public class PgVectorRagServiceImpl implements RagService {
     private record ScoredDocument(Document document, double score) {
     }
 
-    private static void printDocument(List<Document> documents) {
-        System.out.println("-----------------------------------------------");
-        documents.forEach(document -> {
-            System.out.println("//"+document.getText()+"//");
-        });
-        System.out.println("-----------------------------------------------");
-    }
 }
