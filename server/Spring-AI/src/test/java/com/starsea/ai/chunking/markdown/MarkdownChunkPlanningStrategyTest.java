@@ -353,6 +353,47 @@ class MarkdownChunkPlanningStrategyTest {
         assertStrictlyIncreasingRanges(chunks);
     }
 
+    @Test
+    void a_separate_guide_does_not_steal_the_original_header_from_an_oversized_table() throws IOException {
+        String guide = "这是一个需要完整保留且包含许多重要前置条件的详细处理说明，具体内容如下：";
+        String header = "| 项目 | 说明 |\n| --- | --- |";
+        String source = guide + "\n\n" + header
+                + "\n| A | 第一项内容很长 |\n| B | 第二项内容很长 |\n| C | 第三项内容很长 |";
+
+        List<ChunkDraft> chunks = strategy.plan(parse(source), new ChunkPolicy(5, 28, 46));
+
+        int firstTable = firstChunkStartingWith(chunks, header);
+        assertTrue(firstTable > 0);
+        SourceLocator locator = chunks.get(firstTable).sourceLocator();
+        assertEquals(source.indexOf(header), locator.startOffset());
+        assertTrue(source.substring(locator.startOffset(), locator.endOffset()).startsWith(header));
+        assertStrictlyIncreasingRanges(chunks);
+        for (int index = firstTable + 1; index < chunks.size(); index++) {
+            SourceLocator later = chunks.get(index).sourceLocator();
+            assertFalse(source.substring(later.startOffset(), later.endOffset()).contains("| 项目 | 说明 |"));
+        }
+    }
+
+    @Test
+    void a_separate_guide_leaves_the_original_opening_and_closing_fences_to_code_parts() throws IOException {
+        String guide = "执行代码前需要完成环境准备并逐项核对所有重要前置条件，具体代码示例如下：";
+        String opening = "```text";
+        String source = guide + "\n\n" + opening
+                + "\nalpha-alpha-alpha\nbeta-beta-beta\ngamma-gamma-gamma\n```";
+
+        List<ChunkDraft> chunks = strategy.plan(parse(source), new ChunkPolicy(5, 22, 35));
+
+        int firstCode = firstChunkStartingWith(chunks, opening);
+        assertTrue(firstCode > 0);
+        assertEquals(source.indexOf(opening), chunks.get(firstCode).sourceLocator().startOffset());
+        assertEquals(source.length(), chunks.get(chunks.size() - 1).sourceLocator().endOffset());
+        assertStrictlyIncreasingRanges(chunks);
+        for (int index = firstCode + 1; index < chunks.size(); index++) {
+            SourceLocator later = chunks.get(index).sourceLocator();
+            assertFalse(source.substring(later.startOffset(), later.endOffset()).contains(opening));
+        }
+    }
+
     private ParsedStructure parse(String source) throws IOException {
         Path path = tempDir.resolve(UUID.randomUUID() + ".md");
         Files.writeString(path, source);
@@ -369,6 +410,15 @@ class MarkdownChunkPlanningStrategyTest {
             assertTrue(locator.endOffset() > locator.startOffset());
             previousEnd = locator.endOffset();
         }
+    }
+
+    private int firstChunkStartingWith(List<ChunkDraft> chunks, String prefix) {
+        for (int index = 0; index < chunks.size(); index++) {
+            if (chunks.get(index).content().startsWith(prefix)) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private ParsedStructure structure(List<StructuredBlock> blocks) {

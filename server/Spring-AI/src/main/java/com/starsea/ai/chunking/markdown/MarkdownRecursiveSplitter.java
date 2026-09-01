@@ -24,60 +24,61 @@ public final class MarkdownRecursiveSplitter {
     List<SplitPart> split(SemanticUnit unit, int maxTokens) {
         String content = MarkdownSemanticUnitBuilder.render(unit.blocks());
         if (fits(unit.sectionPath(), content, maxTokens)) {
-            return List.of(new SplitPart(content, sourceLocator(unit.blocks()), false, endReason(unit)));
+            SourceLocator locator = sourceLocator(unit.blocks());
+            return List.of(new SplitPart(content, locator, ownershipSpans(unit.blocks()),
+                    false, endReason(unit)));
         }
 
-        List<String> parts;
         StructuredBlock structuralBlock = unit.blocks().get(unit.blocks().size() - 1);
-        if (unit.blocks().size() == 1) {
-            parts = switch (structuralBlock.type()) {
-                case PARAGRAPH, BLOCK_QUOTE, HTML_BLOCK -> splitSentences(content, unit.sectionPath(), maxTokens);
-                case ORDERED_LIST, UNORDERED_LIST -> splitList(content, unit.sectionPath(), maxTokens);
-                case TABLE -> splitTable(content, unit.sectionPath(), maxTokens);
-                case FENCED_CODE -> splitFencedCode(content, unit.sectionPath(), maxTokens);
-                case INDENTED_CODE -> splitLines(content, unit.sectionPath(), maxTokens, "\n");
-                default -> splitTokenSafe(content, unit.sectionPath(), maxTokens);
-            };
-        } else {
-            parts = splitGuidedContainer(unit, structuralBlock, maxTokens);
+        if (unit.blocks().size() > 1) {
+            return splitGuidedContainer(unit, structuralBlock, maxTokens);
         }
 
+        List<String> parts = switch (structuralBlock.type()) {
+            case PARAGRAPH, BLOCK_QUOTE, HTML_BLOCK -> splitSentences(content, unit.sectionPath(), maxTokens);
+            case ORDERED_LIST, UNORDERED_LIST -> splitList(content, unit.sectionPath(), maxTokens);
+            case TABLE -> splitTable(content, unit.sectionPath(), maxTokens);
+            case FENCED_CODE -> splitFencedCode(content, unit.sectionPath(), maxTokens);
+            case INDENTED_CODE -> splitLines(content, unit.sectionPath(), maxTokens, "\n");
+            default -> splitTokenSafe(content, unit.sectionPath(), maxTokens);
+        };
         List<String> nonBlankParts = parts.stream().filter(part -> !part.isBlank()).toList();
-        List<SourceLocator> locators = projectSourceLocators(
-                unit, structuralBlock.type(), content, nonBlankParts);
-        List<SplitPart> result = new ArrayList<>(nonBlankParts.size());
-        for (int index = 0; index < nonBlankParts.size(); index++) {
-            result.add(new SplitPart(nonBlankParts.get(index), locators.get(index), true,
-                    structuralBlock.type() == BlockType.PARAGRAPH
-                            ? "SENTENCE_END" : "CONTAINER_END"));
+        return locateSingleBlockParts(structuralBlock, nonBlankParts);
+    }
+
+    private List<SplitPart> locateSingleBlockParts(StructuredBlock block, List<String> parts) {
+        SourceLocator whole = block.sourceLocator();
+        if (parts.size() <= 1 || whole.startOffset() == null || whole.startLine() == null) {
+            return parts.stream().map(part -> new SplitPart(part, whole,
+                    ownershipSpans(List.of(block)), true, splitEndReason(block.type()))).toList();
+        }
+        String sourceText = block.rawText();
+        NormalizedText normalizedSource = normalizeLineEndings(sourceText);
+        List<SplitPart> result = new ArrayList<>(parts.size());
+        int cursor = 0;
+        for (int index = 0; index < parts.size(); index++) {
+            String normalizedPart = normalizeLineEndings(parts.get(index)).text();
+            String owned = ownedSourceText(block.type(), normalizedSource.text(), normalizedPart,
+                    index, parts.size());
+            int start = owned.isEmpty() ? -1 : normalizedSource.text().indexOf(owned, cursor);
+            if (start < 0) {
+                throw new IllegalStateException(
+                        "Unable to map a recursive Markdown part to its original source ownership");
+            }
+            int end = start + owned.length();
+            int originalStart = normalizedSource.boundaries().get(start);
+            int originalEnd = normalizedSource.boundaries().get(end);
+            SourceLocator locator = project(whole, sourceText, originalStart, originalEnd);
+            result.add(new SplitPart(parts.get(index), locator,
+                    List.of(new OwnershipSpan(locator.startOffset(), locator.endOffset())),
+                    true, splitEndReason(block.type())));
+            cursor = end;
         }
         return List.copyOf(result);
     }
 
-    private List<SourceLocator> projectSourceLocators(SemanticUnit unit, BlockType type,
-                                                       String sourceText, List<String> parts) {
-        SourceLocator whole = sourceLocator(unit.blocks());
-        if (parts.size() <= 1 || whole.startOffset() == null || whole.startLine() == null) {
-            return java.util.Collections.nCopies(parts.size(), whole);
-        }
-        NormalizedText normalizedSource = normalizeLineEndings(sourceText);
-        List<SourceLocator> result = new ArrayList<>(parts.size());
-        int cursor = 0;
-        for (int index = 0; index < parts.size(); index++) {
-            String normalizedPart = normalizeLineEndings(parts.get(index)).text();
-            String owned = ownedSourceText(type, normalizedSource.text(), normalizedPart,
-                    index, parts.size());
-            int start = owned.isEmpty() ? -1 : normalizedSource.text().indexOf(owned, cursor);
-            if (start < 0) {
-                return java.util.Collections.nCopies(parts.size(), whole);
-            }
-            int end = start + owned.length();
-            result.add(project(whole, sourceText,
-                    normalizedSource.boundaries().get(start),
-                    normalizedSource.boundaries().get(end)));
-            cursor = end;
-        }
-        return List.copyOf(result);
+    private String splitEndReason(BlockType type) {
+        return type == BlockType.PARAGRAPH ? "SENTENCE_END" : "CONTAINER_END";
     }
 
     private NormalizedText normalizeLineEndings(String value) {
@@ -169,39 +170,73 @@ public final class MarkdownRecursiveSplitter {
         return count;
     }
 
-    private List<String> splitGuidedContainer(SemanticUnit unit, StructuredBlock container, int maxTokens) {
-        String guide = unit.blocks().get(0).rawText();
+    private List<SplitPart> splitGuidedContainer(SemanticUnit unit, StructuredBlock container, int maxTokens) {
+        StructuredBlock guideBlock = unit.blocks().get(0);
+        String guide = guideBlock.rawText();
         SemanticUnit containerOnly = new SemanticUnit(unit.unitId(), List.of(container), unit.sectionPath(),
                 unit.tokenCount(), unit.attributes());
-        List<String> containerParts = split(containerOnly, maxTokens).stream().map(SplitPart::content).toList();
-        List<String> result = new ArrayList<>();
+        List<SplitPart> containerParts = split(containerOnly, maxTokens);
+        List<SplitPart> result = new ArrayList<>();
         if (!containerParts.isEmpty()) {
-            String combined = guide + "\n\n" + containerParts.get(0);
+            String combined = guide + "\n\n" + containerParts.get(0).content();
             if (fits(unit.sectionPath(), combined, maxTokens)) {
-                result.add(combined);
+                result.add(combineGuideAndContainer(guideBlock, combined, containerParts.get(0)));
                 result.addAll(containerParts.subList(1, containerParts.size()));
-                return result;
+                return List.copyOf(result);
             }
         }
         for (int firstPartBudget = maxTokens - 1; firstPartBudget > 0; firstPartBudget--) {
             try {
-                List<String> smallerParts = split(containerOnly, firstPartBudget).stream()
-                        .map(SplitPart::content).toList();
+                List<SplitPart> smallerParts = split(containerOnly, firstPartBudget);
                 if (!smallerParts.isEmpty()) {
-                    String combined = guide + "\n\n" + smallerParts.get(0);
+                    String combined = guide + "\n\n" + smallerParts.get(0).content();
                     if (fits(unit.sectionPath(), combined, maxTokens)) {
-                        result.add(combined);
+                        result.add(combineGuideAndContainer(guideBlock, combined, smallerParts.get(0)));
                         result.addAll(smallerParts.subList(1, smallerParts.size()));
-                        return result;
+                        return List.copyOf(result);
                     }
                 }
             } catch (IllegalArgumentException ignored) {
                 break;
             }
         }
-        result.addAll(splitSentences(guide, unit.sectionPath(), maxTokens));
+        SemanticUnit guideOnly = new SemanticUnit(unit.unitId(), List.of(guideBlock), unit.sectionPath(),
+                unit.tokenCount(), unit.attributes());
+        result.addAll(split(guideOnly, maxTokens));
         result.addAll(containerParts);
-        return result;
+        return List.copyOf(result);
+    }
+
+    private SplitPart combineGuideAndContainer(StructuredBlock guide, String content,
+                                               SplitPart containerPart) {
+        SourceLocator locator = mergeLocators(guide.sourceLocator(), containerPart.sourceLocator());
+        List<OwnershipSpan> spans = new ArrayList<>(ownershipSpans(List.of(guide)));
+        spans.addAll(containerPart.ownershipSpans());
+        return new SplitPart(content, locator, List.copyOf(spans), true, "CONTAINER_END");
+    }
+
+    private SourceLocator mergeLocators(SourceLocator first, SourceLocator last) {
+        if (first == null) {
+            return last;
+        }
+        if (last == null) {
+            return first;
+        }
+        List<String> blockIds = new ArrayList<>(first.blockIds());
+        last.blockIds().stream().filter(id -> !blockIds.contains(id)).forEach(blockIds::add);
+        List<java.util.Map<String, Object>> regions = new ArrayList<>(first.regions());
+        regions.addAll(last.regions());
+        return new SourceLocator(first.type(), blockIds,
+                first.startOffset(), last.endOffset(), first.startLine(), last.endLine(),
+                first.startPage(), last.endPage(), regions);
+    }
+
+    private List<OwnershipSpan> ownershipSpans(List<StructuredBlock> blocks) {
+        return blocks.stream().map(StructuredBlock::sourceLocator)
+                .filter(Objects::nonNull)
+                .filter(locator -> locator.startOffset() != null && locator.endOffset() != null)
+                .map(locator -> new OwnershipSpan(locator.startOffset(), locator.endOffset()))
+                .toList();
     }
 
     private List<String> splitSentences(String content, List<String> path, int maxTokens) {
@@ -444,7 +479,15 @@ public final class MarkdownRecursiveSplitter {
                 locators.stream().flatMap(locator -> locator.regions().stream()).toList());
     }
 
-    record SplitPart(String content, SourceLocator sourceLocator, boolean forcedSplit, String endReason) {
+    record SplitPart(String content, SourceLocator sourceLocator,
+                     List<OwnershipSpan> ownershipSpans,
+                     boolean forcedSplit, String endReason) {
+        SplitPart {
+            ownershipSpans = ownershipSpans == null ? List.of() : List.copyOf(ownershipSpans);
+        }
+    }
+
+    record OwnershipSpan(int startOffset, int endOffset) {
     }
 
     private record Fence(char marker, int length) {
