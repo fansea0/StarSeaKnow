@@ -688,7 +688,14 @@ describe('ChunkingWorkspace', () => {
     getProcessing.mockResolvedValue(processing(3, { lockVersion: 9 }))
     getChunks.mockResolvedValue({ data: [{ ...draftChunk, isModified: false }] })
     confirmVectorization.mockRejectedValue({
-      response: { status: 422, data: { msg: '源文件已发生变化，请重新生成分块预览' } },
+      response: {
+        status: 422,
+        data: {
+          code: 500,
+          msg: 'The physical source changed after the chunk preview was generated',
+          data: { errorCode: 'SOURCE_CHANGED' },
+        },
+      },
     })
     const wrapper = mountWorkspace()
     await flushPromises()

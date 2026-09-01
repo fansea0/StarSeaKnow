@@ -124,6 +124,9 @@ function initialProcessing() {
 }
 
 function errorMessage(cause, fallback) {
+  if (cause?.response?.data?.data?.errorCode === 'SOURCE_CHANGED') {
+    return '源文件已发生变化，请重新生成分块预览'
+  }
   return cause?.response?.data?.msg || fallback
 }
 

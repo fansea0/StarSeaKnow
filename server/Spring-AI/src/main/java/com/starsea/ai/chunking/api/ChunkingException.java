@@ -6,6 +6,8 @@ import java.util.Map;
 
 public final class ChunkingException extends RuntimeException {
 
+    public static final String SOURCE_CHANGED_ERROR_CODE = "SOURCE_CHANGED";
+
     private final HttpStatus status;
     private final Map<String, Object> details;
 
@@ -41,5 +43,10 @@ public final class ChunkingException extends RuntimeException {
 
     public static ChunkingException unprocessable(String message, Map<String, Object> details) {
         return new ChunkingException(HttpStatus.UNPROCESSABLE_ENTITY, message, details);
+    }
+
+    public static ChunkingException sourceChanged() {
+        return unprocessable("源文件已发生变化，请重新生成分块预览",
+                Map.of("errorCode", SOURCE_CHANGED_ERROR_CODE));
     }
 }

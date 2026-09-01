@@ -120,8 +120,7 @@ class ChunkVectorServiceTest {
         ChunkPreviewService previewService = mock(ChunkPreviewService.class);
         ChunkCommandService commandService = mock(ChunkCommandService.class);
         ChunkVectorService vectorService = mock(ChunkVectorService.class);
-        doThrow(ChunkingException.unprocessable(
-                "The source document changed after preview; regenerate the preview"))
+        doThrow(ChunkingException.sourceChanged())
                 .when(vectorService).confirm(eq(KNOWLEDGE_ID), eq(FILE_ID), any(ConfirmRequest.class));
         MockMvc mvc = MockMvcBuilders.standaloneSetup(
                         new ChunkingController(previewService, commandService, vectorService))
@@ -135,7 +134,8 @@ class ChunkVectorServiceTest {
                                 """))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.msg").value(
-                        "The source document changed after preview; regenerate the preview"));
+                        "源文件已发生变化，请重新生成分块预览"))
+                .andExpect(jsonPath("$.data.errorCode").value("SOURCE_CHANGED"));
     }
 
     @Test
@@ -148,7 +148,8 @@ class ChunkVectorServiceTest {
                         new ConfirmRequest(true, 40, 3)));
 
         assertEquals(422, exception.status().value());
-        assertTrue(exception.getMessage().contains("changed"));
+        assertEquals("源文件已发生变化，请重新生成分块预览", exception.getMessage());
+        assertEquals("SOURCE_CHANGED", exception.details().get("errorCode"));
         verify(fixture.stateService, never()).transition(
                 anyLong(), anyLong(), any(), any(), anyInt());
         verify(fixture.processingMapper, never()).update(any(), any(Wrapper.class));
@@ -164,7 +165,8 @@ class ChunkVectorServiceTest {
                 () -> fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID));
 
         assertEquals(422, exception.status().value());
-        assertTrue(exception.getMessage().contains("changed"));
+        assertEquals("源文件已发生变化，请重新生成分块预览", exception.getMessage());
+        assertEquals("SOURCE_CHANGED", exception.details().get("errorCode"));
         assertEquals(1, fixture.transactionManager.begins());
         assertEquals(0, fixture.transactionManager.commits());
         assertEquals(1, fixture.transactionManager.rollbacks());
