@@ -1,5 +1,6 @@
 package com.starsea.ai.chunking.processing;
 
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.mapper.DocumentChunkMapper;
@@ -18,12 +19,14 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -38,6 +41,19 @@ import static org.mockito.Mockito.doReturn;
 class ChunkPipelineRecoveryTest {
 
     private static final Instant NOW = Instant.parse("2026-09-01T02:00:00Z");
+
+    @Test
+    void only_the_global_timeout_scan_bypasses_tenant_line_filtering() throws NoSuchMethodException {
+        InterceptorIgnore ignore = FileProcessingMapper.class
+                .getMethod("findTimedOutAsync", OffsetDateTime.class)
+                .getAnnotation(InterceptorIgnore.class);
+
+        assertNotNull(ignore);
+        assertEquals("true", ignore.tenantLine());
+        assertEquals(1, Arrays.stream(FileProcessingMapper.class.getDeclaredMethods())
+                .filter(method -> method.isAnnotationPresent(InterceptorIgnore.class))
+                .count());
+    }
 
     @Test
     void every_state_transition_refreshes_the_timeout_clock() throws IOException {

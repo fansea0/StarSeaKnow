@@ -1,5 +1,6 @@
 package com.starsea.ai.mapper;
 
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.starsea.ai.domain.FileProcessing;
 import org.apache.ibatis.annotations.Mapper;
@@ -11,6 +12,7 @@ import java.util.List;
 @Mapper
 public interface FileProcessingMapper extends BaseMapper<FileProcessing> {
 
+    @InterceptorIgnore(tenantLine = "true")
     List<FileProcessing> findTimedOutAsync(@Param("cutoff") OffsetDateTime cutoff);
 
     FileProcessing findScopedForUpdate(@Param("fileId") long fileId,
