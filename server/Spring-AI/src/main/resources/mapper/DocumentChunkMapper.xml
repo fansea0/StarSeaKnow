@@ -27,18 +27,40 @@
         <result property="lockVersion" column="lock_version" jdbcType="INTEGER"/>
         <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>
         <result property="updateTime" column="update_time" jdbcType="TIMESTAMP"/>
+        <result property="sourceDocumentPublicId" column="source_document_public_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
+        <result property="sourceFileName" column="source_file_name" jdbcType="VARCHAR"/>
+        <result property="sourceFileType" column="source_file_type" jdbcType="VARCHAR"/>
     </resultMap>
 
     <select id="findActiveByPublicIds" resultMap="DocumentChunkResultMap">
-        SELECT *
-        FROM document_chunk
-        WHERE tenant_id = #{tenantId}
-          AND status = 2
-          AND knowledge_id IN
+        SELECT dc.*,
+               f.public_id AS source_document_public_id,
+               f.file_name AS source_file_name,
+               f.type AS source_file_type
+        FROM document_chunk dc
+        JOIN file f
+          ON f.id = dc.file_id
+         AND f.tenant_id = dc.tenant_id
+        JOIN knowledge_file kf
+          ON kf.file_id = dc.file_id
+         AND kf.knowledge_id = dc.knowledge_id
+         AND kf.tenant_id = dc.tenant_id
+        WHERE dc.tenant_id = #{tenantId}
+          AND f.tenant_id = #{tenantId}
+          AND kf.tenant_id = #{tenantId}
+          AND dc.status = 2
+          AND f.status = 1
+          AND dc.index_content IS NOT NULL
+          AND dc.index_content ~ '[^[:space:]]'
+          AND dc.knowledge_id IN
           <foreach collection="knowledgeIds" item="knowledgeId" open="(" separator="," close=")">
               #{knowledgeId}
           </foreach>
-          AND public_id IN
+          AND kf.knowledge_id IN
+          <foreach collection="knowledgeIds" item="knowledgeId" open="(" separator="," close=")">
+              #{knowledgeId}
+          </foreach>
+          AND dc.public_id IN
           <foreach collection="publicIds" item="publicId" open="(" separator="," close=")">
               #{publicId,jdbcType=OTHER,typeHandler=com.starsea.ai.auth.UuidTypeHandler}
           </foreach>

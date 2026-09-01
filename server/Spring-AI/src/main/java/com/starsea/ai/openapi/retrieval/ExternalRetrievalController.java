@@ -24,6 +24,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -174,6 +176,7 @@ public class ExternalRetrievalController {
         List<RetrievedChunk> safeChunks = chunks == null ? List.of() : chunks;
         List<RetrievalRecord> records = new ArrayList<>(safeChunks.stream()
                 .filter(chunk -> chunk != null)
+                .filter(chunk -> chunk.content() != null && !chunk.content().isBlank())
                 .map(this::record)
                 .toList());
         RetrievalResponse response = new RetrievalResponse(List.copyOf(records));
@@ -191,8 +194,8 @@ public class ExternalRetrievalController {
         metadata.put("file_type", chunk.fileType());
         metadata.put("chunk_index", chunk.chunkIndex());
         metadata.put("section_path", chunk.sectionPath());
-        metadata.put("start_line", sourceValue(chunk.sourceLocator(), "startLine", "start_line"));
-        metadata.put("end_line", sourceValue(chunk.sourceLocator(), "endLine", "end_line"));
+        metadata.put("start_line", sourceLine(chunk.sourceLocator(), "startLine", "start_line"));
+        metadata.put("end_line", sourceLine(chunk.sourceLocator(), "endLine", "end_line"));
         double score = Double.isFinite(chunk.score()) ? Math.max(0.0, Math.min(1.0, chunk.score())) : 0.0;
         return new RetrievalRecord(truncateUtf8(chunk.content(), MAX_CHUNK_BYTES), score,
                 chunk.title() == null ? "" : chunk.title(),
@@ -280,17 +283,42 @@ public class ExternalRetrievalController {
         return value == null ? null : value.toString();
     }
 
-    private static Object sourceValue(Map<String, Object> sourceLocator, String... keys) {
+    private static Integer sourceLine(Map<String, Object> sourceLocator, String... keys) {
         if (sourceLocator == null) {
             return null;
         }
         for (String key : keys) {
             Object value = sourceLocator.get(key);
             if (value != null) {
-                return value;
+                return positiveInteger(value);
             }
         }
         return null;
+    }
+
+    private static Integer positiveInteger(Object value) {
+        long number;
+        try {
+            if (value instanceof BigInteger integer) {
+                number = integer.longValueExact();
+            } else if (value instanceof BigDecimal decimal) {
+                number = decimal.longValueExact();
+            } else if (value instanceof Byte || value instanceof Short
+                    || value instanceof Integer || value instanceof Long) {
+                number = ((Number) value).longValue();
+            } else if (value instanceof Float || value instanceof Double) {
+                double decimal = ((Number) value).doubleValue();
+                if (!Double.isFinite(decimal) || decimal != Math.rint(decimal)) {
+                    return null;
+                }
+                number = (long) decimal;
+            } else {
+                return null;
+            }
+        } catch (ArithmeticException exception) {
+            return null;
+        }
+        return number >= 1 && number <= Integer.MAX_VALUE ? (int) number : null;
     }
 
     private static int positiveOrDefault(Integer value, int defaultValue) {

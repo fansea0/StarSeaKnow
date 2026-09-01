@@ -57,5 +57,14 @@ public class DocumentChunk implements Serializable {
     private OffsetDateTime updateTime;
 
     @TableField(exist = false)
+    private UUID sourceDocumentPublicId;
+
+    @TableField(exist = false)
+    private String sourceFileName;
+
+    @TableField(exist = false)
+    private String sourceFileType;
+
+    @TableField(exist = false)
     private static final long serialVersionUID = 1L;
 }

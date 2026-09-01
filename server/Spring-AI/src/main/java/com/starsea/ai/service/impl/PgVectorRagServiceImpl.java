@@ -98,7 +98,7 @@ public class PgVectorRagServiceImpl implements RagService {
                 .toList()));
         Map<UUID, DocumentChunk> activeChunks = safeChunks(chunkMapper.findActiveByPublicIds(
                 tenantId, query.knowledgeIds(), publicIds)).stream()
-                .filter(chunk -> isPermittedActive(chunk, tenantId, query.knowledgeIds(), enabledFiles))
+                .filter(chunk -> isPermittedActive(chunk, tenantId, query.knowledgeIds(), enabledFiles.keySet()))
                 .collect(Collectors.toMap(DocumentChunk::getPublicId, Function.identity(),
                         (first, ignored) -> first, LinkedHashMap::new));
         if (activeChunks.isEmpty()) {
@@ -108,7 +108,7 @@ public class PgVectorRagServiceImpl implements RagService {
         Set<UUID> emitted = new LinkedHashSet<>();
         return candidates.stream()
                 .filter(candidate -> emitted.add(candidate.publicId()))
-                .map(candidate -> toRetrievedChunk(candidate, activeChunks.get(candidate.publicId()), enabledFiles))
+                .map(candidate -> toRetrievedChunk(candidate, activeChunks.get(candidate.publicId())))
                 .filter(Objects::nonNull)
                 .limit(query.topK())
                 .toList();
@@ -126,17 +126,12 @@ public class PgVectorRagServiceImpl implements RagService {
         return ctx.getTenantId();
     }
 
-    private static RetrievedChunk toRetrievedChunk(ScoredCandidate candidate, DocumentChunk chunk,
-                                                    Map<Long, File> files) {
+    private static RetrievedChunk toRetrievedChunk(ScoredCandidate candidate, DocumentChunk chunk) {
         if (chunk == null) {
             return null;
         }
-        File file = files.get(chunk.getFileId());
-        if (file == null) {
-            return null;
-        }
-        return new RetrievedChunk(chunk.getIndexContent(), candidate.score(), file.getFileName(),
-                file.getPublicId(), chunk.getPublicId(), file.getType(),
+        return new RetrievedChunk(chunk.getIndexContent(), candidate.score(), chunk.getSourceFileName(),
+                chunk.getSourceDocumentPublicId(), chunk.getPublicId(), chunk.getSourceFileType(),
                 mapInteger(chunk.getSourceLocator(), "pageNumber", "page_number"), chunk.getPosition(),
                 chunk.getSectionPath(), chunk.getSourceLocator());
     }
@@ -154,13 +149,18 @@ public class PgVectorRagServiceImpl implements RagService {
     }
 
     private static boolean isPermittedActive(DocumentChunk chunk, long tenantId,
-                                             Set<Long> knowledgeIds, Map<Long, File> enabledFiles) {
+                                             Set<Long> knowledgeIds, Set<Long> permittedFileIds) {
         return chunk != null
                 && chunk.getPublicId() != null
                 && Objects.equals(chunk.getTenantId(), tenantId)
                 && knowledgeIds.contains(chunk.getKnowledgeId())
-                && enabledFiles.containsKey(chunk.getFileId())
-                && Integer.valueOf(ChunkStatus.ACTIVE.code()).equals(chunk.getStatus());
+                && permittedFileIds.contains(chunk.getFileId())
+                && Integer.valueOf(ChunkStatus.ACTIVE.code()).equals(chunk.getStatus())
+                && chunk.getIndexContent() != null
+                && !chunk.getIndexContent().isBlank()
+                && chunk.getSourceDocumentPublicId() != null
+                && chunk.getSourceFileName() != null
+                && chunk.getSourceFileType() != null;
     }
 
     private static int overfetchTopK(int topK) {
@@ -193,8 +193,15 @@ public class PgVectorRagServiceImpl implements RagService {
     }
 
     private static UUID stablePublicId(Document document) {
-        UUID metadataId = parseUuid(firstValue(document.getMetadata(), "documentChunkId", "chunkId"));
-        return metadataId == null ? parseUuid(document.getId()) : metadataId;
+        UUID documentId = parseUuid(document.getId());
+        if (documentId == null) {
+            return null;
+        }
+        if (!document.getMetadata().containsKey("documentChunkId")) {
+            return documentId;
+        }
+        UUID metadataId = parseUuid(document.getMetadata().get("documentChunkId"));
+        return documentId.equals(metadataId) ? documentId : null;
     }
 
     private static UUID parseUuid(Object value) {

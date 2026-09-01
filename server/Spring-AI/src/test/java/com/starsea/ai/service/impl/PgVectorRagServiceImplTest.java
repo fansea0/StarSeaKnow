@@ -41,12 +41,16 @@ class PgVectorRagServiceImplTest {
     private static final long FILE_ID = 20L;
     private static final UUID FILE_PUBLIC_ID =
             UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    private static final UUID CURRENT_FILE_PUBLIC_ID =
+            UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
     private static final UUID FIRST_CHUNK_ID =
             UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final UUID SECOND_CHUNK_ID =
             UUID.fromString("22222222-2222-2222-2222-222222222222");
     private static final UUID THIRD_CHUNK_ID =
             UUID.fromString("33333333-3333-3333-3333-333333333333");
+    private static final UUID FOURTH_CHUNK_ID =
+            UUID.fromString("44444444-4444-4444-4444-444444444444");
 
     @BeforeEach
     void setAuth() {
@@ -154,6 +158,120 @@ class PgVectorRagServiceImplTest {
     }
 
     @Test
+    void document_id_is_authoritative_and_metadata_cannot_redirect_candidate_score() {
+        Fixture fixture = fixture();
+        Map<String, Object> missingMetadataId = new LinkedHashMap<>(candidateMetadata(FOURTH_CHUNK_ID.toString()));
+        missingMetadataId.remove("documentChunkId");
+        Document missingMetadata = Document.builder()
+                .id(FOURTH_CHUNK_ID.toString())
+                .text("missing metadata id")
+                .metadata(missingMetadataId)
+                .score(0.80)
+                .build();
+        Document mismatch = Document.builder()
+                .id(FIRST_CHUNK_ID.toString())
+                .text("mismatched metadata")
+                .metadata(candidateMetadata(SECOND_CHUNK_ID.toString()))
+                .score(0.99)
+                .build();
+        Document malformedMetadata = Document.builder()
+                .id(THIRD_CHUNK_ID.toString())
+                .text("malformed metadata")
+                .metadata(candidateMetadata("not-a-uuid"))
+                .score(0.95)
+                .build();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(mismatch, malformedMetadata, missingMetadata));
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(chunk(FOURTH_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                        ChunkStatus.ACTIVE, 4, "database fourth")));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 3, 0.0));
+
+        assertEquals(List.of(FOURTH_CHUNK_ID), result.stream().map(RetrievedChunk::chunkId).toList());
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<List<UUID>> ids = (ArgumentCaptor) ArgumentCaptor.forClass(List.class);
+        verify(fixture.chunkMapper).findActiveByPublicIds(
+                eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), ids.capture());
+        assertEquals(List.of(FOURTH_CHUNK_ID), ids.getValue());
+    }
+
+    @Test
+    void drops_postquery_row_without_current_enabled_file_and_knowledge_relation_proof() {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(candidate(FIRST_CHUNK_ID, "candidate", 0.90)));
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(baseChunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                        ChunkStatus.ACTIVE, 0, "database content")));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0));
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void drops_active_rows_with_null_empty_or_blank_index_content() {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                candidate(FIRST_CHUNK_ID, "null", 0.99),
+                candidate(SECOND_CHUNK_ID, "empty", 0.98),
+                candidate(THIRD_CHUNK_ID, "blank", 0.97),
+                candidate(FOURTH_CHUNK_ID, "valid", 0.96)));
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(
+                        chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                ChunkStatus.ACTIVE, 0, null),
+                        chunk(SECOND_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                ChunkStatus.ACTIVE, 1, ""),
+                        chunk(THIRD_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                ChunkStatus.ACTIVE, 2, " \n\t"),
+                        chunk(FOURTH_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                ChunkStatus.ACTIVE, 3, "database valid")));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 4, 0.0));
+
+        assertEquals(List.of(FOURTH_CHUNK_ID), result.stream().map(RetrievedChunk::chunkId).toList());
+        assertEquals("database valid", result.get(0).content());
+    }
+
+    @Test
+    void returns_file_identity_name_and_type_from_authoritative_postquery_join() {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(candidate(FIRST_CHUNK_ID, "candidate", 0.90)));
+        DocumentChunk current = chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                ChunkStatus.ACTIVE, 0, "database content");
+        current.setSourceDocumentPublicId(CURRENT_FILE_PUBLIC_ID);
+        current.setSourceFileName("current-guide.markdown");
+        current.setSourceFileType("markdown");
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(current));
+
+        RetrievedChunk result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0)).get(0);
+
+        assertEquals(CURRENT_FILE_PUBLIC_ID, result.documentId());
+        assertEquals("current-guide.markdown", result.title());
+        assertEquals("markdown", result.fileType());
+    }
+
+    @Test
+    void top_k_twenty_overfetches_sixty_without_arithmetic_or_store_overflow() {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        fixture.service.retrieve(new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 20, 0.0));
+
+        ArgumentCaptor<SearchRequest> search = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore).similaritySearch(search.capture());
+        assertEquals(60, search.getValue().getTopK());
+    }
+
+    @Test
     void active_chunk_query_scopes_tenant_knowledge_public_ids_and_active_status() throws Exception {
         Configuration configuration = new Configuration();
         try (var input = getClass().getResourceAsStream("/mapper/DocumentChunkMapper.xml")) {
@@ -170,11 +288,28 @@ class PgVectorRagServiceImplTest {
                 .getBoundSql(parameters);
         String sql = bound.getSql().replaceAll("\\s+", " ").trim().toLowerCase();
 
-        assertTrue(sql.contains("tenant_id = ?"));
-        assertTrue(sql.contains("knowledge_id in"));
-        assertTrue(sql.contains("public_id in"));
-        assertTrue(sql.contains("status = 2"));
+        assertTrue(sql.contains("join file f"));
+        assertTrue(sql.contains("join knowledge_file kf"));
+        assertTrue(sql.contains("dc.tenant_id = ?"));
+        assertTrue(sql.contains("f.tenant_id = ?"));
+        assertTrue(sql.contains("kf.tenant_id = ?"));
+        assertTrue(sql.contains("dc.knowledge_id in"));
+        assertTrue(sql.contains("kf.knowledge_id in"));
+        assertTrue(sql.contains("dc.public_id in"));
+        assertTrue(sql.contains("dc.status = 2"));
+        assertTrue(sql.contains("f.status = 1"));
+        assertTrue(sql.contains("dc.index_content is not null"));
+        assertTrue(sql.contains("dc.index_content ~ '[^[:space:]]'"));
+        assertTrue(sql.contains("f.public_id as source_document_public_id"));
+        assertTrue(sql.contains("f.type as source_file_type"));
         assertFalse(sql.contains("select * from document_chunk where public_id in"));
+        Set<String> resultProperties = configuration.getResultMap(
+                        "com.starsea.ai.mapper.DocumentChunkMapper.DocumentChunkResultMap")
+                .getResultMappings().stream()
+                .map(mapping -> mapping.getProperty())
+                .collect(java.util.stream.Collectors.toSet());
+        assertTrue(resultProperties.containsAll(Set.of(
+                "sourceDocumentPublicId", "sourceFileName", "sourceFileType")));
     }
 
     private Fixture fixture() {
@@ -216,6 +351,14 @@ class PgVectorRagServiceImplTest {
 
     private static DocumentChunk chunk(UUID publicId, long tenantId, long knowledgeId, long fileId,
                                        ChunkStatus status, int position, String indexContent) {
+        DocumentChunk chunk = baseChunk(publicId, tenantId, knowledgeId, fileId,
+                status, position, indexContent);
+        markAuthoritativeFile(chunk);
+        return chunk;
+    }
+
+    private static DocumentChunk baseChunk(UUID publicId, long tenantId, long knowledgeId, long fileId,
+                                           ChunkStatus status, int position, String indexContent) {
         DocumentChunk chunk = new DocumentChunk();
         chunk.setId((long) position + 1);
         chunk.setPublicId(publicId);
@@ -228,6 +371,12 @@ class PgVectorRagServiceImplTest {
         chunk.setSectionPath(List.of("Guide", "Details"));
         chunk.setSourceLocator(Map.of("startLine", 7, "endLine", 11, "blockIds", List.of("b-1")));
         return chunk;
+    }
+
+    private static void markAuthoritativeFile(DocumentChunk chunk) {
+        chunk.setSourceDocumentPublicId(FILE_PUBLIC_ID);
+        chunk.setSourceFileName("guide.md");
+        chunk.setSourceFileType("md");
     }
 
     private record Fixture(VectorStore vectorStore, FileService fileService,
