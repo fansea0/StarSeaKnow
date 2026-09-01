@@ -95,6 +95,83 @@ describe('KnowledgeDetail', () => {
     })
   })
 
+  it.each([
+    [200, true],
+    ['200', true],
+    [' 200 ', true],
+    [true, false],
+    [null, false],
+    ['', false],
+    ['0200', false],
+    ['200.0', false],
+    ['ok', false],
+  ])('accepts upload business code %p: %s', (code, expected) => {
+    const wrapper = mountDetail()
+
+    expect(wrapper.vm.isUploadSuccessCode(code)).toBe(expected)
+  })
+
+  it.each([
+    [42, 42],
+    ['42', 42],
+    [' 00042 ', 42],
+    [true, null],
+    [0, null],
+    [-1, null],
+    ['0', null],
+    ['-1', null],
+    ['1.5', null],
+    ['1e2', null],
+    ['   ', null],
+    [{ id: 42 }, null],
+    [NaN, null],
+    [Infinity, null],
+    [Number.MAX_SAFE_INTEGER + 1, null],
+  ])('normalizes upload file id %p to %p', (fileId, expected) => {
+    const wrapper = mountDetail()
+
+    expect(wrapper.vm.normalizeUploadFileId(fileId)).toBe(expected)
+  })
+
+  it.each([
+    [{ code: '200', data: '42' }, true],
+    [{ code: 200, data: true }, false],
+  ])('handles upload envelope %p as success: %s', async (response, succeeds) => {
+    const wrapper = mountDetail()
+    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
+
+    await wrapper.vm.onUploadSuccess(response, { name: 'new-guide.md' })
+
+    expect(refresh).toHaveBeenCalledTimes(succeeds ? 1 : 0)
+    expect(wrapper.vm.$router.push).toHaveBeenCalledTimes(succeeds ? 1 : 0)
+    if (succeeds) {
+      expect(wrapper.vm.$router.push).toHaveBeenCalledWith({
+        name: 'ChunkingWorkspace',
+        params: { knowledgeId: '11', fileId: '42' },
+      })
+    } else {
+      expect(wrapper.vm.$message.error).toHaveBeenCalledWith('上传失败')
+    }
+  })
+
+  it('awaits the document refresh before opening the Markdown workspace', async () => {
+    const wrapper = mountDetail()
+    let resolveRefresh
+    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockImplementation(() => new Promise((resolve) => {
+      resolveRefresh = resolve
+    }))
+
+    const upload = wrapper.vm.onUploadSuccess({ code: 200, data: 42 }, { name: 'new-guide.md' })
+
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.$router.push).not.toHaveBeenCalled()
+    resolveRefresh()
+    await upload
+
+    expect(wrapper.vm.$router.push).toHaveBeenCalledTimes(1)
+    expect(refresh.mock.invocationCallOrder[0]).toBeLessThan(wrapper.vm.$router.push.mock.invocationCallOrder[0])
+  })
+
   it('does not refresh or navigate when an HTTP-success upload envelope has a business error', async () => {
     const wrapper = mountDetail()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()

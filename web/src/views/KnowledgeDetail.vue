@@ -398,8 +398,8 @@ export default {
       return true
     },
     async onUploadSuccess(response, uploadFile) {
-      const fileId = response?.data
-      if (response?.code !== 200 || !this.isValidFileId(fileId)) {
+      const fileId = this.normalizeUploadFileId(response?.data)
+      if (!this.isUploadSuccessCode(response?.code) || fileId === null) {
         this.$message.error(response?.msg || '上传失败')
         return
       }
@@ -432,9 +432,20 @@ export default {
       const name = String(file?.name || file?.fileName || '')
       return /\.(md|markdown)$/i.test(name)
     },
-    isValidFileId(fileId) {
-      const normalized = Number(fileId)
-      return Number.isSafeInteger(normalized) && normalized > 0
+    isUploadSuccessCode(code) {
+      return code === 200 || (typeof code === 'string' && code.trim() === '200')
+    },
+    normalizeUploadFileId(fileId) {
+      if (typeof fileId === 'number') {
+        return Number.isSafeInteger(fileId) && fileId > 0 ? fileId : null
+      }
+      if (typeof fileId !== 'string') return null
+
+      const normalized = fileId.trim()
+      if (!/^\d+$/.test(normalized)) return null
+
+      const numericId = Number(normalized)
+      return Number.isSafeInteger(numericId) && numericId > 0 ? numericId : null
     },
     async embedFile(row) {
       this.embedLoadingId = row.id
