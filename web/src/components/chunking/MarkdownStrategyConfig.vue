@@ -28,6 +28,10 @@
 <script setup>
 import { computed, reactive, watch } from 'vue'
 
+const props = defineProps({
+  initialValues: { type: Object, default: () => ({ minTokens: 100, targetTokens: 400, maxTokens: 512 }) },
+})
+
 const emit = defineEmits(['config-change', 'validity-change'])
 
 const values = reactive({
@@ -46,6 +50,14 @@ const validationMessage = computed(() => {
   if (targetTokens > maxTokens) return '推荐 Token 不能大于最大 Token'
   return ''
 })
+
+watch(
+  () => props.initialValues,
+  initialValues => {
+    Object.assign(values, initialValues)
+  },
+  { immediate: true, deep: true },
+)
 
 watch(
   values,

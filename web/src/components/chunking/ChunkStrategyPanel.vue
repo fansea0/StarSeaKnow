@@ -31,6 +31,7 @@
 
     <MarkdownStrategyConfig
       v-if="selectedCode === 'MARKDOWN_OPTIMIZED'"
+      :initial-values="strategyConfig"
       @config-change="$emit('config-change', $event)"
       @validity-change="$emit('validity-change', $event)"
     />
@@ -56,6 +57,7 @@ import MarkdownStrategyConfig from './MarkdownStrategyConfig.vue'
 defineProps({
   strategies: { type: Array, default: () => [] },
   selectedCode: { type: String, default: '' },
+  strategyConfig: { type: Object, default: () => ({ minTokens: 100, targetTokens: 400, maxTokens: 512 }) },
   configValid: { type: Boolean, default: true },
   loading: { type: Boolean, default: false },
   submitting: { type: Boolean, default: false },

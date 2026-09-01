@@ -38,6 +38,7 @@
         type="primary"
         data-testid="confirm-vectorization"
         :loading="submitting"
+        :disabled="submitting || reloading || blocked"
         @click="confirm"
       >确认并建立索引</el-button>
     </template>
@@ -53,6 +54,7 @@ const props = defineProps({
   serverError: { type: String, default: '' },
   serverConflict: { type: Boolean, default: false },
   reloading: { type: Boolean, default: false },
+  blocked: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue', 'confirm', 'reload'])
@@ -72,6 +74,7 @@ watch(
 )
 
 function confirm() {
+  if (props.submitting || props.reloading || props.blocked) return
   if (overlapEnabled.value && (!Number.isInteger(overlapTokens.value) || overlapTokens.value < 0 || overlapTokens.value > 512)) {
     errorMessage.value = '补充 Token 必须在 0 到 512 之间。'
     return

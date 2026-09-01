@@ -278,6 +278,50 @@ describe('ChunkingWorkspace', () => {
     wrapper.unmount()
   })
 
+  it('loads an edited DRAFT when CHUNKING failed and confirms replacement before retrying', async () => {
+    getProcessing.mockResolvedValue(processing(7, {
+      failedFromState: 1,
+      lastError: 'Markdown 解析失败',
+    }))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('人工修改后的正文')
+    await wrapper.get('[data-testid="retry-chunking"]').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('人工修改'),
+      expect.any(String),
+      expect.objectContaining({ confirmButtonText: expect.stringContaining('重新生成') }),
+    )
+    expect(createPreview).toHaveBeenCalledWith('11', '22', expect.objectContaining({
+      replaceEditedDrafts: true,
+      lockVersion: 3,
+    }))
+  })
+
+  it('restores a valid non-default Markdown policy snapshot into the inputs and retry payload', async () => {
+    getProcessing.mockResolvedValue(processing(2, {
+      policySnapshot: { minTokens: 64, targetTokens: 256, maxTokens: 480 },
+    }))
+    getChunks.mockResolvedValue({ data: [{ ...draftChunk, isModified: false }] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="min-tokens"] input').element.value).toBe('64')
+    expect(wrapper.get('[data-testid="target-tokens"] input').element.value).toBe('256')
+    expect(wrapper.get('[data-testid="max-tokens"] input').element.value).toBe('480')
+
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await flushPromises()
+    expect(createPreview).toHaveBeenCalledWith('11', '22', expect.objectContaining({
+      strategyConfig: { minTokens: 64, targetTokens: 256, maxTokens: 480 },
+    }))
+  })
+
   it('offers an explicit reload on a preview 409 and preserves config on a 422', async () => {
     createPreview.mockRejectedValueOnce({ response: { status: 409, data: { msg: '文件版本已经变化' } } })
     const wrapper = mountWorkspace()
@@ -396,6 +440,32 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
   })
 
+  it.each([1, 4, 5])('disables every retained chunk action in file state %s', async (state) => {
+    getProcessing
+      .mockResolvedValueOnce(processing(6))
+      .mockResolvedValueOnce(processing(state))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.vm.refreshProcessing(false, wrapper.vm.currentContext())
+    await flushPromises()
+
+    expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('true')
+    expect(wrapper.get('[data-testid="edit-chunk"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="delete-chunk"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('[data-testid="delete-chunk"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(confirm).not.toHaveBeenCalled()
+    expect(updateChunk).not.toHaveBeenCalled()
+    expect(deleteChunk).not.toHaveBeenCalled()
+    expect(reindexChunk).not.toHaveBeenCalled()
+  })
+
   it('COMPLETED hides full preview and confirm actions but keeps DRAFT reindex', async () => {
     getProcessing.mockResolvedValue(processing(6))
     getChunks.mockResolvedValue({ data: [draftChunk] })
@@ -503,6 +573,49 @@ describe('ChunkingWorkspace', () => {
       overlapEnabled: false,
       overlapTokens: 40,
       lockVersion: 9,
+    })
+  })
+
+  it('keeps a confirm 409 blocked and retryable until both processing and chunks reload', async () => {
+    getProcessing
+      .mockResolvedValueOnce(processing(3, { lockVersion: 3 }))
+      .mockResolvedValueOnce(processing(3, { lockVersion: 9 }))
+      .mockResolvedValueOnce(processing(3, { lockVersion: 10 }))
+    getChunks
+      .mockResolvedValueOnce({ data: [{ ...draftChunk, isModified: false }] })
+      .mockRejectedValueOnce({ response: { status: 503, data: { msg: '分块重载失败' } } })
+      .mockResolvedValueOnce({ data: [{ ...draftChunk, isModified: false, lockVersion: 7 }] })
+    confirmVectorization
+      .mockRejectedValueOnce({ response: { status: 409, data: { msg: '确认版本冲突' } } })
+      .mockResolvedValueOnce({ status: 202 })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="open-confirm"]').trigger('click')
+    await flushPromises()
+    document.body.querySelector('[data-testid="confirm-vectorization"]').click()
+    await flushPromises()
+    document.body.querySelector('[data-testid="reload-confirm"]').click()
+    await flushPromises()
+
+    let dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog.textContent).toContain('分块重载失败')
+    expect(dialog.querySelector('[data-testid="reload-confirm"]')).not.toBeNull()
+    expect(dialog.querySelector('[data-testid="confirm-vectorization"]').disabled).toBe(true)
+    dialog.querySelector('[data-testid="confirm-vectorization"]').click()
+    expect(confirmVectorization).toHaveBeenCalledTimes(1)
+
+    dialog.querySelector('[data-testid="reload-confirm"]').click()
+    await flushPromises()
+    dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog.querySelector('[role="alert"]')).toBeNull()
+    expect(dialog.querySelector('[data-testid="confirm-vectorization"]').disabled).toBe(false)
+    dialog.querySelector('[data-testid="confirm-vectorization"]').click()
+    await flushPromises()
+    expect(confirmVectorization).toHaveBeenLastCalledWith('11', '22', {
+      overlapEnabled: false,
+      overlapTokens: 40,
+      lockVersion: 10,
     })
   })
 

@@ -117,6 +117,18 @@ watch(
   },
 )
 
+watch(
+  () => props.disabled,
+  disabled => {
+    if (!disabled) return
+    requestGeneration += 1
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = null
+    queuedSave = false
+    saveStatus.value = ''
+  },
+)
+
 function resetFromServer() {
   requestGeneration += 1
   if (saveTimer) clearTimeout(saveTimer)
@@ -131,6 +143,7 @@ function resetFromServer() {
 }
 
 function queueSave() {
+  if (actionsDisabled.value) return
   errorMessage.value = ''
   conflict.value = false
   saveStatus.value = ''
@@ -140,6 +153,7 @@ function queueSave() {
 
 async function saveBody() {
   saveTimer = null
+  if (actionsDisabled.value) return
   if (saveInFlight) {
     queuedSave = true
     return
@@ -201,6 +215,7 @@ async function saveBody() {
 }
 
 async function requestDelete() {
+  if (actionsDisabled.value) return
   try {
     await ElMessageBox.confirm(
       '删除后该原始分块将不再参与索引，此操作不能撤销。',
@@ -210,6 +225,8 @@ async function requestDelete() {
   } catch {
     return
   }
+
+  if (actionsDisabled.value) return
 
   errorMessage.value = ''
   conflict.value = false

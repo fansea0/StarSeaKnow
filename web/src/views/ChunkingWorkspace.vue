@@ -13,6 +13,7 @@
       <ChunkStrategyPanel
         :strategies="strategies"
         :selected-code="selectedStrategy"
+        :strategy-config="strategyConfig"
         :config-valid="configValid"
         :loading="capabilityLoading"
         :submitting="previewSubmitting"
@@ -60,6 +61,7 @@
           :progress="processing.progress"
           :processing="isProcessing"
           :processing-label="processingLabel"
+          :actions-disabled="chunkActionsDisabled"
           :show-confirm="canConfirm"
           :reindexing-ids="reindexingChunkIds"
           :reload-epochs="chunkReloadEpochs"
@@ -78,6 +80,7 @@
       :server-error="confirmError"
       :server-conflict="confirmConflict"
       :reloading="confirmReloading"
+      :blocked="!canConfirm || confirmConflict"
       @confirm="submitVectorization"
       @reload="reloadConfirmState"
     />
@@ -103,6 +106,8 @@ const terminalChunkStates = new Set([2, 3, 6])
 const processingStates = new Set([1, 5])
 const previewStates = new Set([0, 2, 3])
 const confirmStates = new Set([2, 3])
+const chunkActionDisabledStates = new Set([1, 4, 5])
+const defaultStrategyConfig = Object.freeze({ minTokens: 100, targetTokens: 400, maxTokens: 512 })
 
 function initialProcessing() {
   return {
@@ -121,6 +126,20 @@ function errorMessage(cause, fallback) {
   return cause?.response?.data?.msg || fallback
 }
 
+function validPolicySnapshot(snapshot) {
+  const minTokens = snapshot?.minTokens
+  const targetTokens = snapshot?.targetTokens
+  const maxTokens = snapshot?.maxTokens
+  if (![minTokens, targetTokens, maxTokens].every(value => Number.isInteger(value) && value > 0)) return null
+  if (minTokens > targetTokens || targetTokens > maxTokens || maxTokens > 512) return null
+  return { minTokens, targetTokens, maxTokens }
+}
+
+function shouldLoadChunks(processing) {
+  return terminalChunkStates.has(Number(processing.state))
+    || (Number(processing.state) === 7 && Number(processing.failedFromState) === 1)
+}
+
 export default {
   name: 'ChunkingWorkspace',
   components: { ChunkPreviewPanel, ChunkStrategyPanel, ContextConfirmDialog },
@@ -128,7 +147,7 @@ export default {
     return {
       strategies: [],
       selectedStrategy: '',
-      strategyConfig: { minTokens: 100, targetTokens: 400, maxTokens: 512 },
+      strategyConfig: { ...defaultStrategyConfig },
       configValid: true,
       chunks: [],
       processing: initialProcessing(),
@@ -173,6 +192,9 @@ export default {
     canRetryVector() {
       return this.processingLoaded && !this.processingLoading && Number(this.processing.state) === 7 && Number(this.processing.failedFromState) === 5
     },
+    chunkActionsDisabled() {
+      return !this.processingLoaded || this.processingLoading || chunkActionDisabledStates.has(Number(this.processing.state))
+    },
     processingLabel() {
       return Number(this.processing.state) === 1 ? '正在生成分块' : '正在建立索引'
     },
@@ -206,7 +228,7 @@ export default {
       this.stopPolling()
       this.strategies = []
       this.selectedStrategy = ''
-      this.strategyConfig = { minTokens: 100, targetTokens: 400, maxTokens: 512 }
+      this.strategyConfig = { ...defaultStrategyConfig }
       this.configValid = true
       this.chunks = []
       this.processing = initialProcessing()
@@ -265,7 +287,7 @@ export default {
       this.submissionError = ''
     },
     async refreshProcessing(forceChunkLoad = false, context = this.currentContext()) {
-      if (!this.isCurrent(context)) return
+      if (!this.isCurrent(context)) return false
       if (this.processingRequest) return this.processingRequest
       this.processingLoading = true
       this.processingLoaded = false
@@ -273,25 +295,30 @@ export default {
       const request = (async () => {
         try {
           const response = await getProcessing(context.knowledgeId, context.fileId)
-          if (!this.isCurrent(context)) return
+          if (!this.isCurrent(context)) return false
           this.processing = { ...this.processing, ...(response?.data || {}) }
           this.processingLoaded = true
           this.syncSelectedStrategy()
+          const restoredConfig = validPolicySnapshot(this.processing.policySnapshot)
+          if (restoredConfig) this.strategyConfig = restoredConfig
           if (forceChunkLoad) this.chunksLoadedKey = ''
-          if (terminalChunkStates.has(Number(this.processing.state))) {
+          if (shouldLoadChunks(this.processing)) {
             this.stopPolling()
-            await this.loadChunks({ force: forceChunkLoad }, context)
+            const chunksLoaded = await this.loadChunks({ force: forceChunkLoad }, context)
+            return Boolean(chunksLoaded && this.isCurrent(context))
           } else if (this.isProcessing) {
             this.schedulePoll(context)
           } else {
             this.stopPolling()
           }
+          return true
         } catch (cause) {
           if (this.isCurrent(context)) {
             this.processingLoaded = false
             this.processingError = errorMessage(cause, '文件处理状态暂时无法加载，请重新加载。')
             this.stopPolling()
           }
+          return false
         } finally {
           if (this.isCurrent(context) && this.processingRequest === request) {
             this.processingLoading = false
@@ -406,7 +433,7 @@ export default {
       this.confirmDialogVisible = true
     },
     async submitVectorization(contextPolicy, isRetry = false) {
-      if (isRetry ? !this.canRetryVector : !this.canConfirm) return
+      if (isRetry ? !this.canRetryVector : (!this.canConfirm || this.confirmConflict || this.confirmReloading)) return
       const context = this.currentContext()
       this.confirmSubmitting = true
       this.submissionError = ''
@@ -445,14 +472,19 @@ export default {
       }, true)
     },
     async reloadConfirmState() {
+      if (this.confirmReloading) return
       const context = this.currentContext()
       this.confirmReloading = true
-      this.confirmError = ''
-      this.confirmConflict = false
-      await this.refreshProcessing(true, context)
+      const reloaded = await this.refreshProcessing(true, context)
       if (this.isCurrent(context)) {
         this.confirmReloading = false
-        if (!this.processingLoaded) this.confirmError = this.processingError || '文件状态仍无法加载。'
+        if (reloaded) {
+          this.confirmError = ''
+          this.confirmConflict = false
+        } else {
+          this.confirmError = this.processingError || '文件状态或分块仍无法加载，请重试。'
+          this.confirmConflict = true
+        }
       }
     },
     async handleChunkUpdated(updated) {
@@ -469,7 +501,13 @@ export default {
       await this.loadChunks({ force: true }, context)
     },
     async handleReindex(chunk) {
-      if (this.reindexingChunkIds.has(chunk.publicId)) return
+      if (
+        this.chunkActionsDisabled
+        || Number(this.processing.state) !== 6
+        || Number(chunk.status) !== 0
+        || !chunk.isModified
+        || this.reindexingChunkIds.has(chunk.publicId)
+      ) return
       const context = this.currentContext()
       const pendingIds = this.reindexingChunkIds
       pendingIds.add(chunk.publicId)

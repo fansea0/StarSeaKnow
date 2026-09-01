@@ -27,7 +27,7 @@
         :knowledge-id="knowledgeId"
         :file-id="fileId"
         :chunk="chunk"
-        :disabled="isReindexing(chunk)"
+        :disabled="actionsDisabled || isReindexing(chunk)"
         :show-reindex="canReindex(chunk)"
         :reload-epoch="reloadEpochs[chunk.publicId] || 0"
         @updated="$emit('updated', $event)"
@@ -65,6 +65,7 @@ const props = defineProps({
   processing: { type: Boolean, default: false },
   processingLabel: { type: String, default: '' },
   loadingLabel: { type: String, default: '正在读取分块…' },
+  actionsDisabled: { type: Boolean, default: false },
   showConfirm: { type: Boolean, default: true },
   reindexingIds: { type: Set, default: () => new Set() },
   reloadEpochs: { type: Object, default: () => ({}) },
