@@ -73,6 +73,11 @@ public class FileProcessingService {
         if (!LEGAL_TRANSITIONS.getOrDefault(expected, Set.of()).contains(target)) {
             throw new StateConflictException("Illegal pipeline transition: " + expected + " -> " + target);
         }
+        if (expected == PipelineState.FAILED
+                && !Integer.valueOf(target.code()).equals(processing.getFailedFromState())) {
+            throw new StateConflictException(
+                    "FAILED can only recover to its recorded failed-from state");
+        }
         if (!Integer.valueOf(expected.code()).equals(processing.getPipelineState())
                 || !Integer.valueOf(lockVersion).equals(processing.getLockVersion())) {
             throw new StateConflictException("Pipeline state or lock version is stale");
@@ -116,7 +121,8 @@ public class FileProcessingService {
                 Set.of(PipelineState.COMPLETED, PipelineState.FAILED));
         transitions.put(PipelineState.COMPLETED, Set.of(PipelineState.ADJUSTING));
         transitions.put(PipelineState.FAILED,
-                Set.of(PipelineState.CHUNKING, PipelineState.ADJUSTING, PipelineState.CONFIRMED));
+                Set.of(PipelineState.CHUNKING, PipelineState.ADJUSTING,
+                        PipelineState.CONFIRMED, PipelineState.VECTORIZING));
         return Map.copyOf(transitions);
     }
 

@@ -12,18 +12,20 @@ import com.starsea.ai.mapper.FileProcessingMapper;
 import com.starsea.ai.mapper.KnowledgeFileMapper;
 import com.starsea.ai.mapper.KnowledgeMapper;
 import com.starsea.ai.service.FileService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Map;
 import java.util.List;
 import java.util.Set;
@@ -36,7 +38,6 @@ import static com.starsea.ai.util.FileUtil.getFileTypeByExtension;
  * @Date:2025/4/26 16:28
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.domain.File> implements FileService {
     
@@ -47,9 +48,19 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
     private final KnowledgeFileMapper knowledgeFileMapper;
     private final KnowledgeMapper knowledgeMapper;
     private final FileProcessingMapper processingMapper;
+    private final TransactionTemplate transactionTemplate;
+
+    public FileServiceImpl(FileMapper fileMapper, KnowledgeFileMapper knowledgeFileMapper,
+                           KnowledgeMapper knowledgeMapper, FileProcessingMapper processingMapper,
+                           PlatformTransactionManager transactionManager) {
+        this.fileMapper = fileMapper;
+        this.knowledgeFileMapper = knowledgeFileMapper;
+        this.knowledgeMapper = knowledgeMapper;
+        this.processingMapper = processingMapper;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
 
     @Override
-    @Transactional
     public Long uploadToKnowledge(MultipartFile file,Long knowledgeId) {
         long tenantId = requireTenantId();
         String fileName = requireSafeFilename(file.getOriginalFilename());
@@ -65,25 +76,12 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
             if (knowledge == null) {
                 throw new IllegalArgumentException("知识库不存在!");
             }
-            com.starsea.ai.domain.File documentFile = new com.starsea.ai.domain.File(
-                    fileName, file.getSize(), getFileTypeByExtension(fileName), createdPath.toString());
-            requireSingleInsert(fileMapper.insert(documentFile), "file");
-            if (documentFile.getId() == null) {
-                throw new IllegalStateException("file insert did not return an id");
+            Long fileId = transactionTemplate.execute(status -> persistUpload(
+                    file, fileName, createdPath, tenantId, knowledgeId));
+            if (fileId == null) {
+                throw new IllegalStateException("upload transaction returned no file id");
             }
-            requireSingleInsert(knowledgeFileMapper.insert(
-                    new KnowledgeFile(knowledgeId, documentFile.getId())), "knowledge_file");
-            FileProcessing processing = new FileProcessing();
-            processing.setFileId(documentFile.getId());
-            processing.setTenantId(tenantId);
-            processing.setKnowledgeId(knowledgeId);
-            processing.setPipelineState(PipelineState.UPLOADED.code());
-            processing.setProgress(0);
-            processing.setPolicySnapshot(Map.of());
-            processing.setContextPolicy(Map.of());
-            processing.setLockVersion(0);
-            requireSingleInsert(processingMapper.insert(processing), "file_processing");
-            return documentFile.getId();
+            return fileId;
         } catch (RuntimeException databaseFailure) {
             deleteCreatedPath(createdPath, databaseFailure);
             throw databaseFailure;
@@ -101,17 +99,46 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
     }
 
     private void writePhysicalFile(MultipartFile file, Path uploadRoot, Path createdPath) {
+        boolean ownsCreatedPath = false;
         try {
             Files.createDirectories(uploadRoot);
-            try (InputStream input = file.getInputStream()) {
-                Files.copy(input, createdPath);
+            try (InputStream input = file.getInputStream();
+                 OutputStream output = Files.newOutputStream(createdPath,
+                         StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+                ownsCreatedPath = true;
+                input.transferTo(output);
             }
         } catch (FileAlreadyExistsException exception) {
             throw new IllegalStateException("文件已存在!", exception);
         } catch (IOException exception) {
-            deleteCreatedPath(createdPath, exception);
+            if (ownsCreatedPath) {
+                deleteCreatedPath(createdPath, exception);
+            }
             throw new IllegalStateException("文件保存失败!", exception);
         }
+    }
+
+    private Long persistUpload(MultipartFile file, String fileName, Path createdPath,
+                               long tenantId, long knowledgeId) {
+        com.starsea.ai.domain.File documentFile = new com.starsea.ai.domain.File(
+                fileName, file.getSize(), getFileTypeByExtension(fileName), createdPath.toString());
+        requireSingleInsert(fileMapper.insert(documentFile), "file");
+        if (documentFile.getId() == null) {
+            throw new IllegalStateException("file insert did not return an id");
+        }
+        requireSingleInsert(knowledgeFileMapper.insert(
+                new KnowledgeFile(knowledgeId, documentFile.getId())), "knowledge_file");
+        FileProcessing processing = new FileProcessing();
+        processing.setFileId(documentFile.getId());
+        processing.setTenantId(tenantId);
+        processing.setKnowledgeId(knowledgeId);
+        processing.setPipelineState(PipelineState.UPLOADED.code());
+        processing.setProgress(0);
+        processing.setPolicySnapshot(Map.of());
+        processing.setContextPolicy(Map.of());
+        processing.setLockVersion(0);
+        requireSingleInsert(processingMapper.insert(processing), "file_processing");
+        return documentFile.getId();
     }
 
     private void deleteCreatedPath(Path createdPath, Throwable failure) {

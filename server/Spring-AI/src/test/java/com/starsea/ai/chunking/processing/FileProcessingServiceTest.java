@@ -4,11 +4,16 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.mapper.FileProcessingMapper;
+import com.starsea.ai.openapi.credential.ApiCredentialResolver;
+import com.starsea.ai.openapi.credential.CredentialType;
+import com.starsea.ai.openapi.credential.RagKnowledgeScopeSnapshot;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -85,7 +90,50 @@ class FileProcessingServiceTest {
     }
 
     @Test
-    void dispatcher_restores_captured_auth_context_and_clears_worker_thread() {
+    void failed_recovery_requires_a_matching_non_null_failed_from_state() {
+        FileProcessing missingOrigin = processing(1L, 10L, 20L, PipelineState.FAILED, 3);
+        when(mapper.selectById(20L)).thenReturn(missingOrigin);
+        when(mapper.transition(20L, 1L, 10L, 7, 1, 0, 3, null, null)).thenReturn(1);
+
+        assertThrows(FileProcessingService.StateConflictException.class, () -> service.transition(
+                10L, 20L, PipelineState.FAILED, PipelineState.CHUNKING, 3));
+
+        verify(mapper, never()).transition(20L, 1L, 10L, 7, 1, 0, 3, null, null);
+    }
+
+    @Test
+    void failed_recovery_rejects_a_target_different_from_failed_from_state() {
+        FileProcessing failed = processing(1L, 10L, 20L, PipelineState.FAILED, 3);
+        failed.setFailedFromState(PipelineState.VECTORIZING.code());
+        when(mapper.selectById(20L)).thenReturn(failed);
+        when(mapper.transition(20L, 1L, 10L, 7, 1, 0, 3, null, null)).thenReturn(1);
+
+        assertThrows(FileProcessingService.StateConflictException.class, () -> service.transition(
+                10L, 20L, PipelineState.FAILED, PipelineState.CHUNKING, 3));
+
+        verify(mapper, never()).transition(20L, 1L, 10L, 7, 1, 0, 3, null, null);
+    }
+
+    @Test
+    void failed_recovery_allows_the_recorded_asynchronous_state() {
+        FileProcessing failed = processing(1L, 10L, 20L, PipelineState.FAILED, 3);
+        failed.setFailedFromState(PipelineState.VECTORIZING.code());
+        failed.setProgress(65);
+        failed.setLastError("vector store unavailable");
+        when(mapper.selectById(20L)).thenReturn(failed);
+        when(mapper.transition(20L, 1L, 10L, 7, 5, 0, 3, null, null)).thenReturn(1);
+
+        FileProcessingService.Transition transition = service.transition(
+                10L, 20L, PipelineState.FAILED, PipelineState.VECTORIZING, 3);
+
+        assertEquals(PipelineState.VECTORIZING, transition.current());
+        assertEquals(65, transition.previousProgress());
+        assertEquals(PipelineState.VECTORIZING.code(), transition.previousFailedFromState());
+        assertEquals("vector store unavailable", transition.previousError());
+    }
+
+    @Test
+    void dispatcher_restores_full_external_auth_context_and_clears_worker_thread() {
         FileProcessingService processingService = mock(FileProcessingService.class);
         Executor executor = mock(Executor.class);
         when(processingService.transition(10L, 20L, PipelineState.UPLOADED, PipelineState.CHUNKING, 0))
@@ -99,6 +147,11 @@ class FileProcessingServiceTest {
         }).when(executor).execute(org.mockito.ArgumentMatchers.any(Runnable.class));
         ChunkTaskDispatcher dispatcher = new ChunkTaskDispatcher(processingService, executor);
         AtomicReference<AuthContext> workerContext = new AtomicReference<>();
+        RagKnowledgeScopeSnapshot scope = new RagKnowledgeScopeSnapshot(Set.of(10L, 11L));
+        AuthContext external = AuthContext.external(new ApiCredentialResolver.ResolvedCredential(
+                42L, 1L, CredentialType.RAG_RETRIEVAL, "live", "active", null,
+                List.of("10.0.0.0/8"), 120, 30, 4, 9L, scope));
+        AuthContext.set(external);
 
         dispatcher.dispatch(10L, 20L, PipelineState.UPLOADED, PipelineState.CHUNKING, 0,
                 () -> workerContext.set(AuthContext.current()));
@@ -109,11 +162,18 @@ class FileProcessingServiceTest {
         order.verify(executor).execute(org.mockito.ArgumentMatchers.any(Runnable.class));
         AuthContext.clear();
         submitted.get().run();
-        assertEquals(AuthContext.Kind.BUSINESS, workerContext.get().getKind());
-        assertEquals(7L, workerContext.get().getUserId());
+        assertEquals(AuthContext.Kind.EXTERNAL_API, workerContext.get().getKind());
+        assertEquals(42L, workerContext.get().getUserId());
         assertEquals(1L, workerContext.get().getTenantId());
-        assertEquals("tenant_admin", workerContext.get().getRole());
-        assertEquals("jti-1", workerContext.get().getJti());
+        assertEquals("external_api", workerContext.get().getRole());
+        assertEquals(42L, workerContext.get().getCredentialId());
+        assertEquals("RAG_RETRIEVAL", workerContext.get().getCredentialType());
+        assertEquals("live", workerContext.get().getCredentialEnvironment());
+        assertEquals(scope, workerContext.get().getCredentialScope());
+        assertEquals(120, workerContext.get().getRequestsPerMinute());
+        assertEquals(30, workerContext.get().getBurstCapacity());
+        assertEquals(4, workerContext.get().getMaxConcurrency());
+        assertEquals(9L, workerContext.get().getAuthorizationVersion());
         assertNull(AuthContext.current());
     }
 

@@ -35,8 +35,7 @@ public class ChunkTaskDispatcher {
                 knowledgeId, fileId, expected, asynchronousState, lockVersion);
         try {
             executor.execute(() -> {
-                AuthContext.set(new AuthContext(context.getKind(), context.getUserId(),
-                        context.getTenantId(), context.getRole(), context.getJti()));
+                AuthContext.set(context);
                 try {
                     work.run();
                 } finally {
