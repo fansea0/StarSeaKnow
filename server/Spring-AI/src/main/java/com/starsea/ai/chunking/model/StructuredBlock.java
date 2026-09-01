@@ -3,10 +3,10 @@ package com.starsea.ai.chunking.model;
 import java.util.List;
 import java.util.Map;
 
-/** A file-format-neutral structural block. Type is a stable textual code until Task 3 adds Markdown block enums. */
+/** A file-format-neutral structural block. */
 public record StructuredBlock(
         String blockId,
-        String type,
+        BlockType type,
         String rawText,
         String plainText,
         Integer headingLevel,
