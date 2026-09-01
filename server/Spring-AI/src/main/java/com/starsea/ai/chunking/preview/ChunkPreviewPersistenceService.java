@@ -18,7 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -46,7 +45,6 @@ public class ChunkPreviewPersistenceService {
         long tenantId = requireTenantId();
         List<DocumentChunk> existing = chunkMapper.findByFile(
                 job.fileId(), tenantId, job.knowledgeId());
-        List<Long> draftIds = new ArrayList<>();
         for (DocumentChunk chunk : existing) {
             ChunkStatus status = ChunkStatus.fromCode(chunk.getStatus());
             if (status != ChunkStatus.DRAFT) {
@@ -55,9 +53,10 @@ public class ChunkPreviewPersistenceService {
             if (Boolean.TRUE.equals(chunk.getIsModified()) && !job.replaceEditedDrafts()) {
                 throw ChunkingException.conflict("Edited DRAFT chunks require explicit replacement confirmation");
             }
-            draftIds.add(chunk.getId());
         }
-        if (!draftIds.isEmpty() && chunkMapper.deleteBatchIds(draftIds) != draftIds.size()) {
+        int deleted = chunkMapper.deleteReplaceableDrafts(
+                job.fileId(), tenantId, job.knowledgeId(), job.replaceEditedDrafts());
+        if (deleted != existing.size()) {
             throw ChunkingException.conflict("The current DRAFT set changed during replacement");
         }
 

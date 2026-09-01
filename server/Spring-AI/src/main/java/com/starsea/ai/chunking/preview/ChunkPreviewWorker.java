@@ -63,6 +63,7 @@ public class ChunkPreviewWorker {
 
     public void generate(Job job) {
         Objects.requireNonNull(job, "job");
+        Path snapshotPath = null;
         try {
             ScopedSource source = requireScopedSource(job);
             byte[] exactSource = Files.readAllBytes(source.path());
@@ -70,6 +71,7 @@ public class ChunkPreviewWorker {
                 throw new IllegalArgumentException("The source document is empty");
             }
             String sourceHash = sha256(exactSource);
+            snapshotPath = createSnapshot(job.fileId(), source.file().getType(), exactSource);
             DocumentStructureParser parser = parserRegistry.require(source.file().getType());
             ChunkPlanningStrategy planner = strategyRegistry.require(job.strategyCode(), source.file().getType());
             FileResource resource = new FileResource(
@@ -79,7 +81,7 @@ public class ChunkPreviewWorker {
                     source.file().getPublicId(),
                     source.file().getFileName(),
                     source.file().getType(),
-                    source.path());
+                    snapshotPath);
             ParsedStructure structure = parser.parse(resource);
             List<ChunkDraft> drafts = planner.plan(structure, job.policy());
             validateDrafts(drafts, job.policy());
@@ -87,6 +89,36 @@ public class ChunkPreviewWorker {
                     policySnapshot(job.policy()), drafts);
         } catch (Exception exception) {
             markFailed(job, exception);
+        } finally {
+            deleteSnapshot(snapshotPath, job.fileId());
+        }
+    }
+
+    private Path createSnapshot(long fileId, String fileType, byte[] exactSource) throws IOException {
+        String normalizedType = fileType == null ? "" : fileType.replaceAll("[^A-Za-z0-9]", "");
+        String suffix = normalizedType.isBlank() ? ".snapshot" : "." + normalizedType;
+        Path snapshot = Files.createTempFile("chunk-preview-" + fileId + "-", suffix);
+        try {
+            Files.write(snapshot, exactSource);
+            return snapshot;
+        } catch (IOException writeFailure) {
+            try {
+                Files.deleteIfExists(snapshot);
+            } catch (IOException cleanupFailure) {
+                writeFailure.addSuppressed(cleanupFailure);
+            }
+            throw writeFailure;
+        }
+    }
+
+    private void deleteSnapshot(Path snapshotPath, long fileId) {
+        if (snapshotPath == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(snapshotPath);
+        } catch (IOException cleanupFailure) {
+            log.error("Unable to delete chunk preview snapshot for file {}", fileId, cleanupFailure);
         }
     }
 

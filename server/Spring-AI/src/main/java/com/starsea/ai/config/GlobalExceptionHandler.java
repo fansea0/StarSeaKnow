@@ -2,6 +2,7 @@ package com.starsea.ai.config;
 
 import com.starsea.ai.auth.AuthException;
 import com.starsea.ai.chunking.api.ChunkingException;
+import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.domain.dto.AjaxResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -72,6 +73,20 @@ public class GlobalExceptionHandler
     {
         String message = exception.getReason() == null ? exception.getMessage() : exception.getReason();
         return ResponseEntity.status(exception.getStatusCode()).body(AjaxResult.error(message));
+    }
+
+    @ExceptionHandler(FileProcessingService.OwnershipException.class)
+    public ResponseEntity<AjaxResult> handleFileProcessingOwnership(
+            FileProcessingService.OwnershipException exception)
+    {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(AjaxResult.error(exception.getMessage()));
+    }
+
+    @ExceptionHandler(FileProcessingService.StateConflictException.class)
+    public ResponseEntity<AjaxResult> handleFileProcessingConflict(
+            FileProcessingService.StateConflictException exception)
+    {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(AjaxResult.error(exception.getMessage()));
     }
 
 

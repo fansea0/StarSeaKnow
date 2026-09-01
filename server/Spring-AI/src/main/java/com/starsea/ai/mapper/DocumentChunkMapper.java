@@ -13,4 +13,9 @@ public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
     List<DocumentChunk> findByFile(@Param("fileId") long fileId,
                                    @Param("tenantId") long tenantId,
                                    @Param("knowledgeId") long knowledgeId);
+
+    int deleteReplaceableDrafts(@Param("fileId") long fileId,
+                                @Param("tenantId") long tenantId,
+                                @Param("knowledgeId") long knowledgeId,
+                                @Param("replaceEditedDrafts") boolean replaceEditedDrafts);
 }

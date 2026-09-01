@@ -37,4 +37,15 @@
           AND knowledge_id = #{knowledgeId}
         ORDER BY position
     </select>
+
+    <delete id="deleteReplaceableDrafts">
+        DELETE FROM document_chunk
+        WHERE file_id = #{fileId}
+          AND tenant_id = #{tenantId}
+          AND knowledge_id = #{knowledgeId}
+          AND status = 0
+        <if test="replaceEditedDrafts == false">
+          AND is_modified = FALSE
+        </if>
+    </delete>
 </mapper>

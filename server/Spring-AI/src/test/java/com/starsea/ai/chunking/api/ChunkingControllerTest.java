@@ -6,6 +6,7 @@ import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.preview.ChunkPreviewService;
 import com.starsea.ai.chunking.preview.ChunkPreviewWorker;
 import com.starsea.ai.chunking.processing.ChunkTaskDispatcher;
+import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.registry.ChunkStrategyDescriptor;
 import com.starsea.ai.chunking.registry.ChunkStrategyRegistry;
 import com.starsea.ai.chunking.registry.DocumentStructureParserRegistry;
@@ -172,6 +173,35 @@ class ChunkingControllerTest {
                                  "replaceEditedDrafts":false,"lockVersion":0}
                                 """))
                 .andExpect(status().isServiceUnavailable());
+    }
+
+    @Test
+    void dispatcher_ownership_race_remains_an_actual_http_404() throws Exception {
+        doThrow(new FileProcessingService.OwnershipException("scope changed"))
+                .when(dispatcher).dispatch(eq(KNOWLEDGE_ID), eq(FILE_ID), eq(PipelineState.UPLOADED),
+                        eq(PipelineState.CHUNKING), eq(0), any(Runnable.class));
+
+        performValidPreview().andExpect(status().isNotFound());
+    }
+
+    @Test
+    void dispatcher_state_or_lock_race_remains_an_actual_http_409() throws Exception {
+        doThrow(new FileProcessingService.StateConflictException("lock changed"))
+                .when(dispatcher).dispatch(eq(KNOWLEDGE_ID), eq(FILE_ID), eq(PipelineState.UPLOADED),
+                        eq(PipelineState.CHUNKING), eq(0), any(Runnable.class));
+
+        performValidPreview().andExpect(status().isConflict());
+    }
+
+    private org.springframework.test.web.servlet.ResultActions performValidPreview() throws Exception {
+        return mockMvc.perform(post("/knowledge/{knowledgeId}/files/{fileId}/chunk-preview",
+                        KNOWLEDGE_ID, FILE_ID)
+                .contentType("application/json")
+                .content("""
+                        {"strategyCode":"MARKDOWN_OPTIMIZED",
+                         "strategyConfig":{"minTokens":100,"targetTokens":400,"maxTokens":512},
+                         "replaceEditedDrafts":false,"lockVersion":0}
+                        """));
     }
 
     private static FileProcessing processing(long tenantId, long knowledgeId) {
