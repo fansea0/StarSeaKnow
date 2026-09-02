@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.mapper.ModelProviderCatalogMapper;
 import com.starsea.ai.mapper.TenantModelProviderMapper;
+import com.starsea.ai.mapper.AgentModelMapper;
+import com.starsea.ai.agent.AgentModel;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -22,16 +24,19 @@ public class ModelProviderService {
     private final TenantModelProviderMapper connections;
     private final ModelProviderSecretCipher cipher;
     private final ModelProviderConnectionVerifier verifier;
+    private final AgentModelMapper agentModels;
 
     public ModelProviderService(
             ModelProviderCatalogMapper catalogs,
             TenantModelProviderMapper connections,
             ModelProviderSecretCipher cipher,
-            ModelProviderConnectionVerifier verifier) {
+            ModelProviderConnectionVerifier verifier,
+            AgentModelMapper agentModels) {
         this.catalogs = catalogs;
         this.connections = connections;
         this.cipher = cipher;
         this.verifier = verifier;
+        this.agentModels = agentModels;
     }
 
     public List<ModelProviderApiModels.ProviderView> listProviders() {
@@ -167,6 +172,7 @@ public class ModelProviderService {
         if (models.isEmpty()) {
             throw invalid("厂商至少需要一个可选模型");
         }
+        rejectRemovalOfModelsInUse(existing, models);
         existing.setSelectableModels(List.copyOf(models));
         connections.updateById(existing);
         ModelProviderCatalog catalog = existing.getCatalogProviderId() == null
@@ -195,7 +201,30 @@ public class ModelProviderService {
     @Transactional
     public void deleteConnection(long connectionId) {
         TenantModelProvider existing = ownedConnection(connectionId, tenantId());
+        long used = agentModels.selectCount(new LambdaQueryWrapper<AgentModel>()
+                .eq(AgentModel::getTenantModelProviderId, connectionId)
+                .isNull(AgentModel::getDeletedAt));
+        if (used > 0) {
+            throw new ModelProviderException(409, "MODEL_PROVIDER_IN_USE", "厂商连接正在被智能体使用，不能删除");
+        }
         connections.deleteById(existing.getId());
+    }
+
+    private void rejectRemovalOfModelsInUse(
+            TenantModelProvider existing, List<ModelSuggestion> replacement) {
+        List<String> retainedIds = replacement.stream().map(ModelSuggestion::modelId).toList();
+        List<String> removedIds = existing.getSelectableModels().stream()
+                .map(ModelSuggestion::modelId)
+                .filter(modelId -> !retainedIds.contains(modelId))
+                .toList();
+        if (removedIds.isEmpty()) return;
+        long used = agentModels.selectCount(new LambdaQueryWrapper<AgentModel>()
+                .eq(AgentModel::getTenantModelProviderId, existing.getId())
+                .in(AgentModel::getModelId, removedIds)
+                .isNull(AgentModel::getDeletedAt));
+        if (used > 0) {
+            throw new ModelProviderException(409, "MODEL_PROVIDER_MODEL_IN_USE", "模型正在被智能体使用，不能移除");
+        }
     }
 
     private ResolvedConnection resolve(ModelProviderApiModels.ConnectionCommand command) {

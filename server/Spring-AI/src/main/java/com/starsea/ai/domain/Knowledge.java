@@ -22,6 +22,8 @@ public class Knowledge implements Serializable {
     @TableId(type = IdType.AUTO)
     private Long id;
 
+    private Long tenantId;
+
     @TableField(value = "public_id", typeHandler = ObjectTypeHandler.class)
     private UUID publicId;
 

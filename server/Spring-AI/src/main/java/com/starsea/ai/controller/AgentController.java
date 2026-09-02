@@ -3,6 +3,7 @@ package com.starsea.ai.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.starsea.ai.auth.RequireLogin;
 import com.starsea.ai.auth.RequireRole;
+import com.starsea.ai.agent.AgentAggregateService;
 import com.starsea.ai.domain.Agent;
 import com.starsea.ai.domain.AgentKnowledge;
 import com.starsea.ai.domain.Knowledge;
@@ -31,6 +32,7 @@ public class AgentController {
     private final AgentService agentService;
     private final AgentKnowledgeService agentKnowledgeService;
     private final KnowledgeService knowledgeService;
+    private final AgentAggregateService agentAggregateService;
 
     @RequireRole("tenant_admin")
     @GetMapping("/agentToKnowledge")
@@ -41,6 +43,10 @@ public class AgentController {
     
     @GetMapping("/knowledge/list")
     public AjaxResult knowledgeList(Long agentId) {
+        Agent agent = agentService.getOne(new LambdaQueryWrapper<Agent>()
+                .eq(Agent::getId, agentId)
+                .isNull(Agent::getDeletedAt));
+        if (agent == null) return AjaxResult.error("智能体不存在或无权访问");
         List<AgentKnowledge> list = agentKnowledgeService.list(new LambdaQueryWrapper<AgentKnowledge>().eq(AgentKnowledge::getAgentId, agentId));
         List<Knowledge> knowledges = list.stream().map(ak -> knowledgeService.getById(ak.getKnowledgeId())).toList();
         return AjaxResult.success(knowledges);
@@ -58,7 +64,9 @@ public class AgentController {
     @RequireRole("tenant_admin")
     @PutMapping("/update/{id}")
     public AjaxResult updateAgent(@PathVariable Long id, @RequestBody Agent agent) {
-        Agent existing = agentService.getById(id);
+        Agent existing = agentService.getOne(new LambdaQueryWrapper<Agent>()
+                .eq(Agent::getId, id)
+                .isNull(Agent::getDeletedAt));
         if (existing == null) {
             return AjaxResult.error("智能体不存在");
         }
@@ -74,7 +82,7 @@ public class AgentController {
     @RequireRole("tenant_admin")
     @DeleteMapping("/delete/{id}")
     public AjaxResult deleteAgent(@PathVariable Long id) {
-        agentService.removeById(id);
+        agentAggregateService.delete(id);
         return AjaxResult.success();
     }
 
@@ -91,7 +99,9 @@ public class AgentController {
     // 查询特定 Agent
     @GetMapping("/{id}")
     public AjaxResult getAgentById(@PathVariable Long id) {
-        Agent agent = agentService.getById(id);
+        Agent agent = agentService.getOne(new LambdaQueryWrapper<Agent>()
+                .eq(Agent::getId, id)
+                .isNull(Agent::getDeletedAt));
         markApiKeyConfigured(agent);
         return AjaxResult.success(agent);
     }
@@ -99,7 +109,7 @@ public class AgentController {
     // 查询所有 Agent
     @GetMapping("/list")
     public AjaxResult getAllAgents() {
-        List<Agent> agents = agentService.list();
+        List<Agent> agents = agentService.list(new LambdaQueryWrapper<Agent>().isNull(Agent::getDeletedAt));
         agents.forEach(this::markApiKeyConfigured);
         return AjaxResult.success(agents);
     }

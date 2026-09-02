@@ -2,6 +2,7 @@ package com.starsea.ai.mapper;
 
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.starsea.ai.domain.Agent;
 import org.apache.ibatis.annotations.CacheNamespace;
 import org.apache.ibatis.annotations.Mapper;
@@ -16,8 +17,14 @@ import org.apache.ibatis.annotations.Mapper;
 @CacheNamespace
 public interface AgentMapper extends BaseMapper<Agent> {
 
+    default Agent selectForUpdate(long id, long tenantId) {
+        return selectOne(new LambdaQueryWrapper<Agent>()
+                .eq(Agent::getId, id)
+                .eq(Agent::getTenantId, tenantId)
+                .isNull(Agent::getDeletedAt)
+                .last("FOR UPDATE"));
+    }
 }
-
 
 
 

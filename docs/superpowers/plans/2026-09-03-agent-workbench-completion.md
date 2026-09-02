@@ -88,7 +88,7 @@
 **Files:**
 - Create: `server/Spring-AI/src/main/resources/db/V12__add_agent_draft_and_model.sql`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/AgentModel.java`
-- Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/AgentModelMapper.java`
+- Create: `server/Spring-AI/src/main/java/com/starsea/ai/mapper/AgentModelMapper.java`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/AgentWorkbenchApiModels.java`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/AgentAggregateService.java`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/AgentWorkbenchController.java`
@@ -100,10 +100,10 @@
 - `GET /agents`, `GET /agents/metrics`, `GET /agents/{id}`, `POST /agents`, `PUT /agents/{id}/draft`, `DELETE /agents/{id}`.
 - Draft command includes basic fields, tags, variables, knowledge IDs, retrieval parameters and optional exclusive model configuration.
 
-- [ ] Write migration and service RED tests covering every invariant above.
-- [ ] Implement V12 and aggregate service with one transaction boundary and revision increment.
-- [ ] Implement admin/member projection rules and stable 404/409 errors.
-- [ ] Verify and commit `feat: 建立智能体草稿与独占模型`.
+- [x] Write migration and service RED tests covering every invariant above.
+- [x] Implement V12 and aggregate service with one transaction boundary and revision increment.
+- [x] Implement admin/member projection rules and stable 404/409 errors.
+- [x] Verify and commit `feat: 建立智能体草稿与独占模型`.
 
 ### Task 5: 模块 4—不可变快照、发布和回滚
 

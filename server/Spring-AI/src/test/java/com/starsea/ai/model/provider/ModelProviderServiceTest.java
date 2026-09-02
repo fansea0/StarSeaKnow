@@ -3,6 +3,7 @@ package com.starsea.ai.model.provider;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.mapper.ModelProviderCatalogMapper;
 import com.starsea.ai.mapper.TenantModelProviderMapper;
+import com.starsea.ai.mapper.AgentModelMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,7 @@ class ModelProviderServiceTest {
     private TenantModelProviderMapper connections;
     private ModelProviderSecretCipher cipher;
     private ModelProviderConnectionVerifier verifier;
+    private AgentModelMapper agentModels;
     private ModelProviderService service;
 
     @BeforeEach
@@ -35,7 +37,8 @@ class ModelProviderServiceTest {
         connections = mock(TenantModelProviderMapper.class);
         cipher = mock(ModelProviderSecretCipher.class);
         verifier = mock(ModelProviderConnectionVerifier.class);
-        service = new ModelProviderService(catalogs, connections, cipher, verifier);
+        agentModels = mock(AgentModelMapper.class);
+        service = new ModelProviderService(catalogs, connections, cipher, verifier, agentModels);
         AuthContext.set(new AuthContext(
                 AuthContext.Kind.BUSINESS, 71L, 9L, "tenant_admin", "test-jti"));
     }
@@ -205,6 +208,29 @@ class ModelProviderServiceTest {
 
         assertThat(existing.getSelectableModels()).containsExactly(first);
         verify(connections).updateById(existing);
+    }
+
+    @Test
+    void rejects_removing_a_model_or_provider_connection_used_by_an_agent() {
+        TenantModelProvider existing = connection(30L, 9L, 1L, "API_KEY");
+        ModelSuggestion used = new ModelSuggestion("used", "Used", 8192);
+        ModelSuggestion retained = new ModelSuggestion("retained", "Retained", 8192);
+        existing.setSelectableModels(List.of(used, retained));
+        when(connections.selectOne(any())).thenReturn(existing);
+        when(agentModels.selectCount(any())).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.replaceModels(
+                30L, new ModelProviderApiModels.ModelListCommand(List.of(retained))))
+                .isInstanceOf(ModelProviderException.class)
+                .extracting("status", "code")
+                .containsExactly(409, "MODEL_PROVIDER_MODEL_IN_USE");
+        verify(connections, never()).updateById(any());
+
+        assertThatThrownBy(() -> service.deleteConnection(30L))
+                .isInstanceOf(ModelProviderException.class)
+                .extracting("status", "code")
+                .containsExactly(409, "MODEL_PROVIDER_IN_USE");
+        verify(connections, never()).deleteById(30L);
     }
 
     private ModelProviderCatalog catalog(Long id, String code, String name, String authType) {

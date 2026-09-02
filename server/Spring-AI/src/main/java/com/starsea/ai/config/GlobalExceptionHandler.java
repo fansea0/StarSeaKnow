@@ -1,6 +1,7 @@
 package com.starsea.ai.config;
 
 import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.agent.AgentWorkbenchException;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.domain.dto.AjaxResult;
@@ -91,6 +92,14 @@ public class GlobalExceptionHandler
 
     @ExceptionHandler(ModelProviderException.class)
     public ResponseEntity<AjaxResult> handleModelProvider(ModelProviderException exception)
+    {
+        AjaxResult result = AjaxResult.error(exception.getMessage());
+        result.put("errorCode", exception.code());
+        return ResponseEntity.status(exception.status()).body(result);
+    }
+
+    @ExceptionHandler(AgentWorkbenchException.class)
+    public ResponseEntity<AjaxResult> handleAgentWorkbench(AgentWorkbenchException exception)
     {
         AjaxResult result = AjaxResult.error(exception.getMessage());
         result.put("errorCode", exception.code());
