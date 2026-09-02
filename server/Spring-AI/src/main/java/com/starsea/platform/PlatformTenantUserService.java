@@ -34,8 +34,7 @@ public class PlatformTenantUserService {
         if (user == null || !Long.valueOf(tenantId).equals(user.getTenantId())) {
             throw new AuthException(AuthErrorCode.CROSS_TENANT, "user not in tenant");
         }
-        user.setMustChangePassword(true);
-        if (users.updateById(user) != 1) {
+        if (users.markMustChangePasswordForPlatform(userId, tenantId) != 1) {
             throw new AuthException(AuthErrorCode.REGISTRATION_INVALID, "user password reset changed concurrently");
         }
     }

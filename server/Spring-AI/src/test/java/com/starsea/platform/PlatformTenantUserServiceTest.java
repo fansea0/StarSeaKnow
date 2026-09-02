@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -28,13 +27,13 @@ class PlatformTenantUserServiceTest {
         user.setPasswordHash("existing-hash");
         when(tenants.selectById(7L)).thenReturn(tenant);
         when(users.selectByIdForPlatform(9L)).thenReturn(user);
-        when(users.updateById(user)).thenReturn(1);
+        when(users.markMustChangePasswordForPlatform(9L, 7L)).thenReturn(1);
 
         service.resetPassword(7L, 9L);
 
-        assertTrue(user.getMustChangePassword());
         assertEquals("existing-hash", user.getPasswordHash());
-        verify(users).updateById(user);
+        verify(users).markMustChangePasswordForPlatform(9L, 7L);
+        verify(users, never()).updateById(any());
     }
 
     @Test

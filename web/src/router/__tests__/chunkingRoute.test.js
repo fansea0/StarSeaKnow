@@ -36,4 +36,16 @@ describe('chunking workspace route access', () => {
     expect(await guard({ ...workspace, fullPath: '/knowledge/11/files/22/chunks' })).toBe(true)
     auth.user = { role: 'tenant_user' }
   })
+
+  it('forces users marked for password change to the reset page', async () => {
+    const guard = installedGuard()
+    auth.mustChangePassword = true
+
+    expect(await guard({ path: '/knowledge', meta: {}, fullPath: '/knowledge' }))
+      .toBe('/change-initial-password')
+    expect(await guard({ path: '/change-initial-password', meta: {}, fullPath: '/change-initial-password' }))
+      .toBe(true)
+
+    auth.mustChangePassword = false
+  })
 })
