@@ -288,7 +288,8 @@ public class AgentAggregateService {
         }
         TenantModelProvider provider = providers.selectOne(new LambdaQueryWrapper<TenantModelProvider>()
                 .eq(TenantModelProvider::getId, command.providerConnectionId())
-                .eq(TenantModelProvider::getTenantId, tenantId));
+                .eq(TenantModelProvider::getTenantId, tenantId)
+                .last("FOR SHARE"));
         if (provider == null) throw notFound("MODEL_PROVIDER_CONNECTION_NOT_FOUND", "厂商连接不存在");
         boolean exists = safeList(provider.getSelectableModels()).stream()
                 .map(ModelSuggestion::modelId)

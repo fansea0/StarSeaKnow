@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler;
 import lombok.Data;
 import lombok.ToString;
@@ -34,4 +35,6 @@ public class TenantModelProvider {
     private Long createdBy;
     private OffsetDateTime createTime;
     private OffsetDateTime updateTime;
+    @TableLogic(value = "null", delval = "CURRENT_TIMESTAMP")
+    private OffsetDateTime deletedAt;
 }

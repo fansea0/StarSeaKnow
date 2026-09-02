@@ -101,6 +101,13 @@ class AgentSnapshotServiceTest {
         verify(snapshots, never()).insert(any());
     }
 
+    @Test void rejects_oversized_publish_note_before_database_write() {
+        when(agents.selectForUpdate(101L, 9L)).thenReturn(agent(101L, 5L, 4L));
+        assertThatThrownBy(() -> service.publish(101L, new AgentSnapshotService.PublishCommand("a".repeat(513), 4L)))
+                .isInstanceOf(com.starsea.ai.agent.AgentWorkbenchException.class).extracting("status").isEqualTo(422);
+        verify(snapshots, never()).insert(any());
+    }
+
     @Test
     void lists_bounded_metadata_without_loading_snapshot_payloads() {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(

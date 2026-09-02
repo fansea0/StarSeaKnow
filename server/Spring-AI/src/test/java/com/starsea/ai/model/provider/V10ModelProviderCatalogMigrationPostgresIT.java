@@ -13,7 +13,8 @@ class V10ModelProviderCatalogMigrationPostgresIT {
 
     @Test
     void creates_constrained_public_catalog_and_seeds_builtin_providers() throws Exception {
-        String migration = readMigration();
+        String migration = readMigration("V10__add_model_provider_catalog.sql") + "\n"
+                + readMigration("V15__validate_required_model_fields.sql");
         String schema = "starseaknow_v10_it_" + UUID.randomUUID().toString().replace("-", "");
         String sql = """
                 BEGIN;
@@ -45,6 +46,14 @@ class V10ModelProviderCatalogMigrationPostgresIT {
 
                 DO $$
                 BEGIN
+                    IF validate_model_suggestions(NULL)
+                       OR validate_model_suggestions('[{}]')
+                       OR validate_model_suggestions('[{"modelId":null,"displayName":"Test","contextWindow":1}]')
+                       OR validate_model_suggestions('[{"modelId":"test","contextWindow":1}]')
+                       OR validate_model_suggestions('[{"modelId":"test","displayName":"Test"}]')
+                       OR validate_model_suggestions('[{"modelId":"test","displayName":"Test","contextWindow":null}]') THEN
+                        RAISE EXCEPTION 'required model fields were not enforced';
+                    END IF;
                     BEGIN
                         INSERT INTO model_provider_catalog
                             (code, name, icon, default_base_url, protocol_type, auth_type, suggested_models)
@@ -105,11 +114,11 @@ class V10ModelProviderCatalogMigrationPostgresIT {
                 "6"), output.lines().toList());
     }
 
-    private String readMigration() throws IOException {
+    private String readMigration(String filename) throws IOException {
         try (var stream = getClass().getResourceAsStream(
-                "/db/V10__add_model_provider_catalog.sql")) {
+                "/db/" + filename)) {
             if (stream == null) {
-                throw new IOException("V10 migration resource is missing");
+                throw new IOException(filename + " migration resource is missing");
             }
             return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
         }

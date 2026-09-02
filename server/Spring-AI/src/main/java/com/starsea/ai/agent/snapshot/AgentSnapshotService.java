@@ -107,6 +107,7 @@ public class AgentSnapshotService {
     }
 
     private AgentSnapshot createSnapshot(Agent row, String note, Long rollbackFromId) {
+        if (note.length() > 512) throw invalid("发布说明不能超过 512 个字符");
         AgentSnapshotData data = assembler.assemble(row);
         AgentSnapshot snapshot = new AgentSnapshot();
         snapshot.setTenantId(tenantId());

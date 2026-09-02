@@ -1,0 +1,7 @@
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder><pattern>%level %logger{36} - %msg%n</pattern></encoder>
+    </appender>
+    <!-- Loaded before the application context; never opens or truncates the developer's application logs. -->
+    <root level="WARN"><appender-ref ref="CONSOLE" /></root>
+</configuration>

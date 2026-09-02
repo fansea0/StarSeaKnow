@@ -314,7 +314,8 @@ public class ModelProviderService {
         TenantModelProvider row = connections.selectOne(
                 new LambdaQueryWrapper<TenantModelProvider>()
                         .eq(TenantModelProvider::getId, connectionId)
-                        .eq(TenantModelProvider::getTenantId, tenantId));
+                        .eq(TenantModelProvider::getTenantId, tenantId)
+                        .last("FOR UPDATE"));
         if (row == null) {
             throw new ModelProviderException(404, "MODEL_PROVIDER_CONNECTION_NOT_FOUND", "厂商连接不存在");
         }
