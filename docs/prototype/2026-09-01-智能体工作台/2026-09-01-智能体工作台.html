@@ -1,0 +1,2300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>StarSeaKnow · 智能体工作台（原型）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  /* ===== tokens (mirror web/src/style.css sea theme) ===== */
+  :root {
+    --sea-deep: #11243B;
+    --sea-ink: #19304A;
+    --sea-signal: #00A6A6;
+    --sea-sand: #E9C98B;
+    --sea-mist: #EAF1F5;
+    --sea-paper: #FCFDFC;
+    --sea-muted: #64748B;
+    --sea-danger: #C8524E;
+    --rule: #d5e1e6;
+    --rule-soft: #e2ebef;
+    --rule-softer: #eaf1f4;
+    --placeholder: #91a1af;
+    --signal-soft: #e8f8f8;
+    --signal-12: rgba(0, 166, 166, .12);
+    --signal-08: rgba(0, 166, 166, .08);
+    --signal-04: rgba(0, 166, 166, .04);
+    --shadow-panel: 0 8px 28px rgba(17, 36, 59, .07);
+    --shadow-card-hover: 0 8px 20px rgba(0, 166, 166, .14);
+    --shadow-modal: 0 24px 70px rgba(17, 36, 59, .3);
+  }
+  * { box-sizing: border-box; }
+  *:focus-visible { outline: 3px solid rgba(0, 166, 166, .6); outline-offset: 2px; border-radius: 4px; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Noto Sans SC', system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--sea-mist);
+    color: var(--sea-ink);
+    min-height: 100vh;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .mono, code, kbd, .var-chip { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; }
+  .serif { font-family: 'Noto Serif SC', 'Source Han Serif SC', serif; }
+
+  /* ===== app shell: thin left nav (sea project style) ===== */
+  .app {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    min-height: 100vh;
+  }
+  .nav-rail {
+    background: var(--sea-deep);
+    color: var(--sea-paper);
+    padding: 16px 0 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  .nav-logo {
+    width: 36px; height: 36px;
+    border: 1px solid rgba(255,255,255,.18);
+    border-radius: 8px;
+    display: grid; place-items: center;
+    color: var(--sea-sand);
+    font-family: 'Noto Serif SC', serif;
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 18px;
+  }
+  .nav-item {
+    width: 44px; height: 44px;
+    border-radius: 8px;
+    display: grid; place-items: center;
+    color: rgba(255,255,255,.62);
+    cursor: pointer;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .nav-item:hover { color: var(--sea-paper); background: rgba(255,255,255,.06); }
+  .nav-item.active {
+    color: var(--sea-paper);
+    background: linear-gradient(180deg, rgba(0,166,166,.22), rgba(0,166,166,.05));
+    box-shadow: inset 0 0 0 1px rgba(0,166,166,.35);
+  }
+  .nav-item small { font-size: 10px; letter-spacing: .08em; }
+  .nav-item.active small { color: var(--sea-sand); }
+  .nav-spacer { flex: 1; }
+  .nav-avatar {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--sea-signal);
+    color: var(--sea-paper);
+    display: grid; place-items: center;
+    font-weight: 700;
+  }
+
+  /* ===== main column ===== */
+  main { min-width: 0; }
+  .top-bar {
+    height: 52px;
+    background: var(--sea-paper);
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .crumbs { display: flex; align-items: center; gap: 8px; color: var(--sea-muted); font-size: 12px; }
+  .crumbs a { color: var(--sea-muted); text-decoration: none; }
+  .crumbs a:hover { color: var(--sea-signal); }
+  .crumbs .sep { color: var(--placeholder); }
+  .crumbs .here { color: var(--sea-ink); font-weight: 600; }
+  .top-right { display: flex; align-items: center; gap: 14px; }
+  .seg {
+    display: inline-flex;
+    background: var(--sea-mist);
+    border-radius: 8px;
+    padding: 3px;
+  }
+  .seg button {
+    border: 0;
+    background: transparent;
+    color: var(--sea-muted);
+    padding: 5px 12px;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .seg button.on { background: var(--sea-paper); color: var(--sea-ink); box-shadow: 0 1px 2px rgba(17,36,59,.06); }
+
+  /* ===== reusable: workspace panel (signature) ===== */
+  .panel {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    box-shadow: var(--shadow-panel);
+    overflow: hidden;
+  }
+  .eyebrow {
+    color: var(--sea-signal);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+  }
+  .eyebrow.zh { letter-spacing: .12em; text-transform: none; }
+  h1.page-title { font-family: 'Noto Serif SC', serif; font-size: clamp(27px, 2.4vw, 32px); margin: 6px 0 6px; color: var(--sea-deep); font-weight: 700; line-height: 1.2; }
+  h2.section-title { font-family: 'Noto Serif SC', serif; font-size: 20px; margin: 0; color: var(--sea-deep); font-weight: 700; }
+  .lede { color: var(--sea-muted); margin: 0; font-size: 13px; }
+
+  /* ===== buttons ===== */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 7px 14px;
+    border-radius: 7px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid #cfdde3;
+    background: var(--sea-paper);
+    color: var(--sea-ink);
+  }
+  .btn:hover { border-color: var(--sea-signal); }
+  .btn-primary {
+    background: var(--sea-signal); color: var(--sea-paper); border-color: var(--sea-signal);
+    box-shadow: 0 8px 20px rgba(0,166,166,.18);
+  }
+  .btn-primary:hover { background: #008c8c; border-color: #008c8c; }
+  .btn-sand { background: var(--sea-sand); color: var(--sea-deep); border-color: var(--sea-sand); }
+  .btn-ghost { background: transparent; border: 1px solid transparent; color: var(--sea-muted); }
+  .btn-ghost:hover { background: var(--sea-mist); color: var(--sea-ink); }
+  .btn-icon {
+    width: 32px; height: 32px; min-height: 32px;
+    padding: 0; border-radius: 7px;
+    color: var(--sea-muted);
+  }
+  .btn-icon:hover { color: var(--sea-ink); background: var(--sea-mist); }
+
+  /* inputs */
+  .field { display: grid; gap: 6px; }
+  .field > label { font-size: 12px; font-weight: 700; color: var(--sea-deep); }
+  .field > small { color: var(--sea-muted); font-size: 12px; }
+  .input, .textarea, .select {
+    width: 100%;
+    border: 1px solid #cbd9df;
+    border-radius: 7px;
+    background: var(--sea-paper);
+    color: var(--sea-ink);
+    font: inherit;
+    padding: 8px 10px;
+    min-height: 36px;
+  }
+  .input::placeholder, .textarea::placeholder { color: var(--placeholder); }
+  .input:focus, .textarea:focus, .select:focus { border-color: var(--sea-signal); outline: 3px solid rgba(0,166,166,.18); outline-offset: 0; }
+  .textarea { padding: 10px 12px; min-height: 96px; resize: vertical; line-height: 1.6; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 22px; padding: 0 8px;
+    border-radius: 999px;
+    background: var(--signal-08);
+    color: #0a6868;
+    font-size: 11px; font-weight: 700;
+  }
+  .chip.muted { background: var(--sea-mist); color: var(--sea-muted); }
+  .chip.sand { background: rgba(233, 201, 139, .25); color: #6b511c; }
+  .chip.danger { background: rgba(200, 82, 78, .12); color: var(--sea-danger); }
+  .chip.solid { background: var(--sea-signal); color: var(--sea-paper); }
+  .pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sea-signal); }
+
+  /* ====================================================== */
+  /*  PAGE 1: AGENT LIST                                    */
+  /* ====================================================== */
+  .list-page { padding: 20px 32px 60px; }
+  .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+  .page-head .left { min-width: 0; }
+  .page-head .right { display: flex; align-items: center; gap: 10px; }
+  .metric-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .metric {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule);
+    border-radius: 11px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 0 rgba(17,36,59,.02);
+  }
+  .metric small { color: var(--sea-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+  .metric strong { display: block; margin-top: 4px; color: var(--sea-deep); font-size: 22px; font-family: 'Noto Serif SC', serif; font-weight: 700; }
+  .metric .delta { font-size: 11px; color: var(--sea-muted); }
+  .metric .delta.up { color: #0a6868; }
+  .metric .ico {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: var(--signal-12); color: #0a6868;
+    margin-bottom: 6px; font-weight: 800;
+  }
+
+  .list-panel { padding: 0; }
+  .list-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 14px; padding: 14px 18px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .search { position: relative; flex: 0 1 360px; min-width: 220px; }
+  .search input { padding-left: 32px; }
+  .search::before {
+    content: "⌕"; position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--placeholder); font-size: 14px;
+  }
+
+  /* v12: tag 搜索（tag token + 自由文本混合） */
+  .tag-search {
+    flex: 0 1 480px; min-width: 320px;
+    position: relative;
+    display: flex; align-items: center;
+    min-height: 36px;
+    padding: 4px 6px 4px 10px;
+    border: 1px solid #cbd9df;
+    border-radius: 7px;
+    background: var(--sea-paper);
+    transition: border-color .12s;
+  }
+  .tag-search:focus-within { border-color: var(--sea-signal); box-shadow: 0 0 0 3px rgba(0,166,166,.15); }
+  .ts-tokens {
+    flex: 1; min-width: 0;
+    display: flex; flex-wrap: wrap; gap: 4px;
+    align-items: center;
+  }
+  .ts-token {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 24px; padding: 0 4px 0 8px;
+    border-radius: 5px;
+    background: var(--signal-12);
+    color: #0a6868;
+    font-size: 12px; font-weight: 600;
+  }
+  .ts-token .ts-key {
+    display: inline-block;
+    padding: 0 4px; height: 14px; line-height: 14px;
+    border-radius: 3px;
+    background: rgba(0, 166, 166, .18);
+    color: #0a6868;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .ts-token .ts-x {
+    width: 16px; height: 16px; display: grid; place-items: center;
+    border-radius: 3px; color: #0a6868; opacity: .55;
+    cursor: pointer; font-size: 11px; line-height: 1;
+  }
+  .ts-token .ts-x:hover { background: rgba(200, 82, 78, .14); color: var(--sea-danger); opacity: 1; }
+  .ts-input {
+    flex: 0 1 120px; min-width: 100px;
+    border: 0; outline: 0; background: transparent;
+    color: var(--sea-ink); font: inherit; font-size: 12.5px;
+    padding: 2px 4px;
+  }
+  .ts-input::placeholder { color: var(--placeholder); }
+  .ts-hint {
+    flex: 0 0 auto;
+    padding: 0 6px;
+    color: var(--placeholder); font-size: 11px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 4px;
+    background: var(--sea-mist);
+    line-height: 18px;
+  }
+  .tag-suggest {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 18px;
+    border-top: 1px solid var(--rule-softer);
+    background: #fbfdfd;
+  }
+  .ts-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 24px; padding: 0 8px 0 4px;
+    border-radius: 999px;
+    background: var(--sea-paper);
+    border: 1px solid var(--rule-soft);
+    color: var(--sea-ink);
+    font-size: 11.5px; font-weight: 600;
+    cursor: pointer;
+  }
+  .ts-chip:hover { border-color: var(--sea-signal); color: #0a6868; }
+  .ts-chip .ts-key {
+    display: inline-block;
+    padding: 0 4px; height: 14px; line-height: 14px;
+    border-radius: 3px;
+    background: var(--signal-12);
+    color: #0a6868;
+    font-size: 9.5px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .ts-chip .ts-c { color: var(--placeholder); font-size: 10.5px; font-weight: 500; margin-left: 2px; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+  .filter {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 30px; padding: 0 10px; border-radius: 999px;
+    background: var(--sea-mist); color: var(--sea-ink);
+    font-size: 12px; font-weight: 600;
+    border: 1px solid transparent; cursor: pointer;
+  }
+  .filter.on { background: var(--sea-signal); color: var(--sea-paper); }
+  .filter .count { font-size: 11px; opacity: .72; }
+  .list-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 18px; }
+  .agent-card {
+    display: flex; flex-direction: column; gap: 10px;
+    min-height: 178px;
+    padding: 15px;
+    border: 1px solid #e2ebef;
+    border-radius: 11px;
+    background: var(--sea-paper);
+    transition: .18s;
+    cursor: pointer;
+  }
+  .agent-card:hover { border-color: var(--sea-signal); box-shadow: var(--shadow-card-hover); transform: translateY(-1px); }
+  .agent-card .top { display: flex; align-items: flex-start; justify-content: space-between; }
+  .agent-card .avatar {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: grid; place-items: center;
+    color: var(--sea-paper);
+    font-family: 'Noto Serif SC', serif; font-weight: 700; font-size: 17px;
+  }
+  .agent-card .name { font-size: 15px; font-weight: 700; color: var(--sea-deep); }
+  .agent-card .desc { color: var(--sea-muted); font-size: 12.5px; line-height: 1.55; min-height: 38px; }
+  .agent-card .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .agent-card .meta { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 10px; border-top: 1px dashed var(--rule-soft); }
+  .agent-card .meta .left { display: flex; align-items: center; gap: 10px; color: var(--sea-muted); font-size: 11.5px; }
+  .agent-card .meta .left .stat { display: inline-flex; align-items: center; gap: 4px; }
+  .agent-card .meta .right { display: flex; align-items: center; gap: 6px; }
+  .icon-btn {
+    width: 28px; height: 28px;
+    display: grid; place-items: center;
+    border-radius: 6px;
+    color: var(--sea-muted);
+    cursor: pointer;
+  }
+  .icon-btn:hover { color: var(--sea-ink); background: var(--sea-mist); }
+  .new-card {
+    border: 1.5px dashed #c4d3d9;
+    background: transparent;
+    color: var(--sea-muted);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    text-align: center; cursor: pointer;
+  }
+  .new-card:hover { color: var(--sea-signal); border-color: var(--sea-signal); background: var(--signal-04); }
+  .new-card b { font-size: 22px; }
+
+  /* ====================================================== */
+  /*  PAGE 2: AGENT EDITOR  (3-pane Dify-style)             */
+  /* ====================================================== */
+  .editor-page { display: flex; flex-direction: column; height: calc(100vh - 52px); min-height: 720px; }
+  .editor-bar {
+    height: 56px;
+    background: var(--sea-paper);
+    border-bottom: 1px solid var(--rule);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px; gap: 18px;
+  }
+  .editor-bar .who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .editor-bar .who .avatar {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--sea-signal), #2bb5b5);
+    color: var(--sea-paper);
+    display: grid; place-items: center; font-weight: 700;
+  }
+  .editor-bar .who h2 {
+    margin: 0; font-size: 14.5px; font-weight: 700; color: var(--sea-deep);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .editor-bar .who .sub { color: var(--sea-muted); font-size: 11.5px; }
+  .editor-bar .actions { display: flex; align-items: center; gap: 8px; }
+
+  .editor-body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    gap: 14px;
+    padding: 14px;
+    min-height: 0;
+  }
+  .pane {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    box-shadow: var(--shadow-panel);
+    display: flex; flex-direction: column;
+    min-height: 0; overflow: hidden;
+  }
+  .pane-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .pane-head .ttl { display: flex; align-items: center; gap: 8px; }
+  .pane-head h3 { margin: 0; font-size: 13px; font-weight: 700; color: var(--sea-deep); }
+  .pane-head .meta { color: var(--sea-muted); font-size: 11.5px; }
+  .pane-body { flex: 1; overflow: auto; padding: 14px 16px; min-height: 0; }
+
+  /* LEFT: side config */
+  .cfg-tabs {
+    display: flex; gap: 4px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--rule-soft);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .cfg-tabs::-webkit-scrollbar { display: none; }
+  .cfg-tab {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px; font-weight: 600;
+    color: var(--sea-muted);
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .cfg-tab.on { background: var(--signal-12); color: #0a6868; }
+  .cfg-tab .num { font-size: 10px; color: var(--placeholder); }
+  .cfg-tab.on .num { color: #0a6868; opacity: .55; }
+  .cfg-section { padding: 4px 0 18px; }
+  .cfg-section + .cfg-section { border-top: 1px solid var(--rule-soft); padding-top: 18px; margin-top: 6px; }
+  .cfg-section h4 {
+    font-size: 11px; font-weight: 800; letter-spacing: .12em;
+    color: var(--sea-muted); margin: 0 0 12px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .cfg-section h4::before { content: ""; width: 12px; height: 1.5px; background: var(--sea-signal); border-radius: 2px; }
+  /* v14: 变量 section 提升视觉权重，永远显示 */
+  #varsSection h4 { font-size: 13px; color: var(--sea-deep); letter-spacing: .04em; }
+  #varsSection h4::before { width: 14px; height: 2px; }
+  .row { display: grid; gap: 12px; }
+  .row.r-2 { grid-template-columns: 1fr 1fr; }
+  .help { color: var(--sea-muted); font-size: 11.5px; }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--sea-mist); border-radius: 7px; }
+  .switch { width: 32px; height: 18px; border-radius: 999px; background: #cbd9df; position: relative; cursor: pointer; }
+  .switch::after { content: ""; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; background: var(--sea-paper); border-radius: 50%; transition: .15s; }
+  .switch.on { background: var(--sea-signal); }
+  .switch.on::after { left: 16px; }
+  .kb-link {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px 8px 8px;
+    border: 1px solid #e4edf0;
+    border-radius: 9px;
+    background: var(--sea-paper);
+    transition: .14s;
+  }
+  .kb-link:hover { border-color: var(--sea-signal); background: var(--signal-04); }
+  .kb-link .ico {
+    width: 30px; height: 30px;
+    flex: 0 0 auto;
+    border-radius: 7px;
+    background: #e9f5ff;
+    color: #2189ef;
+    display: grid; place-items: center;
+    font-size: 16px;
+  }
+  .kb-link .body { flex: 1; min-width: 0; }
+  .kb-link .name { display: block; color: var(--sea-deep); font-size: 13px; font-weight: 600; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kb-link .meta { display: block; margin-top: 2px; color: var(--sea-muted); font-size: 11px; }
+  .kb-link .x {
+    flex: 0 0 auto;
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    border-radius: 5px;
+    color: var(--placeholder);
+    opacity: 0;
+    cursor: pointer;
+    transition: .12s;
+  }
+  .kb-link:hover .x { opacity: 1; }
+  .kb-link .x:hover { background: rgba(200, 82, 78, .1); color: var(--sea-danger); }
+
+  /* Dify-style citation block (本轮召回 / 引用来源) */
+  .citation {
+    margin-top: 6px;
+    border: 1px solid var(--rule-soft);
+    border-left: 3px solid var(--sea-signal);
+    border-radius: 0 6px 6px 0;
+    background: var(--sea-paper);
+    font-size: 12px;
+    overflow: hidden;
+  }
+  .citation summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 6px 10px;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--sea-muted);
+  }
+  .citation summary::-webkit-details-marker { display: none; }
+  .citation summary:hover { color: var(--sea-deep); }
+  .citation summary .tag {
+    display: inline-flex; align-items: center;
+    height: 18px; padding: 0 7px;
+    border-radius: 999px;
+    background: var(--signal-12); color: #0a6868;
+    font-size: 10.5px; font-weight: 700;
+  }
+  .citation summary .src { color: var(--sea-ink); font-weight: 600; }
+  .citation summary .score { margin-left: auto; color: #0a6868; font-weight: 700; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .citation[open] summary { border-bottom: 1px solid var(--rule-soft); }
+  .citation .body { padding: 8px 12px; color: var(--sea-ink); line-height: 1.65; font-size: 12px; }
+  .citation .body + .body { border-top: 1px dashed var(--rule-soft); }
+  .var-row {
+    display: grid; grid-template-columns: 1fr 100px 32px; gap: 6px; align-items: center;
+    padding: 6px 8px;
+    background: var(--sea-mist); border-radius: 6px;
+    font-size: 12px;
+  }
+  .var-row .k { color: var(--sea-deep); font-weight: 600; }
+  .var-row .t { color: var(--sea-muted); text-align: right; font-size: 11px; }
+  /* v7: variable table in left config */
+  .var-table { display: grid; gap: 4px; }
+  .var-table .var-row {
+    grid-template-columns: 1.2fr 80px 1fr 1fr;
+    padding: 5px 8px;
+    background: var(--sea-paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+  }
+  .var-table .var-row.head {
+    background: transparent;
+    border: 0;
+    color: var(--sea-muted);
+    font-size: 11px; font-weight: 700;
+    letter-spacing: .04em;
+    padding: 0 8px 2px;
+  }
+  .var-table .var-row .k { font-size: 12px; }
+  .var-table .var-row .k span { padding: 1px 2px; border-radius: 3px; }
+  .var-table .var-row .k span:focus { background: var(--signal-04); outline: 1px solid var(--sea-signal); }
+  .var-table .var-row .input-sm,
+  .var-table .var-row .select-sm {
+    width: 100%;
+    min-height: 26px;
+    padding: 2px 6px;
+    border: 1px solid #cbd9df;
+    border-radius: 5px;
+    background: var(--sea-paper);
+    color: var(--sea-ink);
+    font: inherit; font-size: 11.5px;
+  }
+  .var-table .var-row .input-sm:focus,
+  .var-table .var-row .select-sm:focus { border-color: var(--sea-signal); outline: 2px solid rgba(0,166,166,.18); }
+  .var-table .var-row .icon-btn { width: 22px; height: 22px; font-size: 12px; }
+
+  /* MIDDLE: main canvas with tabs */
+  .canvas-tabs {
+    display: flex; align-items: center; gap: 2px;
+    padding: 0 12px;
+    background: var(--sea-paper);
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .canvas-tab {
+    position: relative;
+    padding: 14px 14px;
+    font-size: 13px; font-weight: 600;
+    color: var(--sea-muted);
+    cursor: pointer;
+    background: transparent; border: 0;
+  }
+  .canvas-tab.on { color: var(--sea-deep); }
+  .canvas-tab.on::after {
+    content: ""; position: absolute; left: 8px; right: 8px; bottom: 0;
+    height: 2px; background: var(--sea-signal); border-radius: 2px;
+  }
+  .canvas-tab .badge {
+    display: inline-block; margin-left: 6px;
+    padding: 0 6px; height: 16px; line-height: 16px;
+    border-radius: 999px; background: var(--sea-mist); color: var(--sea-muted);
+    font-size: 10.5px; font-weight: 700;
+  }
+  .canvas-body { flex: 1; overflow: auto; min-height: 0; }
+
+  /* PROMPT WORKBENCH (signature element) */
+  .prompt-lab { display: grid; grid-template-columns: 1fr 1fr; gap: 0; height: 100%; }
+  .prompt-pane { padding: 18px 20px; min-width: 0; overflow: auto; border-right: 1px solid var(--rule-soft); }
+  .prompt-pane:last-child { border-right: 0; background: var(--sea-mist); }
+  .prompt-pane h4 { margin: 0 0 4px; font-size: 12px; font-weight: 800; color: var(--sea-deep); letter-spacing: .04em; }
+  .prompt-pane .help { margin-bottom: 10px; }
+  .prompt-snippets {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    padding: 8px 10px;
+    background: var(--sea-mist); border-radius: 7px;
+    margin-bottom: 12px;
+  }
+  .snippet {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    padding: 3px 8px; font-size: 11.5px;
+    color: var(--sea-ink); font-weight: 600; cursor: pointer;
+  }
+  .snippet:hover { border-color: var(--sea-signal); color: #0a6868; }
+  .editor-wrap { position: relative; }
+  .prompt-editor {
+    width: 100%; min-height: 320px;
+    border: 1px solid #cbd9df;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--sea-paper);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px; line-height: 1.7;
+    color: var(--sea-ink);
+    resize: vertical;
+  }
+  .prompt-editor:focus { border-color: var(--sea-signal); outline: 3px solid rgba(0,166,166,.18); outline-offset: 0; }
+  .var-autocomplete {
+    position: absolute; left: 0; right: 0; top: 100%;
+    margin-top: 4px;
+    background: var(--sea-paper);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    box-shadow: var(--shadow-modal);
+    overflow: hidden;
+    z-index: 5;
+  }
+  .var-autocomplete .row { padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+  .var-autocomplete .row:hover { background: var(--signal-04); }
+  .var-autocomplete .row + .row { border-top: 1px solid var(--rule-soft); }
+  .var-autocomplete .key { font-family: 'JetBrains Mono', monospace; color: var(--sea-deep); font-size: 12px; font-weight: 600; }
+  .var-autocomplete .desc { color: var(--sea-muted); font-size: 11.5px; }
+  .rendered {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px; line-height: 1.75;
+    color: var(--sea-ink);
+    background: var(--sea-paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    padding: 14px 16px;
+    white-space: pre-wrap;
+  }
+  .rendered .var { background: var(--signal-12); color: #0a6868; padding: 0 4px; border-radius: 3px; font-weight: 600; }
+  .rendered .kb { background: rgba(233, 201, 139, .25); color: #6b511c; padding: 0 4px; border-radius: 3px; }
+  .rendered .sys { color: var(--sea-muted); }
+
+  /* DEBUG CANVAS (default) */
+  .debug-canvas { display: flex; flex-direction: column; height: 100%; }
+  .debug-toolbar {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--rule-soft);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: var(--sea-mist);
+  }
+  .kb-hits { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .kb-hit {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule-soft);
+    border-left: 3px solid var(--sea-sand);
+    border-radius: 0 6px 6px 0;
+    padding: 4px 8px; font-size: 11.5px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .kb-hit .src { color: var(--sea-muted); }
+  .kb-hit .score { color: #0a6868; font-weight: 700; }
+  .debug-stream { flex: 1; padding: 18px 20px; overflow: auto; min-height: 0; }
+  .msg { display: flex; gap: 10px; margin-bottom: 14px; }
+  .msg.user { flex-direction: row-reverse; }
+  .msg .who {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--sea-signal); color: var(--sea-paper);
+    display: grid; place-items: center; font-size: 11px; font-weight: 700;
+    flex: 0 0 auto;
+  }
+  .msg.user .who { background: var(--sea-sand); color: var(--sea-deep); }
+  .msg .bubble {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 4px 12px 12px 12px;
+    padding: 9px 12px;
+    max-width: min(82%, 640px);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .msg.user .bubble {
+    background: var(--signal-08);
+    border-color: var(--signal-12);
+    border-radius: 12px 4px 12px 12px;
+  }
+  .msg .bubble code { background: var(--sea-mist); padding: 0 4px; border-radius: 3px; }
+  .msg .meta { color: var(--placeholder); font-size: 10.5px; margin-top: 4px; }
+  .prologue-qs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .prologue-q {
+    border: 1px solid var(--rule-soft);
+    background: var(--sea-paper);
+    color: var(--sea-ink);
+    border-radius: 999px;
+    padding: 4px 12px; font-size: 11.5px; cursor: pointer;
+  }
+  .prologue-q:hover { border-color: var(--sea-signal); color: #0a6868; }
+
+  /* VERSION PANEL */
+  .ver-row {
+    display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--rule-soft);
+    cursor: pointer;
+  }
+  .ver-row:hover { background: var(--signal-04); }
+  .ver-row .v { display: flex; align-items: center; gap: 8px; }
+  .ver-row .v b { color: var(--sea-deep); font-family: 'JetBrains Mono', monospace; }
+  .ver-row .v .ts { color: var(--sea-muted); font-size: 11.5px; }
+  .ver-row .v .note { color: var(--sea-ink); font-size: 12.5px; }
+  .ver-row .actions { display: flex; gap: 6px; }
+
+  /* RIGHT: debug sidebar (multi-session) */
+  .dbg-side { display: flex; flex-direction: column; }
+  .session-tabs {
+    display: flex; gap: 2px;
+    padding: 8px 10px 0;
+    border-bottom: 1px solid var(--rule-soft);
+    overflow-x: auto;
+  }
+  .sess-tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    border-radius: 6px 6px 0 0;
+    background: transparent;
+    color: var(--sea-muted);
+    font-size: 12px; font-weight: 600;
+    border: 0; cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .sess-tab.on {
+    background: var(--sea-paper);
+    color: var(--sea-deep);
+    border-bottom-color: var(--sea-signal);
+  }
+  .sess-tab .x { color: var(--placeholder); font-size: 10px; }
+  .sess-tab .x:hover { color: var(--sea-danger); }
+  .sess-stream { flex: 1; overflow: auto; padding: 14px 18px; min-height: 0; background: var(--sea-paper); }
+  .sess-stream .msg .bubble { background: var(--sea-mist); border-color: transparent; }
+  .sess-stream .msg.user .bubble { background: var(--signal-08); border-color: var(--signal-12); }
+  .sess-composer {
+    border-top: 1px solid var(--rule-soft);
+    padding: 10px;
+    background: var(--sea-paper);
+  }
+  .sess-composer textarea {
+    width: 100%;
+    min-height: 60px;
+    border: 1px solid #cbd9df;
+    border-radius: 7px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 12.5px;
+    resize: vertical;
+  }
+  .sess-composer textarea:focus { border-color: var(--sea-signal); outline: 3px solid rgba(0,166,166,.16); outline-offset: 0; }
+  .sess-composer .row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+  .sess-composer .hint { color: var(--sea-muted); font-size: 11px; }
+  .sess-tool {
+    display: flex; gap: 4px;
+    padding: 6px 8px;
+    border-top: 1px solid var(--rule-soft);
+    background: var(--sea-mist);
+  }
+  .sess-tool button {
+    background: transparent; border: 0; color: var(--sea-muted);
+    font: inherit; font-size: 11.5px; font-weight: 600;
+    padding: 4px 8px; border-radius: 5px; cursor: pointer;
+  }
+  .sess-tool button:hover { background: var(--sea-paper); color: var(--sea-ink); }
+  .snapshot-list { padding: 8px 10px; }
+  .snapshot {
+    padding: 8px 10px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 7px;
+    background: var(--sea-paper);
+    margin-bottom: 6px;
+    cursor: pointer;
+  }
+  .snapshot:hover { border-color: var(--sea-signal); }
+  .snapshot .t { font-weight: 700; color: var(--sea-deep); font-size: 12.5px; }
+  .snapshot .d { color: var(--sea-muted); font-size: 11px; }
+
+  /* ====================================================== */
+  /*  PAGE 3: MODEL MANAGEMENT (Dify-style providers)       */
+  /* ====================================================== */
+  .model-page { padding: 28px 32px 60px; }
+  .model-shell {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 14px;
+    min-height: 540px;
+  }
+  .provider-rail {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    box-shadow: var(--shadow-panel);
+    padding: 8px;
+  }
+  .provider-search { padding: 4px 6px 8px; }
+  .provider-search input {
+    width: 100%;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid #cbd9df;
+    border-radius: 7px;
+    background: var(--sea-paper);
+    color: var(--sea-ink);
+    font: inherit; font-size: 12.5px;
+  }
+  .provider-search input:focus { border-color: var(--sea-signal); outline: 3px solid rgba(0,166,166,.18); }
+  .provider-list { display: flex; flex-direction: column; gap: 1px; max-height: 580px; overflow: auto; }
+  .provider {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    color: var(--sea-ink);
+    font-size: 12.5px;
+  }
+  .provider:hover { background: var(--sea-mist); }
+  .provider.on { background: var(--signal-12); color: #0a6868; font-weight: 700; }
+  .provider .logo {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 800;
+    color: var(--sea-paper);
+    flex: 0 0 auto;
+  }
+  .provider .count { margin-left: auto; color: var(--sea-muted); font-size: 11px; font-weight: 600; }
+  .provider.on .count { color: #0a6868; opacity: .7; }
+
+  .model-detail { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+  .model-head {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule);
+    border-radius: 12px 12px 0 0;
+    border-bottom: 0;
+    padding: 16px 20px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .model-head .who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .model-head .logo-lg {
+    width: 40px; height: 40px;
+    border-radius: 9px;
+    display: grid; place-items: center;
+    color: var(--sea-paper);
+    font-weight: 800; font-size: 16px;
+    flex: 0 0 auto;
+  }
+  .model-head h2 { margin: 0; font-family: 'Noto Serif SC', serif; font-size: 20px; color: var(--sea-deep); font-weight: 700; }
+  .model-head .sub { color: var(--sea-muted); font-size: 12px; margin-top: 2px; }
+  .model-table {
+    background: var(--sea-paper);
+    border: 1px solid var(--rule);
+    border-top: 0;
+    border-radius: 0 0 12px 12px;
+    box-shadow: var(--shadow-panel);
+    overflow: hidden;
+  }
+  .model-table .row {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 100px 100px 120px;
+    align-items: center;
+    padding: 12px 20px;
+    border-top: 1px solid var(--rule-soft);
+    font-size: 13px;
+  }
+  .model-table .row.head {
+    background: #f5f8fb;
+    color: var(--sea-muted);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    border-top: 0;
+  }
+  .model-table .row.head .zh { text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+  .model-table .row:hover:not(.head) { background: #f3fbfa; }
+  .model-table .row .name { color: var(--sea-deep); font-weight: 600; }
+  .model-table .row .name small { display: block; color: var(--sea-muted); font-weight: 400; font-size: 11px; margin-top: 2px; }
+  .model-table .row .id { color: var(--sea-muted); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  .model-table .row .ops { display: flex; justify-content: flex-end; gap: 6px; }
+  .model-table .row .ops .btn { padding: 4px 10px; min-height: 28px; font-size: 12px; }
+  .model-table .empty { padding: 40px; text-align: center; color: var(--sea-muted); }
+
+  /* Add-model dialog */
+  .modal-mask {
+    position: fixed; inset: 0; z-index: 200;
+    display: grid; place-items: center;
+    background: color-mix(in srgb, var(--sea-deep) 48%, transparent);
+  }
+  .modal {
+    width: min(100%, 520px);
+    background: var(--sea-paper);
+    border: 1px solid color-mix(in srgb, var(--sea-signal) 20%, var(--rule));
+    border-radius: 12px;
+    box-shadow: var(--shadow-modal);
+    overflow: hidden;
+  }
+  .modal header { padding: 18px 22px 12px; }
+  .modal header h3 { margin: 0; font-family: 'Noto Serif SC', serif; font-size: 18px; color: var(--sea-deep); font-weight: 700; }
+  .modal header p { margin: 4px 0 0; color: var(--sea-muted); font-size: 12.5px; }
+  .modal .body { padding: 0 22px 18px; display: grid; gap: 12px; }
+  .modal footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 22px 18px; border-top: 1px solid var(--rule-soft); background: #fbfdfd; }
+  .modal .field > label::after { content: " *"; color: var(--sea-danger); }
+
+  /* model selector (in agent editor) */
+  .model-pick {
+    display: grid; gap: 6px;
+    padding: 10px 12px;
+    background: var(--sea-paper);
+    border: 1px solid #cbd9df;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .model-pick:hover { border-color: var(--sea-signal); }
+  .model-pick .top { display: flex; align-items: center; gap: 8px; }
+  .model-pick .logo-sm {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    display: grid; place-items: center;
+    color: var(--sea-paper);
+    font-weight: 800; font-size: 11px;
+  }
+  .model-pick .nm { color: var(--sea-deep); font-weight: 600; font-size: 13px; }
+  .model-pick .id { color: var(--sea-muted); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .model-pick .arrow { margin-left: auto; color: var(--sea-muted); font-size: 11px; }
+  .model-pick + .help { margin-top: 6px; }
+
+  /* debug stage tab (对话 / 系统提示词) */
+  .stage-tabs {
+    display: flex; align-items: center;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--rule-soft);
+    background: var(--sea-paper);
+  }
+  .stage-tab {
+    position: relative;
+    padding: 12px 14px;
+    background: transparent; border: 0;
+    font: inherit; font-size: 13px; font-weight: 600;
+    color: var(--sea-muted);
+    cursor: pointer;
+  }
+  .stage-tab.on { color: var(--sea-deep); }
+  .stage-tab.on::after {
+    content: ""; position: absolute; left: 8px; right: 8px; bottom: 0;
+    height: 2px; background: var(--sea-signal); border-radius: 2px;
+  }
+  .stage-tab .meta {
+    margin-left: 6px; color: var(--placeholder); font-weight: 500; font-size: 11.5px;
+  }
+  .stage-tab .pill {
+    margin-left: 6px; display: inline-block; padding: 0 6px; height: 16px; line-height: 16px;
+    border-radius: 999px; background: var(--sea-mist); color: var(--sea-muted);
+    font-size: 10.5px; font-weight: 700;
+  }
+
+  /* system-prompt editor view (Dify-style) */
+  .sys-prompt { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--sea-paper); }
+  .sys-toolbar {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--rule-soft);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: var(--sea-paper);
+  }
+  .sys-toolbar .left { display: flex; align-items: center; gap: 8px; }
+  .sys-editor-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .sys-editor {
+    flex: 1; min-height: 0;
+    width: 100%;
+    border: 0; outline: 0; resize: none;
+    padding: 18px 22px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; line-height: 1.75;
+    color: var(--sea-ink);
+    background: var(--sea-paper);
+  }
+  .sys-footer {
+    padding: 8px 16px;
+    border-top: 1px solid var(--rule-soft);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: #fbfdfd;
+    color: var(--sea-muted);
+    font-size: 11.5px;
+  }
+  .sys-footer .right { display: flex; gap: 6px; align-items: center; }
+
+  /* runtime variables bar in debug stage (above composer) */
+  .var-bar {
+    display: grid; grid-template-columns: 110px 110px 1fr 1fr 1fr; gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--rule-soft);
+    background: var(--sea-mist);
+  }
+  .var-bar .vcell { display: grid; gap: 2px; }
+  .var-bar .vkey { font-size: 10.5px; color: var(--sea-muted); font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+  .var-bar .input, .var-bar .select { min-height: 28px; padding: 3px 8px; font-size: 12px; }
+
+  /* v8: 发布快照 list */
+  .snap-list { display: grid; gap: 6px; }
+  .snap-row {
+    display: grid; grid-template-columns: 12px 1fr auto; gap: 10px; align-items: start;
+    padding: 10px 12px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 7px;
+    background: var(--sea-paper);
+  }
+  .snap-row.current { border-color: var(--sea-signal); background: var(--signal-04); }
+  .snap-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--rule); margin-top: 6px; }
+  .snap-row.current .snap-mark { background: var(--sea-signal); box-shadow: 0 0 0 3px var(--signal-12); }
+  .snap-title { color: var(--sea-deep); font-weight: 700; font-size: 12.5px; }
+  .snap-meta { color: var(--sea-muted); font-size: 11px; margin-top: 2px; }
+  .snap-summary { color: var(--sea-ink); font-size: 12px; margin-top: 6px; line-height: 1.5; }
+  .snap-ops { display: flex; flex-direction: column; gap: 4px; }
+  .snap-ops .btn { padding: 3px 8px; min-height: 24px; font-size: 11.5px; }
+
+  /* v9: stage 内部 2 列布局：左 切对话/系统提示词，右 快照 rail */
+  .stage-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; }
+  .stage-left { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  /* v10: snap-view 是 stage-left 内部的子 view，不是右栏 */
+  .snap-view {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--sea-paper);
+  }
+  .snap-rail-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .snap-rail-list {
+    flex: 1; min-height: 0; overflow: auto;
+    padding: 10px 12px;
+    display: grid; gap: 6px;
+    align-content: start;
+  }
+  .snap-rail-list .snap-row { grid-template-columns: 8px 1fr auto; }
+  .snap-rail-foot {
+    padding: 10px 14px;
+    border-top: 1px solid var(--rule-soft);
+    color: var(--sea-muted);
+    font-size: 11px; line-height: 1.55;
+    background: #fbfdfd;
+  }
+
+  /* v11: 快照预览 modal（左侧 meta + 右侧 system prompt） */
+  .preview-modal {
+    width: min(100%, 1080px);
+    height: min(86vh, 760px);
+    display: flex; flex-direction: column;
+  }
+  .preview-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .preview-body {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: 320px 1fr;
+  }
+  .preview-side {
+    overflow: auto;
+    border-right: 1px solid var(--rule-soft);
+    background: #fbfdfd;
+    padding: 12px 0;
+  }
+  .preview-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .preview-main-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 22px;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .ps-section { padding: 10px 18px; border-bottom: 1px solid var(--rule-soft); }
+  .ps-section:last-child { border-bottom: 0; }
+  .ps-eyebrow {
+    color: var(--sea-signal); font-size: 10px; font-weight: 800; letter-spacing: .14em;
+    text-transform: uppercase; margin-bottom: 8px;
+  }
+  .ps-row {
+    display: grid; grid-template-columns: 90px 1fr; gap: 10px;
+    align-items: center; padding: 4px 0; font-size: 12.5px;
+  }
+  .ps-row > span { color: var(--sea-muted); font-size: 11.5px; }
+  .ps-row > b { color: var(--sea-deep); font-weight: 600; }
+  .ps-prose { color: var(--sea-ink); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+  .ps-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .ps-var { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 3px 0; font-size: 12px; }
+  .ps-var > small { color: var(--sea-muted); font-size: 11px; }
+  .ps-var .mono { color: #0a6868; }
+  .ps-kb { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; padding: 4px 0; font-size: 12.5px; }
+  .ps-kb .ico { width: 22px; height: 22px; border-radius: 5px; background: #e9f5ff; color: #2189ef; display: grid; place-items: center; font-size: 13px; }
+  .ps-kb small { color: var(--sea-muted); font-size: 11px; }
+  .ps-prompt {
+    flex: 1; min-height: 0; overflow: auto;
+    margin: 0;
+    padding: 18px 22px;
+    background: var(--sea-paper);
+    color: var(--sea-ink);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px; line-height: 1.75;
+    white-space: pre-wrap;
+  }
+
+  /* view switch (page 1 vs page 2 vs page 3) */
+  .page-switch { display: none; }
+  body.show-editor .list-page, body.show-models .list-page { display: none; }
+  body.show-list .editor-page, body.show-list .model-page { display: none; }
+  body.show-editor .model-page, body.show-models .editor-page { display: none; }
+  body.show-models .list-page { display: none; }
+  body.show-list .model-page { display: none; }
+  @media (max-width: 1200px) {
+    .editor-body { grid-template-columns: 320px 1fr; }
+    .list-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 960px) {
+    .editor-body { grid-template-columns: 1fr; grid-template-rows: auto auto auto; height: auto; }
+    .editor-page { height: auto; }
+    .metric-row { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .list-grid { grid-template-columns: 1fr; }
+    .prompt-lab { grid-template-columns: 1fr; }
+    .prompt-pane { border-right: 0; border-bottom: 1px solid var(--rule-soft); }
+    .app { grid-template-columns: 48px 1fr; }
+    .nav-item { width: 36px; height: 36px; }
+    .nav-logo { width: 30px; height: 30px; font-size: 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body class="show-list">
+  <div class="app">
+    <!-- ============ LEFT NAV RAIL ============ -->
+    <aside class="nav-rail" aria-label="主导航">
+      <div class="nav-logo" title="StarSeaKnow">星</div>
+      <a class="nav-item" title="概览" href="#"><small>概览</small></a>
+      <a class="nav-item" title="知识库" href="#"><small>知识</small></a>
+      <a class="nav-item active" title="智能体" href="#" aria-current="page"><small>智能体</small></a>
+      <a class="nav-item" title="模型" href="#"><small>模型</small></a>
+      <a class="nav-item" title="工具" href="#"><small>工具</small></a>
+      <a class="nav-item" title="日志" href="#"><small>日志</small></a>
+      <a class="nav-item" title="设置" href="#"><small>设置</small></a>
+      <div class="nav-spacer"></div>
+      <div class="nav-avatar" title="MiniMax717856">M</div>
+    </aside>
+
+    <main>
+      <!-- ============ TOP BAR ============ -->
+      <div class="top-bar">
+        <div class="crumbs">
+          <a href="#">工作区</a>
+          <span class="sep">/</span>
+          <span class="here">智能体</span>
+        </div>
+        <div class="top-right">
+          <div class="seg" role="tablist" aria-label="视图切换">
+            <button class="on" data-view="list" type="button">列表</button>
+            <button data-view="editor" type="button">编辑器</button>
+            <button data-view="models" type="button">模型</button>
+          </div>
+          <button class="btn btn-primary" type="button" onclick="document.body.className='show-list'">+ 新建智能体</button>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!--  PAGE 1 — AGENT LIST                                -->
+      <!-- =================================================== -->
+      <section class="list-page" aria-label="智能体列表">
+        <!-- list panel -->
+        <section class="panel list-panel">
+          <div class="list-toolbar">
+            <div class="tag-search">
+              <div class="ts-tokens">
+                <span class="ts-token" data-tag="客服"><span class="ts-key">tag</span>客服<span class="ts-x">×</span></span>
+                <input class="ts-input" placeholder="输入 tag 或关键词，空格分隔…">
+              </div>
+              <span class="ts-hint">⌘K</span>
+            </div>
+            <div class="filters" role="tablist">
+              <button class="filter on" type="button">全部 <span class="count">14</span></button>
+              <button class="filter" type="button">已发布 <span class="count">6</span></button>
+              <button class="filter" type="button">有暂存 <span class="count">5</span></button>
+              <button class="filter" type="button">未发布 <span class="count">3</span></button>
+            </div>
+          </div>
+          <div class="tag-suggest" aria-label="推荐 tag">
+            <span class="help" style="color:var(--sea-muted)">常用：</span>
+            <button class="ts-chip" type="button"><span class="ts-key">tag</span>客服 <span class="ts-c">4</span></button>
+            <button class="ts-chip" type="button"><span class="ts-key">tag</span>RAG <span class="ts-c">3</span></button>
+            <button class="ts-chip" type="button"><span class="ts-key">tag</span>运营 <span class="ts-c">2</span></button>
+            <button class="ts-chip" type="button"><span class="ts-key">tag</span>研发 <span class="ts-c">3</span></button>
+            <button class="ts-chip" type="button"><span class="ts-key">tag</span>HR <span class="ts-c">1</span></button>
+            <span style="flex:1"></span>
+            <span class="help" style="color:var(--sea-muted)">共 4 个 tag 匹配</span>
+          </div>
+
+          <div class="list-grid">
+            <!-- card 1 -->
+            <article class="agent-card" onclick="document.body.className='show-editor'">
+              <div class="top">
+                <div class="avatar" style="background:#0a6868">客</div>
+                <span class="chip"><span class="pill-dot"></span>已发布</span>
+              </div>
+              <div>
+                <div class="name">客服助理·新员工版</div>
+                <p class="desc">面向新员工，回答常见制度问题，支持按角色（HR/IT/财务）路由到对应知识库。</p>
+              </div>
+              <div class="tags">
+                <span class="chip muted">客服</span>
+                <span class="chip muted">RAG</span>
+              </div>
+              <div class="meta">
+                <div class="left">
+                  <span class="stat">▦ 3 知识库</span>
+                  <span class="stat">◷ 2 小时前调试</span>
+                </div>
+                <div class="right">
+                  <span class="icon-btn" title="更多">⋯</span>
+                </div>
+              </div>
+            </article>
+
+            <!-- card 2 -->
+            <article class="agent-card" onclick="document.body.className='show-editor'">
+              <div class="top">
+                <div class="avatar" style="background:#5b8b8a">运</div>
+                <span class="chip sand">有暂存</span>
+              </div>
+              <div>
+                <div class="name">公众号周报生成</div>
+                <p class="desc">每周拉取团队草稿与数据，生成 800 字公众号长文 + 三条短推。</p>
+              </div>
+              <div class="tags">
+                <span class="chip muted">运营</span>
+                <span class="chip muted">长文</span>
+                <span class="chip muted">未配置模型</span>
+              </div>
+              <div class="meta">
+                <div class="left">
+                  <span class="stat">▦ 1 知识库</span>
+                  <span class="stat">◷ 昨天</span>
+                </div>
+                <div class="right">
+                  <span class="icon-btn" title="更多">⋯</span>
+                </div>
+              </div>
+            </article>
+
+            <!-- card 3 -->
+            <article class="agent-card" onclick="document.body.className='show-editor'">
+              <div class="top">
+                <div class="avatar" style="background:#19304A">研</div>
+                <span class="chip"><span class="pill-dot"></span>已发布</span>
+              </div>
+              <div>
+                <div class="name">代码评审助手</div>
+                <p class="desc">针对 PR 描述与 diff 给出审查意见，引用项目内的代码规范与历史 bug 库。</p>
+              </div>
+              <div class="tags">
+                <span class="chip muted">研发</span>
+                <span class="chip muted">代码</span>
+              </div>
+              <div class="meta">
+                <div class="left">
+                  <span class="stat">▦ 2 知识库</span>
+                  <span class="stat">◷ 12 分钟前</span>
+                </div>
+                <div class="right">
+                  <span class="icon-btn" title="更多">⋯</span>
+                </div>
+              </div>
+            </article>
+
+            <!-- card 4 -->
+            <article class="agent-card" onclick="document.body.className='show-editor'">
+              <div class="top">
+                <div class="avatar" style="background:#7a4a3a">HR</div>
+                <span class="chip">未发布</span>
+              </div>
+              <div>
+                <div class="name">考勤规则解读</div>
+                <p class="desc">解读公司各类考勤规则，覆盖弹性、年假、调休。</p>
+              </div>
+              <div class="tags">
+                <span class="chip muted">HR</span>
+                <span class="chip muted">规则</span>
+                <span class="chip muted">模型未配置</span>
+              </div>
+              <div class="meta">
+                <div class="left">
+                  <span class="stat">▦ 1 知识库</span>
+                  <span class="stat">◷ 3 天前</span>
+                </div>
+                <div class="right">
+                  <span class="icon-btn" title="更多">⋯</span>
+                </div>
+              </div>
+            </article>
+
+            <!-- card 5 -->
+            <article class="agent-card" onclick="document.body.className='show-editor'">
+              <div class="top">
+                <div class="avatar" style="background:#0a6868">客</div>
+                <span class="chip"><span class="pill-dot"></span>已发布</span>
+              </div>
+              <div>
+                <div class="name">客服助理·老员工版</div>
+                <p class="desc">面向老员工，强调追问历史对话、跨部门流程协助。</p>
+              </div>
+              <div class="tags">
+                <span class="chip muted">客服</span>
+                <span class="chip muted">RAG</span>
+              </div>
+              <div class="meta">
+                <div class="left">
+                  <span class="stat">▦ 2 知识库</span>
+                  <span class="stat">◷ 5 小时前</span>
+                </div>
+                <div class="right">
+                  <span class="icon-btn" title="更多">⋯</span>
+                </div>
+              </div>
+            </article>
+
+            <!-- card 6 (new) -->
+            <button class="agent-card new-card" type="button" onclick="document.body.className='show-editor'">
+              <b>＋</b>
+              <span>从零开始创建你的智能体</span>
+              <small class="help">或选择模板：客服 · 运营 · 研发</small>
+            </button>
+          </div>
+        </section>
+      </section>
+
+      <!-- =================================================== -->
+      <!--  PAGE 2 — AGENT EDITOR                              -->
+      <!-- =================================================== -->
+      <section class="editor-page" aria-label="智能体编辑器">
+        <div class="editor-bar">
+          <div class="who">
+            <div class="avatar" style="background:linear-gradient(135deg,#0a6868,#2bb5b5)">客</div>
+            <div>
+              <h2>
+                客服助理·新员工版
+                <span class="chip sand">有暂存</span>
+                <span class="chip muted">已发布 v18</span>
+              </h2>
+              <div class="sub">最近调试：MiniMax717856 · 2 小时前 · 关联 3 个知识库</div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn" type="button">保存草稿</button>
+            <button class="btn btn-sand" type="button" onclick="document.getElementById('publishModal').style.display='grid'">发布</button>
+          </div>
+        </div>
+
+        <div class="editor-body">
+          <!-- ============ LEFT: CONFIG SIDE ============ -->
+          <aside class="pane" aria-label="配置">
+            <div class="cfg-tabs" role="tablist">
+              <button class="cfg-tab on" type="button">基础</button>
+              <button class="cfg-tab" type="button">对话</button>
+              <button class="cfg-tab" type="button">知识库</button>
+              <button class="cfg-tab" type="button">模型</button>
+              <button class="cfg-tab" type="button">检索</button>
+            </div>
+            <div class="pane-body">
+              <section class="cfg-section">
+                <h4>基础资料</h4>
+                <div class="field">
+                  <label>名称</label>
+                  <input class="input" value="客服助理·新员工版">
+                </div>
+                <div class="field" style="margin-top:12px">
+                  <label>一句话描述</label>
+                  <input class="input" value="面向新员工的客服助理，引用制度、福利、IT 流程">
+                </div>
+                <div class="field" style="margin-top:12px">
+                  <label>分类标签</label>
+                  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:2px">
+                    <span class="chip">客服</span>
+                    <span class="chip">RAG</span>
+                    <span class="chip muted" style="cursor:pointer">+ 添加</span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="cfg-section">
+                <h4>对话设定</h4>
+                <div class="field">
+                  <label>开场白</label>
+                  <textarea class="textarea" rows="3">你好，我是新员工客服助理。可以问我关于入职、福利、报销、权限等任何问题。
+- 试用期能休年假吗
+- 电脑申请流程
+- 五险一金按什么基数交</textarea>
+                  <small>Markdown 写法：`- ` 后是快捷问题，一行一个</small>
+                </div>
+                <div class="field" style="margin-top:12px">
+                  <label>系统提示词</label>
+                  <textarea class="textarea" rows="4">你是公司面向新员工的客服助理。回答时优先引用已关联知识库中的制度与流程，回答前简短复述问题，再给出答案。回答结束主动提示「还有别的想了解的吗？」</textarea>
+                </div>
+              </section>
+
+              <section class="cfg-section">
+                <h4>知识库</h4>
+                <div class="help" style="margin-bottom:8px">为该智能体提供可检索的资料</div>
+                <div style="display:grid; gap:6px">
+                  <div class="kb-link">
+                    <span class="ico">▦</span>
+                    <div class="body">
+                      <span class="name">新员工手册·2026</span>
+                      <span class="meta">12 篇文档 · 主</span>
+                    </div>
+                    <span class="x" title="移除">✕</span>
+                  </div>
+                  <div class="kb-link">
+                    <span class="ico">▦</span>
+                    <div class="body">
+                      <span class="name">福利政策合集</span>
+                      <span class="meta">8 篇文档</span>
+                    </div>
+                    <span class="x" title="移除">✕</span>
+                  </div>
+                  <div class="kb-link">
+                    <span class="ico">▦</span>
+                    <div class="body">
+                      <span class="name">IT 申请流程</span>
+                      <span class="meta">5 篇文档</span>
+                    </div>
+                    <span class="x" title="移除">✕</span>
+                  </div>
+                </div>
+                <button class="btn" type="button" style="margin-top:10px">+ 关联知识库</button>
+              </section>
+
+              <section class="cfg-section">
+                <h4>模型</h4>
+                <div class="field">
+                  <label>选择模型预设</label>
+                  <div class="model-pick" onclick="document.querySelector('.provider[data-p=openai]')?.scrollIntoView()">
+                    <div class="top">
+                      <span class="logo-sm" style="background:#10a37f">O</span>
+                      <div style="min-width:0">
+                        <div class="nm">OpenAI · gpt-4o-mini</div>
+                        <div class="id">base: api.openai.com/v1</div>
+                      </div>
+                      <span class="arrow">▾</span>
+                    </div>
+                  </div>
+                  <small class="help">在「模型」页可新增/管理预设 · 当前 3 个</small>
+                </div>
+                <details style="margin-top:12px">
+                  <summary style="cursor:pointer; color:var(--sea-muted); font-size:12px; padding:4px 0">高级参数 ▾</summary>
+                  <div class="row r-2" style="margin-top:8px">
+                    <div class="field"><label>Temperature</label><input class="input mono" value="0.4"></div>
+                    <div class="field"><label>Max Tokens</label><input class="input mono" value="2048"></div>
+                  </div>
+                  <div class="row r-2" style="margin-top:10px">
+                    <div class="field"><label>Top P</label><input class="input mono" value="1.0"></div>
+                    <div class="field"><label>超时（秒）</label><input class="input mono" value="60"></div>
+                  </div>
+                </details>
+              </section>
+
+              <section class="cfg-section">
+                <h4>检索参数</h4>
+                <div class="toggle-row">
+                  <div><strong style="font-size:12.5px">混合检索</strong><br><small class="help">向量 + 关键词</small></div>
+                  <div class="switch on" role="switch" aria-checked="true"></div>
+                </div>
+                <div class="row r-2" style="margin-top:10px">
+                  <div class="field"><label>Top-K</label><input class="input mono" value="5"></div>
+                  <div class="field"><label>相似度阈值</label><input class="input mono" value="0.72"></div>
+                </div>
+              </section>
+            </div>
+          </aside>
+
+          <!-- (中间主工作区已合并到右侧调试区，避免重复) -->
+
+          <!-- ============ RIGHT: DEBUG STAGE (multi-session) ============ -->
+          <section class="pane dbg-side" aria-label="调试">
+            <div class="pane-head">
+              <div class="ttl">
+                <span class="eyebrow zh">DEBUG</span>
+                <h3 style="margin-left:6px">调试预览</h3>
+                <span class="meta" style="margin-left:8px">gpt-4o-mini · 0.4</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px">
+                <button class="btn-icon btn" title="清空当前会话" type="button">⌫</button>
+              </div>
+            </div>
+
+            <div class="stage-tabs" role="tablist">
+              <button class="stage-tab on" data-stage="chat" type="button">对话</button>
+              <button class="stage-tab" data-stage="prompt" type="button">系统提示词</button>
+              <button class="stage-tab" data-stage="snap" type="button">发布快照 <span class="pill">14</span></button>
+            </div>
+
+            <div class="stage-body">
+              <div class="stage-left" id="stageLeft">
+                <!-- 对话 view -->
+                <div class="session-tabs" id="sessionTabs" role="tablist">
+                  <button class="sess-tab on" type="button">试用期年假 <span class="x">×</span></button>
+                  <button class="sess-tab" type="button">六险一金 <span class="x">×</span></button>
+                  <button class="sess-tab" type="button">IT 申请 <span class="x">×</span></button>
+                  <button class="sess-tab" type="button" style="color:var(--sea-muted)">+ 新会话</button>
+                </div>
+
+                <div class="sess-stream" id="stage-chat" style="display:flex; flex-direction:column">
+                  <div class="msg">
+                    <div class="who">客</div>
+                    <div>
+                      <div class="bubble">
+                        你好，我是新员工客服助理。可以问我关于入职、福利、报销、权限等任何问题。
+                        <div class="prologue-qs">
+                          <button class="prologue-q">试用期能休年假吗</button>
+                          <button class="prologue-q">电脑申请流程</button>
+                          <button class="prologue-q">五险一金按什么基数交</button>
+                        </div>
+                      </div>
+                      <div class="meta">开场白 · 由 agent 注入</div>
+                    </div>
+                  </div>
+
+                  <div class="msg user">
+                    <div class="who">你</div>
+                    <div>
+                      <div class="bubble">试用期能休年假吗？我下周就要入职了。</div>
+                      <div class="meta">15:42</div>
+                    </div>
+                  </div>
+
+                  <div class="msg">
+                    <div class="who">客</div>
+                    <div>
+                      <div class="bubble">
+                        按公司《年假与调休管理办法 v3.2》第 4 条：<b>试用期内不可休年假</b>，但<b>可使用调休</b>，前提是你已存在加班记录。
+                        <br><br>你下周入职 → 建议入职后：
+                        <ol style="margin:6px 0 0; padding-left:18px">
+                          <li>先在 OA 完成入职信息登记</li>
+                          <li>查看是否已有历史加班记录可调休</li>
+                          <li>若没有，6 个月内产生的加班可累计</li>
+                        </ol>
+                        <br>需要我帮你查一下你的入职状态吗？或者帮你打开 OA 入份登记？
+                      </div>
+                      <details class="citation" style="margin-top:8px">
+                        <summary>
+                          <span class="tag">本轮召回 · 3 段</span>
+                          <span class="src">新员工手册·2026</span>
+                          <span class="score">最高 0.91</span>
+                        </summary>
+                        <div class="body"><b>[新员工手册·2026 · §4]</b>　试用期内不可休年假。已与公司签订书面劳动合同的试用期员工，<b>可使用调休</b>，但需提供加班记录。</div>
+                        <div class="body"><b>[福利政策合集 · §2.3]</b>　调休定义：员工加班后可申请同等时长调休，跨年度累计不超过 6 个月。</div>
+                        <div class="body"><b>[IT 申请流程 · §1]</b>　入职后 IT 资源申领路径：OA → 我的申请 → IT 服务 → 设备申领。</div>
+                      </details>
+                      <div class="meta">1.8s · 923 tok</div>
+                    </div>
+                  </div>
+
+                  <div class="msg user">
+                    <div class="who">你</div>
+                    <div>
+                      <div class="bubble">六险一金是怎么交的？</div>
+                      <div class="meta">15:43</div>
+                    </div>
+                  </div>
+
+                  <div class="msg">
+                    <div class="who">客</div>
+                    <div>
+                      <div class="bubble">
+                        按上一轮问题提到的《年假与调休管理办法》… <span style="background:var(--signal-12); color:#0a6868; padding:0 4px; border-radius:3px">▌</span>
+                      </div>
+                      <div class="meta">流式中…</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="sess-composer">
+                  <textarea placeholder="输入消息，测试此智能体…（Shift+Enter 换行，Enter 发送）"></textarea>
+                  <div class="row">
+                    <span class="hint">将引用 <b>3 个知识库</b> · 知识库命中阈值 0.72</span>
+                    <button class="btn btn-primary" type="button">发送 ↵</button>
+                  </div>
+                </div>
+
+                <!-- 系统提示词 view -->
+                <div class="sys-prompt" id="stage-prompt" style="display:none">
+                  <div class="sys-toolbar">
+                    <div class="left">
+                      <span class="eyebrow zh">SYSTEM PROMPT</span>
+                    </div>
+                    <div style="display:flex; gap:6px; align-items:center">
+                      <button class="btn btn-ghost" type="button" style="font-size:12px">还原到上次保存</button>
+                    </div>
+                  </div>
+                  <div class="sys-editor-wrap">
+                    <textarea id="sysPromptEditor" class="sys-editor" spellcheck="false" placeholder="在这里写你的系统提示词…">你是公司面向新员工的客服助理。
+
+## 你的职责
+- 回答 {{user.dept}} 部门新员工关于公司制度、福利、IT 流程的问题
+- 严格基于已检索到的知识库片段作答，禁止编造
+- 回答结构：先复述问题 → 引用条款 → 给出建议 → 主动追问
+
+## 引用规则
+- 引用条款时用「按《XX》第 N 条」格式
+- 引用知识库片段时附 [来源] 标识
+
+## 安全兜底
+- 涉及未检索到的内容时，回复「这个暂时没找到相关记录」并建议人工客服
+- 永远不输出机密/薪资/合同金额
+
+## 输出要求
+- 中文，简洁、有礼貌
+- 段落不超过 3 行
+- 回答结束主动提示「还有别的想了解的吗？」</textarea>
+                  </div>
+                  <div class="sys-footer">
+                    <span>所有修改会自动保存到草稿</span>
+                    <div class="right">
+                      <span>字符 <b id="charCount" class="mono">540</b> · 行 <b id="lineCount" class="mono">28</b></span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 快照 view（与系统提示词 tab 并列） -->
+                <div class="snap-view" id="stage-snap" style="display:none">
+                  <div class="snap-rail-head" style="border-bottom:0; padding: 14px 18px 6px">
+                    <div>
+                      <span class="eyebrow zh">SNAPSHOTS · 快照</span>
+                      <div class="help" style="margin-top:2px">每次「发布」留一份，可回滚</div>
+                    </div>
+                    <button class="btn btn-sand" type="button" style="font-size:12px" onclick="document.getElementById('publishModal').style.display='grid'">+ 发布新版本</button>
+                  </div>
+                  <div class="snap-rail-list" style="padding: 6px 18px 12px">
+                    <div class="snap-row current" data-version="v18" data-author="MiniMax717856" data-time="2 小时前" data-summary="加入 user.role 分流 · 引用规则改为「按《XX》第 N 条」" data-current="1">
+                      <div class="snap-mark"></div>
+                      <div class="snap-body">
+                        <div class="snap-title">v18 · 当前已发布</div>
+                        <div class="snap-meta">2 小时前 · MiniMax717856</div>
+                        <div class="snap-summary">加入 user.role 分流 · 引用规则改为「按《XX》第 N 条」</div>
+                      </div>
+                      <div class="snap-ops">
+                        <button class="btn btn-ghost" type="button" onclick="openPreview('v18', {current:true})">预览</button>
+                      </div>
+                    </div>
+                    <div class="snap-row" data-version="v17" data-author="MiniMax717856" data-time="昨天 18:24" data-summary="开场白改为分行 + 快捷问题">
+                      <div class="snap-mark"></div>
+                      <div class="snap-body">
+                        <div class="snap-title">v17</div>
+                        <div class="snap-meta">昨天 18:24</div>
+                        <div class="snap-summary">开场白改为分行 + 快捷问题</div>
+                      </div>
+                      <div class="snap-ops">
+                        <button class="btn btn-ghost" type="button" onclick="openPreview('v17', {})">预览</button>
+                        <button class="btn" type="button">回滚</button>
+                      </div>
+                    </div>
+                    <div class="snap-row" data-version="v16" data-author="MiniMax717856" data-time="3 天前" data-summary="关联「IT 申请流程」知识库">
+                      <div class="snap-mark"></div>
+                      <div class="snap-body">
+                        <div class="snap-title">v16</div>
+                        <div class="snap-meta">3 天前</div>
+                        <div class="snap-summary">关联「IT 申请流程」知识库</div>
+                      </div>
+                      <div class="snap-ops">
+                        <button class="btn btn-ghost" type="button" onclick="openPreview('v16', {})">预览</button>
+                        <button class="btn" type="button">回滚</button>
+                      </div>
+                    </div>
+                    <div class="snap-row" data-version="v15" data-author="MiniMax717856" data-time="5 天前" data-summary="切换到 gpt-4o-mini · 0.4">
+                      <div class="snap-mark"></div>
+                      <div class="snap-body">
+                        <div class="snap-title">v15</div>
+                        <div class="snap-meta">5 天前</div>
+                        <div class="snap-summary">切换到 gpt-4o-mini · 0.4</div>
+                      </div>
+                      <div class="snap-ops">
+                        <button class="btn btn-ghost" type="button" onclick="openPreview('v15', {})">预览</button>
+                        <button class="btn" type="button">回滚</button>
+                      </div>
+                    </div>
+                    <div class="snap-row" data-version="v14" data-author="MiniMax717856" data-time="9 天前" data-summary="初次发布">
+                      <div class="snap-mark"></div>
+                      <div class="snap-body">
+                        <div class="snap-title">v14</div>
+                        <div class="snap-meta">9 天前</div>
+                        <div class="snap-summary">初次发布</div>
+                      </div>
+                      <div class="snap-ops">
+                        <button class="btn btn-ghost" type="button" onclick="openPreview('v14', {})">预览</button>
+                        <button class="btn" type="button">回滚</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="snap-rail-foot">
+                    每份快照记录：模型预设 ID、系统提示词、变量定义、知识库 ID 列表、检索参数。
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- =================================================== -->
+      <!--  PAGE 3 — MODEL MANAGEMENT                          -->
+      <!-- =================================================== -->
+      <section class="model-page" aria-label="模型管理">
+        <header class="page-head">
+          <div class="left">
+            <span class="eyebrow zh">MODELS · 模型</span>
+            <h1 class="page-title">集中管理模型预设</h1>
+            <p class="lede">按厂商维护一次 API Key 与 Base URL，智能体里直接选用，省去重复配置。</p>
+          </div>
+          <div class="right">
+            <button class="btn" type="button">系统默认</button>
+            <button class="btn btn-primary" type="button" onclick="document.getElementById('addModelModal').style.display='grid'">+ 添加模型</button>
+          </div>
+        </header>
+
+        <div class="model-shell">
+          <!-- providers rail -->
+          <aside class="provider-rail" aria-label="厂商">
+            <div class="provider-search">
+              <input placeholder="搜索厂商">
+            </div>
+            <nav class="provider-list">
+              <button class="provider on" data-p="all" type="button"><span class="logo" style="background:#475569">ALL</span>全部<span class="count">9</span></button>
+              <button class="provider" data-p="openai" type="button"><span class="logo" style="background:#10a37f">O</span>OpenAI<span class="count">3</span></button>
+              <button class="provider" data-p="anthropic" type="button"><span class="logo" style="background:#cd6133">A</span>Anthropic<span class="count">2</span></button>
+              <button class="provider" data-p="deepseek" type="button"><span class="logo" style="background:#1d4ed8">D</span>DeepSeek<span class="count">1</span></button>
+              <button class="provider" data-p="qwen" type="button"><span class="logo" style="background:#ff6a00">Q</span>通义千问<span class="count">1</span></button>
+              <button class="provider" data-p="zhipu" type="button"><span class="logo" style="background:#2962ff">Z</span>智谱 AI<span class="count">1</span></button>
+              <button class="provider" data-p="ollama" type="button"><span class="logo" style="background:#222">L</span>Ollama<span class="count">1</span></button>
+              <button class="provider" data-p="custom" type="button"><span class="logo" style="background:#64748b">＋</span>自定义<span class="count">0</span></button>
+            </nav>
+          </aside>
+
+          <!-- provider detail -->
+          <div class="model-detail">
+            <div class="model-head">
+              <div class="who">
+                <div class="logo-lg" style="background:#10a37f">O</div>
+                <div>
+                  <h2>OpenAI</h2>
+                  <div class="sub">Base URL: <code class="mono">https://api.openai.com/v1</code> · 3 个模型</div>
+                </div>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center">
+                <span class="chip"><span class="pill-dot"></span>已连接</span>
+                <button class="btn" type="button" onclick="document.getElementById('addModelModal').style.display='grid'">+ 添加模型</button>
+                <button class="btn btn-ghost" type="button" title="厂商设置">⚙</button>
+              </div>
+            </div>
+            <div class="model-table">
+              <div class="row head">
+                <div class="zh">名称</div>
+                <div class="zh">模型 ID</div>
+                <div class="zh">上下文</div>
+                <div class="zh">状态</div>
+                <div class="zh" style="text-align:right">操作</div>
+              </div>
+              <div class="row">
+                <div class="name">主力对话
+                  <small>通用对话 · 速度快</small>
+                </div>
+                <div class="id">gpt-4o-mini</div>
+                <div>128K</div>
+                <div><span class="chip"><span class="pill-dot"></span>已启用</span></div>
+                <div class="ops">
+                  <button class="btn btn-ghost" type="button">测试</button>
+                  <button class="btn btn-ghost" type="button">编辑</button>
+                  <button class="btn btn-ghost" type="button" style="color:var(--sea-danger)">删除</button>
+                </div>
+              </div>
+              <div class="row">
+                <div class="name">复杂推理
+                  <small>代码 / 推理 / 工具调用</small>
+                </div>
+                <div class="id">gpt-4o</div>
+                <div>128K</div>
+                <div><span class="chip"><span class="pill-dot"></span>已启用</span></div>
+                <div class="ops">
+                  <button class="btn btn-ghost" type="button">测试</button>
+                  <button class="btn btn-ghost" type="button">编辑</button>
+                  <button class="btn btn-ghost" type="button" style="color:var(--sea-danger)">删除</button>
+                </div>
+              </div>
+              <div class="row">
+                <div class="name">长文总结
+                  <small>长文档摘要</small>
+                </div>
+                <div class="id">gpt-4o</div>
+                <div>128K</div>
+                <div><span class="chip muted">未启用</span></div>
+                <div class="ops">
+                  <button class="btn btn-ghost" type="button">测试</button>
+                  <button class="btn btn-ghost" type="button">编辑</button>
+                  <button class="btn btn-ghost" type="button" style="color:var(--sea-danger)">删除</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =================================================== -->
+      <!--  ADD MODEL MODAL                                    -->
+      <!-- =================================================== -->
+      <div class="modal-mask" id="addModelModal" style="display:none" onclick="if(event.target===this) this.style.display='none'">
+        <div class="modal" role="dialog" aria-label="添加模型">
+          <header>
+            <h3>添加模型预设</h3>
+            <p>该预设会出现在所有智能体的模型选择列表中。</p>
+          </header>
+          <div class="body">
+            <div class="field">
+              <label>厂商</label>
+              <select class="select">
+                <option>OpenAI</option>
+                <option>Anthropic</option>
+                <option>DeepSeek</option>
+                <option>通义千问</option>
+                <option>智谱 AI</option>
+                <option>Ollama</option>
+                <option>自定义</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>显示名</label>
+              <input class="input" placeholder="如：主力对话 / 长文总结 / 客服专用">
+            </div>
+            <div class="field">
+              <label>模型 ID</label>
+              <div style="display:flex; gap:6px">
+                <input class="input mono" placeholder="如：gpt-4o-mini" style="flex:1">
+                <select class="select" style="width:140px">
+                  <option>gpt-4o-mini</option>
+                  <option>gpt-4o</option>
+                  <option>o1-mini</option>
+                  <option>o1</option>
+                </select>
+              </div>
+              <small class="help">下拉候选来自厂商；不在列表里可手动输入</small>
+            </div>
+            <div class="field">
+              <label>Base URL</label>
+              <input class="input mono" value="https://api.openai.com/v1">
+            </div>
+            <div class="field">
+              <label>API Key</label>
+              <input class="input mono" type="password" placeholder="sk-...">
+            </div>
+          </div>
+          <footer>
+            <button class="btn" type="button" onclick="document.getElementById('addModelModal').style.display='none'">取消</button>
+            <button class="btn btn-ghost" type="button">测试连接</button>
+            <button class="btn btn-primary" type="button" onclick="document.getElementById('addModelModal').style.display='none'">保存预设</button>
+          </footer>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!--  PUBLISH MODAL (系统提示词 tab 用)                  -->
+      <!-- =================================================== -->
+      <div class="modal-mask" id="publishModal" style="display:none" onclick="if(event.target===this) this.style.display='none'">
+        <div class="modal" style="width: min(100%, 560px)" role="dialog" aria-label="发布新版本">
+          <header>
+            <h3>发布新版本</h3>
+            <p>当前 agent 的所有配置（系统提示词、变量、知识库、模型、检索参数）会被打成一个不可变快照，发布到线上。</p>
+          </header>
+          <div class="body">
+            <div class="field">
+              <label>版本号</label>
+              <div style="display:flex; gap:6px; align-items:center">
+                <span class="mono" style="color:var(--sea-muted); font-size:13px">v</span>
+                <input class="input mono" id="publishVersion" value="19" style="width:90px">
+                <span class="help" style="flex:1">下一个版本号，默认在上一个已发布版本 + 1</span>
+              </div>
+            </div>
+            <div class="field">
+              <label>发布简介</label>
+              <textarea class="textarea" id="publishNote" rows="3" placeholder="一句话说明这次发布改了什么 / 解决了什么…"></textarea>
+            </div>
+            <div style="border-top:1px solid var(--rule-soft); padding-top:10px">
+              <div class="eyebrow zh" style="margin-bottom:6px">本次将打包</div>
+              <div class="help mono" style="line-height:1.8">
+                <span class="chip muted" style="font-family:inherit">系统提示词</span>
+                <span class="chip muted" style="font-family:inherit">5 个变量</span>
+                <span class="chip muted" style="font-family:inherit">3 个知识库</span>
+                <span class="chip muted" style="font-family:inherit">OpenAI · gpt-4o-mini</span>
+                <span class="chip muted" style="font-family:inherit">混合检索 top_k=5</span>
+              </div>
+            </div>
+          </div>
+          <footer>
+            <button class="btn" type="button" onclick="document.getElementById('publishModal').style.display='none'">取消</button>
+            <button class="btn btn-sand" type="button" id="publishConfirm">发布 v19</button>
+          </footer>
+        </div>
+      </div>
+
+      <!-- =================================================== -->
+      <!--  PREVIEW SNAPSHOT MODAL                             -->
+      <!-- =================================================== -->
+      <div class="modal-mask" id="previewModal" style="display:none" onclick="if(event.target===this) this.style.display='none'">
+        <div class="modal preview-modal" role="dialog" aria-label="预览快照">
+          <header class="preview-head">
+            <div>
+              <div style="display:flex; align-items:center; gap:10px">
+                <span class="eyebrow zh">SNAPSHOT PREVIEW</span>
+                <span class="chip" id="previewVerChip">v18</span>
+                <span class="chip" id="previewStatusChip"><span class="pill-dot"></span>当前已发布</span>
+              </div>
+              <h3 id="previewTitle" style="margin:6px 0 0">客服助理·新员工版</h3>
+              <div class="help mono" id="previewMeta" style="margin-top:2px">v18 · 2 小时前 · MiniMax717856</div>
+            </div>
+            <div style="display:flex; gap:6px; align-items:center">
+              <button class="btn btn-ghost" type="button" onclick="document.getElementById('previewModal').style.display='none'">关闭</button>
+              <button class="btn btn-sand" type="button" id="previewRollback">回滚到此版本</button>
+            </div>
+          </header>
+          <div class="preview-body">
+            <aside class="preview-side">
+              <div class="ps-section">
+                <div class="ps-eyebrow">基础资料</div>
+                <div class="ps-row"><span>名称</span><b>客服助理·新员工版</b></div>
+                <div class="ps-row"><span>描述</span><b style="font-weight:500; color:var(--sea-ink)">面向新员工的客服助理</b></div>
+                <div class="ps-row"><span>分类标签</span>
+                  <div class="ps-tags"><span class="chip muted">客服</span><span class="chip muted">RAG</span></div>
+                </div>
+              </div>
+              <div class="ps-section">
+                <div class="ps-eyebrow">开场白</div>
+                <div class="ps-prose">你好，我是新员工客服助理。可以问我关于入职、福利、报销、权限等任何问题。</div>
+              </div>
+              <div class="ps-section">
+                <div class="ps-eyebrow">变量（4）</div>
+                <div class="ps-var"><span class="mono">{{user.name}}</span><small>string</small></div>
+                <div class="ps-var"><span class="mono">{{user.role}}</span><small>enum</small></div>
+                <div class="ps-var"><span class="mono">{{user.dept}}</span><small>string</small></div>
+                <div class="ps-var"><span class="mono">{{user.hire_date}}</span><small>string</small></div>
+              </div>
+              <div class="ps-section">
+                <div class="ps-eyebrow">知识库（3）</div>
+                <div class="ps-kb"><span class="ico">▦</span><b>新员工手册·2026</b><small>主</small></div>
+                <div class="ps-kb"><span class="ico">▦</span><b>福利政策合集</b></div>
+                <div class="ps-kb"><span class="ico">▦</span><b>IT 申请流程</b></div>
+              </div>
+              <div class="ps-section">
+                <div class="ps-eyebrow">模型</div>
+                <div class="ps-row"><span>预设</span><b>OpenAI · gpt-4o-mini</b></div>
+                <div class="ps-row"><span>Base URL</span><b class="mono" style="font-size:11.5px">api.openai.com/v1</b></div>
+                <div class="ps-row"><span>Temperature</span><b class="mono">0.4</b></div>
+                <div class="ps-row"><span>Max Tokens</span><b class="mono">2048</b></div>
+              </div>
+              <div class="ps-section">
+                <div class="ps-eyebrow">检索参数</div>
+                <div class="ps-row"><span>模式</span><b>混合检索</b></div>
+                <div class="ps-row"><span>Top-K</span><b class="mono">5</b></div>
+                <div class="ps-row"><span>相似度阈值</span><b class="mono">0.72</b></div>
+              </div>
+            </aside>
+            <main class="preview-main">
+              <div class="preview-main-head">
+                <div>
+                  <div class="ps-eyebrow">SYSTEM PROMPT</div>
+                  <div class="help mono" id="previewPromptMeta">字符 540 · 行 28</div>
+                </div>
+                <span class="chip muted" id="previewSummary">加入 user.role 分流 · 引用规则改为「按《XX》第 N 条」</span>
+              </div>
+              <pre class="ps-prompt" id="previewPromptBody">你是公司面向新员工的客服助理。
+
+## 你的职责
+- 回答 {{user.dept}} 部门新员工关于公司制度、福利、IT 流程的问题
+- 严格基于已检索到的知识库片段作答，禁止编造
+- 回答结构：先复述问题 → 引用条款 → 给出建议 → 主动追问
+
+## 引用规则
+- 引用条款时用「按《XX》第 N 条」格式
+- 引用知识库片段时附 [来源] 标识
+
+## 安全兜底
+- 涉及未检索到的内容时，回复「这个暂时没找到相关记录」并建议人工客服
+- 永远不输出机密/薪资/合同金额
+
+## 输出要求
+- 中文，简洁、有礼貌
+- 段落不超过 3 行
+- 回答结束主动提示「还有别的想了解的吗？」</pre>
+            </main>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+  // view switcher
+  document.querySelectorAll('.seg [data-view]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = btn.dataset.view;
+      document.body.className = v === 'list' ? 'show-list' : v === 'editor' ? 'show-editor' : 'show-models';
+      document.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+    });
+  });
+  // provider rail select
+  document.querySelectorAll('.provider').forEach(p => {
+    p.addEventListener('click', () => {
+      document.querySelectorAll('.provider').forEach(x => x.classList.remove('on'));
+      p.classList.add('on');
+    });
+  });
+  // (canvas tabs removed — middle pane merged into right debug stage)
+  // session tab switch
+  document.querySelectorAll('.sess-tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.sess-tab').forEach(x => x.classList.remove('on'));
+      t.classList.add('on');
+    });
+  });
+  // publish flow
+  document.getElementById('publishConfirm')?.addEventListener('click', () => {
+    const v = document.getElementById('publishVersion')?.value?.trim();
+    const note = document.getElementById('publishNote')?.value?.trim();
+    if (!v) { alert('请输入版本号'); return; }
+    if (!note) { alert('请填写发布简介'); return; }
+    // 更新快照列表顶部插入新行
+    const list = document.querySelector('#stage-snap .snap-rail-list');
+    if (list) {
+      const old = list.querySelector('.snap-row.current');
+      if (old) {
+        old.classList.remove('current');
+        old.querySelector('.snap-title').textContent = old.querySelector('.snap-title').textContent.replace(/ · 当前已发布/, '');
+        // 历史版本已经有 ops 按钮，不重复加
+        if (!old.querySelector('.snap-ops')) {
+          const ops = document.createElement('div');
+          ops.className = 'snap-ops';
+          ops.innerHTML = '<button class="btn btn-ghost" type="button">查看</button><button class="btn" type="button">回滚</button>';
+          old.appendChild(ops);
+        }
+      }
+      const row = document.createElement('div');
+      row.className = 'snap-row current';
+      row.innerHTML = `
+        <div class="snap-mark"></div>
+        <div class="snap-body">
+          <div class="snap-title">v${escapeHtml(v)} · 当前已发布</div>
+          <div class="snap-meta">刚刚 · MiniMax717856</div>
+          <div class="snap-summary">${escapeHtml(note)}</div>
+        </div>
+        <div class="snap-ops">
+          <button class="btn btn-ghost" type="button">查看</button>
+        </div>`;
+      list.insertBefore(row, list.firstChild);
+    }
+    // 关闭弹窗 + 编辑器标题 chip 切到"已发布"
+    document.getElementById('publishModal').style.display = 'none';
+    const titleChips = document.querySelector('.editor-bar .who h2');
+    if (titleChips) {
+      titleChips.innerHTML = '客服助理·新员工版 <span class="chip"><span class="pill-dot"></span>已发布</span> <span class="chip muted">v' + escapeHtml(v) + '</span>';
+    }
+  });
+  function escapeHtml(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+
+  // 快照预览：根据 data-* 填充 modal
+  window.openPreview = function(ver, opts) {
+    const row = document.querySelector(`#stage-snap .snap-row[data-version="${ver}"]`);
+    if (!row) return;
+    const summary = row.dataset.summary || '';
+    const time = row.dataset.time || '';
+    const author = row.dataset.author || '';
+    const isCurrent = opts && opts.current;
+    document.getElementById('previewVerChip').textContent = ver;
+    document.getElementById('previewStatusChip').innerHTML = isCurrent
+      ? '<span class="pill-dot"></span>当前已发布'
+      : '<span style="color:var(--sea-muted)">历史版本</span>';
+    document.getElementById('previewTitle').textContent = '客服助理·新员工版';
+    document.getElementById('previewMeta').textContent = `${ver} · ${time} · ${author}`;
+    document.getElementById('previewSummary').textContent = summary;
+    document.getElementById('previewPromptMeta').textContent = isCurrent ? '字符 540 · 行 28' : '字符 ' + (480 + Math.floor(Math.random()*80)) + ' · 行 ' + (24 + Math.floor(Math.random()*8));
+    const rb = document.getElementById('previewRollback');
+    if (isCurrent) {
+      rb.style.display = 'none';
+    } else {
+      rb.style.display = '';
+      rb.textContent = '回滚到 ' + ver;
+      rb.onclick = () => {
+        if (confirm('回滚到 ' + ver + ' 将覆盖当前已发布版本，且会基于它创建一条新的已发布记录。继续？')) {
+          // 简化：把当前已发布降级为历史 + 提升目标版本为当前
+          const list = document.querySelector('#stage-snap .snap-rail-list');
+          const cur = list.querySelector('.snap-row.current');
+          if (cur) {
+            cur.classList.remove('current');
+            cur.querySelector('.snap-title').textContent = cur.querySelector('.snap-title').textContent.replace(/ · 当前已发布/, '');
+            if (!cur.querySelector('.snap-ops')) {
+              const ops = document.createElement('div');
+              ops.className = 'snap-ops';
+              ops.innerHTML = '<button class="btn btn-ghost" type="button" onclick="openPreview(\''+cur.dataset.version+'\', {})">预览</button><button class="btn" type="button">回滚</button>';
+              cur.appendChild(ops);
+            }
+          }
+          row.classList.add('current');
+          row.querySelector('.snap-title').textContent = ver + ' · 当前已发布（回滚自 ' + cur?.dataset.version + '）';
+          row.querySelector('.snap-ops').innerHTML = '<button class="btn btn-ghost" type="button" onclick="openPreview(\''+ver+'\', {current:true})">预览</button>';
+          document.getElementById('previewModal').style.display = 'none';
+        }
+      };
+    }
+    document.getElementById('previewModal').style.display = 'grid';
+  };
+  // debug stage tab switch (对话 / 系统提示词 / 发布快照)
+  document.querySelectorAll('.stage-tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.stage-tab').forEach(x => x.classList.remove('on'));
+      t.classList.add('on');
+      const s = t.dataset.stage;
+      const chat = document.getElementById('stage-chat');
+      const prompt = document.getElementById('stage-prompt');
+      const snap = document.getElementById('stage-snap');
+      const sessTabs = document.getElementById('sessionTabs');
+      const composer = document.querySelector('.sess-composer');
+      if (s === 'prompt') {
+        if (chat) chat.style.display = 'none';
+        if (prompt) prompt.style.display = 'flex';
+        if (snap) snap.style.display = 'none';
+        if (sessTabs) sessTabs.style.display = 'none';
+        if (composer) composer.style.display = 'none';
+      } else if (s === 'snap') {
+        if (chat) chat.style.display = 'none';
+        if (prompt) prompt.style.display = 'none';
+        if (snap) snap.style.display = 'flex';
+        if (sessTabs) sessTabs.style.display = 'none';
+        if (composer) composer.style.display = 'none';
+      } else {
+        if (chat) chat.style.display = 'flex';
+        if (prompt) prompt.style.display = 'none';
+        if (snap) snap.style.display = 'none';
+        if (sessTabs) sessTabs.style.display = 'flex';
+        if (composer) composer.style.display = 'block';
+      }
+    });
+  });
+  // 系统提示词：字符/行数实时统计
+  const sysEd = document.getElementById('sysPromptEditor');
+  const charEl = document.getElementById('charCount');
+  const lineEl = document.getElementById('lineCount');
+  function updateSysMeta() {
+    if (!sysEd) return;
+    const v = sysEd.value || '';
+    charEl.textContent = v.length;
+    lineEl.textContent = v.split('\n').length;
+  }
+  if (sysEd) sysEd.addEventListener('input', updateSysMeta);
+  updateSysMeta();
+
+  // 模拟运行已删除
+  function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+
+  // 块插入已删除（未来不再扩展变量/知识库片段插入）
+  // config tab switch
+  document.querySelectorAll('.cfg-tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.cfg-tab').forEach(x => x.classList.remove('on'));
+      t.classList.add('on');
+    });
+  });
+  // filter pills
+  document.querySelectorAll('.filter').forEach(f => {
+    f.addEventListener('click', () => {
+      document.querySelectorAll('.filter').forEach(x => x.classList.remove('on'));
+      f.classList.add('on');
+    });
+  });
+  // tag search: chip 一点就加 token，token 一点 × 就删
+  document.querySelectorAll('.ts-chip').forEach(c => {
+    c.addEventListener('click', () => {
+      const tag = c.textContent.replace(/^tag/i, '').trim().split(/\s+/)[0];
+      if (document.querySelector(`.ts-token[data-tag="${tag}"]`)) return; // 防重复
+      const tok = document.createElement('span');
+      tok.className = 'ts-token';
+      tok.dataset.tag = tag;
+      tok.innerHTML = `<span class="ts-key">tag</span>${escapeHtml(tag)}<span class="ts-x">×</span>`;
+      const input = document.querySelector('.ts-input');
+      input.parentNode.insertBefore(tok, input);
+      input.focus();
+    });
+  });
+  document.querySelector('.ts-tokens')?.addEventListener('click', e => {
+    const x = e.target.closest('.ts-x');
+    if (x) x.parentElement.remove();
+    document.querySelector('.ts-input')?.focus();
+  });
+  // 输入空格自动把前一段转成 token
+  document.querySelector('.ts-input')?.addEventListener('keydown', e => {
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      const input = e.currentTarget;
+      const txt = input.value.trim();
+      if (txt) {
+        // 看是不是已存在的 tag（简单匹配：以 ts-key tag 出现过的）
+        const known = Array.from(document.querySelectorAll('.ts-chip')).map(c => c.textContent.replace(/^tag/i, '').trim().split(/\s+/)[0]);
+        const asTag = known.includes(txt);
+        const tok = document.createElement('span');
+        tok.className = 'ts-token';
+        tok.dataset.tag = txt;
+        if (asTag) {
+          tok.innerHTML = `<span class="ts-key">tag</span>${escapeHtml(txt)}<span class="ts-x">×</span>`;
+        } else {
+          tok.innerHTML = `<span class="ts-key">词</span>${escapeHtml(txt)}<span class="ts-x">×</span>`;
+        }
+        input.parentNode.insertBefore(tok, input);
+        input.value = '';
+      }
+    }
+  });
+  // switch toggle
+  document.querySelectorAll('.switch').forEach(s => {
+    s.addEventListener('click', () => s.classList.toggle('on'));
+  });
+  // snippet insert
+  document.querySelectorAll('.snippet').forEach(s => {
+    s.addEventListener('click', () => {
+      const ed = document.querySelector('.prompt-editor');
+      if (!ed) return;
+      const tpl = {
+        '角色描述': '\n## 你的职责\n- 用一句话说清楚你帮谁解决什么问题\n- 强调知识库优先、禁止编造',
+        '引用规则': '\n## 引用规则\n- 引用条款时用「按《XX》第 N 条」格式\n- 引用知识库片段时附 [source] 标识',
+        '安全兜底': '\n## 安全兜底\n- 涉及未检索到的内容时，回复「这个暂时没找到相关记录」并建议人工客服\n- 永远不输出机密/薪资/合同金额',
+        '输出格式': '\n## 输出格式\n- 中文，简洁\n- 分点列举用「1. 2. 3.」\n- 段落不超过 3 行',
+        'Few-shot 示例': '\n## 示例\n问：试用期能休年假吗？\n答：按《年假办法》第 4 条，试用期内不可休年假。'
+      }[s.textContent.trim()] || '';
+      const start = ed.selectionStart, end = ed.selectionEnd;
+      ed.value = ed.value.slice(0, start) + tpl + ed.value.slice(end);
+      ed.focus();
+      ed.selectionStart = ed.selectionEnd = start + tpl.length;
+    });
+  });
+</script>
+</body>
+</html>
