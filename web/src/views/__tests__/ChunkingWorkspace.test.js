@@ -636,6 +636,47 @@ describe('ChunkingWorkspace', () => {
     expect(reindexChunk).not.toHaveBeenCalled()
   })
 
+  it('disables every chunk while preview regeneration is pending and leaves no save blocker after refresh', async () => {
+    const previewRequest = deferred()
+    const secondChunk = {
+      ...draftChunk,
+      publicId: 'chunk-2',
+      position: 1,
+      content: '第二块正文',
+      isModified: false,
+      lockVersion: 8,
+    }
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [
+      { ...draftChunk, isModified: false },
+      secondChunk,
+    ] })
+    createPreview.mockReturnValue(previewRequest.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await nextTick()
+
+    expect(createPreview).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('.chunk-card').every(card => card.attributes('aria-disabled') === 'true')).toBe(true)
+    expect(wrapper.get('[data-testid="open-confirm"]').attributes('disabled')).toBeDefined()
+    await wrapper.findAll('[data-testid="edit-chunk"]')[1].trigger('click')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(updateChunk).not.toHaveBeenCalled()
+    expect(wrapper.vm.hasBlockingChunkSaves).toBe(false)
+
+    previewRequest.resolve({ status: 202 })
+    await flushPromises()
+
+    expect(getProcessing).toHaveBeenCalledTimes(2)
+    expect(getChunks).toHaveBeenCalledTimes(2)
+    expect(wrapper.vm.fileMutationInProgress).toBe(false)
+    expect(wrapper.vm.hasBlockingChunkSaves).toBe(false)
+    expect(wrapper.findAll('.chunk-card').every(card => card.attributes('aria-disabled') === 'false')).toBe(true)
+  })
+
   it('blocks failed-vectorization retry while a recovered draft has an unsaved change', async () => {
     getProcessing.mockResolvedValue(processing(7, {
       failedFromState: 5,
@@ -1024,6 +1065,46 @@ describe('ChunkingWorkspace', () => {
     await flushPromises()
     expect(getChunks).toHaveBeenCalledTimes(2)
     expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('true')
+  })
+
+  it('disables every chunk and file action while one reindex request is pending without creating a save blocker', async () => {
+    const reindexRequest = deferred()
+    const secondChunk = {
+      ...draftChunk,
+      publicId: 'chunk-2',
+      position: 1,
+      content: '第二块正文',
+      lockVersion: 8,
+    }
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk, secondChunk] })
+    reindexChunk.mockReturnValue(reindexRequest.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.findAll('[data-testid="reindex-chunk"]')[0].trigger('click')
+    await nextTick()
+
+    expect(reindexChunk).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('.chunk-card').every(card => card.attributes('aria-disabled') === 'true')).toBe(true)
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="open-confirm"]').attributes('disabled')).toBeDefined()
+    await wrapper.findAll('[data-testid="reindex-chunk"]')[1].trigger('click')
+    await wrapper.findAll('[data-testid="edit-chunk"]')[1].trigger('click')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(reindexChunk).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(updateChunk).not.toHaveBeenCalled()
+    expect(wrapper.vm.hasBlockingChunkSaves).toBe(false)
+
+    reindexRequest.resolve({ status: 202 })
+    await flushPromises()
+
+    expect(getProcessing).toHaveBeenCalledTimes(2)
+    expect(getChunks).toHaveBeenCalledTimes(2)
+    expect(wrapper.vm.fileMutationInProgress).toBe(false)
+    expect(wrapper.vm.hasBlockingChunkSaves).toBe(false)
+    expect(wrapper.findAll('.chunk-card').every(card => card.attributes('aria-disabled') === 'false')).toBe(true)
   })
 
   it('shows the failure reason and only the retry matching failedFromState', async () => {

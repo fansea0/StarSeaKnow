@@ -19,7 +19,7 @@
         :loading="capabilityLoading"
         :submitting="previewSubmitting"
         :processing="isProcessing || processingLoading"
-        :actions-blocked="hasBlockingChunkSaves"
+        :actions-blocked="hasBlockingChunkSaves || fileMutationInProgress"
         :show-preview-action="canPreview"
         :error="capabilityError || submissionError"
         @select="selectStrategy"
@@ -37,14 +37,14 @@
           <el-button
             v-if="showRetryPreview"
             data-testid="retry-chunking"
-            :disabled="!canRetryPreview || !configValid || previewSubmitting || hasBlockingChunkSaves"
+            :disabled="!canRetryPreview || !configValid || hasBlockingChunkSaves || fileMutationInProgress"
             @click="submitPreview(true)"
           >重试分块</el-button>
           <el-button
             v-if="canRetryVector"
             data-testid="retry-vectorizing"
             :loading="confirmSubmitting"
-            :disabled="hasBlockingChunkSaves"
+            :disabled="hasBlockingChunkSaves || fileMutationInProgress"
             @click="retryVectorization"
           >重试建立索引</el-button>
         </div>
@@ -83,8 +83,8 @@
           :processing="isProcessing"
           :processing-label="processingLabel"
           :actions-disabled="chunkActionsDisabled"
-          :confirm-disabled="hasBlockingChunkSaves"
-          :reindex-disabled="hasBlockingChunkSaves"
+          :confirm-disabled="hasBlockingChunkSaves || fileMutationInProgress"
+          :reindex-disabled="hasBlockingChunkSaves || fileMutationInProgress"
           :show-confirm="canConfirm"
           :reindexing-ids="reindexingChunkIds"
           :reload-epochs="chunkReloadEpochs"
@@ -104,7 +104,7 @@
       :server-error="confirmError"
       :server-conflict="confirmConflict"
       :reloading="confirmReloading"
-      :blocked="!canConfirm || confirmConflict || hasBlockingChunkSaves"
+      :blocked="!canConfirm || confirmConflict || hasBlockingChunkSaves || fileMutationInProgress"
       :total-count="chunks.length"
       :enabled-count="overlapEnabledCount"
       :generated-count="overlapGeneratedCount"
@@ -249,7 +249,11 @@ export default {
     },
     chunkActionsDisabled() {
       return !this.processingLoaded || this.processingLoading
+        || this.fileMutationInProgress
         || !(mutableChunkStates.has(Number(this.processing.state)) || isMutableDraftFailure(this.processing))
+    },
+    fileMutationInProgress() {
+      return this.previewSubmitting || this.confirmSubmitting || this.reindexingChunkIds.size > 0
     },
     processingLabel() {
       return Number(this.processing.state) === 1 ? '正在生成分块' : '正在建立索引'
@@ -464,7 +468,8 @@ export default {
       return this.refreshProcessing(true, this.currentContext())
     },
     async submitPreview(isRetry = false) {
-      if (this.hasBlockingChunkSaves
+      if (this.fileMutationInProgress
+        || this.hasBlockingChunkSaves
         || !this.configValid
         || (isRetry ? !this.canRetryPreview : !this.canPreview)) return
       const selected = this.strategies.find(strategy => strategy.code === this.selectedStrategy)
@@ -509,13 +514,14 @@ export default {
       }
     },
     openConfirmDialog() {
-      if (!this.canConfirm || this.hasBlockingChunkSaves) return
+      if (!this.canConfirm || this.hasBlockingChunkSaves || this.fileMutationInProgress) return
       this.confirmError = ''
       this.confirmConflict = false
       this.confirmDialogVisible = true
     },
     async submitVectorization(isRetry = false) {
-      if (this.hasBlockingChunkSaves
+      if (this.fileMutationInProgress
+        || this.hasBlockingChunkSaves
         || (isRetry
           ? !this.canRetryVector
           : (!this.canConfirm || this.confirmConflict || this.confirmReloading))) return
@@ -548,7 +554,7 @@ export default {
       }
     },
     retryVectorization() {
-      if (!this.canRetryVector || this.hasBlockingChunkSaves) return
+      if (!this.canRetryVector || this.hasBlockingChunkSaves || this.fileMutationInProgress) return
       return this.submitVectorization(true)
     },
     async reloadConfirmState() {
@@ -616,6 +622,7 @@ export default {
     async handleReindex(chunk) {
       if (
         this.chunkActionsDisabled
+        || this.fileMutationInProgress
         || this.hasBlockingChunkSaves
         || ![3, 6].includes(Number(this.processing.state))
         || Number(chunk.status) !== 0
