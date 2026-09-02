@@ -83,7 +83,8 @@
               <code>{{ model.modelId }}</code>
               <span>{{ formatContext(model.contextWindow) }}</span>
               <span class="row-actions">
-                <button class="text-button text-button--danger" type="button" @click="removeModel(model)">删除</button>
+                <button v-if="selectedProvider.configured" class="text-button" type="button" :data-testid="`edit-model-${model.modelId}`" @click="editModel(model)">编辑</button>
+                <button v-if="selectedProvider.configured" class="text-button text-button--danger" type="button" @click="removeModel(model)">删除</button>
               </span>
             </div>
             <div v-if="!selectedProvider.selectableModels.length" class="model-empty">
@@ -127,7 +128,7 @@
               :placeholder="connectionForm.connectionId ? '留空则继续使用已保存的密钥' : '请输入 API Key'"
             />
           </label>
-          <div v-if="connectionForm.custom" class="custom-model-box">
+          <div v-if="connectionForm.custom && !connectionForm.connectionId" class="custom-model-box">
             <strong>初始模型</strong>
             <div class="field-grid field-grid--two">
               <label>显示名<input v-model.trim="connectionForm.initialModel.displayName" required placeholder="模型显示名" /></label>
@@ -159,7 +160,7 @@
       <form class="sea-modal sea-modal--compact" data-testid="model-form" role="dialog" aria-modal="true" aria-labelledby="model-title" @submit.prevent="saveModel">
         <header>
           <span class="model-page__eyebrow">MODEL PRESET</span>
-          <h3 id="model-title">添加模型</h3>
+          <h3 id="model-title">{{ editingModelId ? '编辑模型' : '添加模型' }}</h3>
           <p>模型会加入当前厂商的候选列表，供智能体配置时选择。</p>
         </header>
         <div class="sea-modal__body">
@@ -196,6 +197,7 @@ const search = ref('')
 const selectedKey = ref('')
 const connectionDialogOpen = ref(false)
 const modelDialogOpen = ref(false)
+const editingModelId = ref(null)
 const testing = ref(false)
 const saving = ref(false)
 const connectionFeedback = ref('')
@@ -295,7 +297,7 @@ function closeConnectionDialog() {
 }
 
 function connectionCommand() {
-  const selectableModels = connectionForm.custom
+  const selectableModels = connectionForm.custom && !connectionForm.connectionId
     ? [{
         displayName: connectionForm.initialModel.displayName,
         modelId: connectionForm.initialModel.modelId,
@@ -348,7 +350,13 @@ async function saveConnection() {
 }
 
 function openModelDialog() {
+  editingModelId.value = null
   Object.assign(modelForm, { displayName: '', modelId: '', contextWindow: 128000 })
+  modelDialogOpen.value = true
+}
+function editModel(model) {
+  editingModelId.value = model.modelId
+  Object.assign(modelForm, model)
   modelDialogOpen.value = true
 }
 
@@ -361,10 +369,13 @@ async function saveModel() {
       modelId: modelForm.modelId,
       contextWindow: Number(modelForm.contextWindow),
     }
-    const response = await addProviderModel(selectedProvider.value.connectionId, model)
+    const response = editingModelId.value
+      ? await replaceProviderModels(selectedProvider.value.connectionId,
+          selectedProvider.value.selectableModels.map(item => item.modelId === editingModelId.value ? model : item))
+      : await addProviderModel(selectedProvider.value.connectionId, model)
     applyProvider(response?.data?.data)
     modelDialogOpen.value = false
-    notify('success', '模型已添加')
+    notify('success', '模型已保存')
   } catch (error) {
     notify('error', errorMessage(error, '添加模型失败'))
   } finally {

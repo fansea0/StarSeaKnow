@@ -6,6 +6,8 @@ import {
   createProviderConnection,
   listModelProviders,
   testProviderConnection,
+  updateProviderConnection,
+  replaceProviderModels,
 } from '../../api/modelProviders'
 
 vi.mock('../../api/modelProviders', () => ({
@@ -61,7 +63,7 @@ function mountPage() {
 describe('ModelProviders', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    listModelProviders.mockResolvedValue({ data: { code: 200, data: providers } })
+    listModelProviders.mockResolvedValue({ data: { code: 200, data: structuredClone(providers) } })
   })
 
   it('renders the prototype provider rail and omits an enabled-state column', async () => {
@@ -114,5 +116,27 @@ describe('ModelProviders', () => {
       modelId: 'qwen3:14b',
       contextWindow: 65536,
     })
+  })
+  it('does not offer deletion on an unconfigured built-in catalog model', async () => {
+    const wrapper = mountPage(); await flushPromises()
+    expect(wrapper.get('[data-testid="model-table"]').findAll('button').filter(b => b.text() === '删除')).toHaveLength(0)
+  })
+  it('preserves custom model candidates while editing its connection', async () => {
+    const custom = { ...providers[1], catalogProviderId: null, custom: true, code: 'CUSTOM', name: '企业模型', icon: '企' }
+    listModelProviders.mockResolvedValue({ data: { code: 200, data: [custom] } })
+    updateProviderConnection.mockResolvedValue({ data: { code: 200, data: custom } })
+    const wrapper = mountPage(); await flushPromises()
+    await wrapper.get('[data-testid="configure-CUSTOM"]').trigger('click')
+    await wrapper.get('[data-testid="connection-form"]').trigger('submit'); await flushPromises()
+    expect(updateProviderConnection).toHaveBeenCalledWith(26, expect.objectContaining({ selectableModels: custom.selectableModels }))
+  })
+  it('edits a configured model without removing other candidates', async () => {
+    replaceProviderModels.mockResolvedValue({ data: { code: 200, data: providers[1] } })
+    const wrapper = mountPage(); await flushPromises()
+    await wrapper.get('[data-testid="provider-OLLAMA"]').trigger('click')
+    await wrapper.get('[data-testid="edit-model-qwen3:8b"]').trigger('click')
+    await wrapper.get('[data-testid="model-display-name"]').setValue('本地助手')
+    await wrapper.get('[data-testid="model-form"]').trigger('submit'); await flushPromises()
+    expect(replaceProviderModels).toHaveBeenCalledWith(26, [{ displayName: '本地助手', modelId: 'qwen3:8b', contextWindow: 32768 }])
   })
 })
