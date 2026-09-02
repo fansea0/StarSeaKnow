@@ -19,6 +19,7 @@
         :loading="capabilityLoading"
         :submitting="previewSubmitting"
         :processing="isProcessing || processingLoading"
+        :actions-blocked="hasBlockingChunkSaves"
         :show-preview-action="canPreview"
         :error="capabilityError || submissionError"
         @select="selectStrategy"
@@ -36,13 +37,14 @@
           <el-button
             v-if="showRetryPreview"
             data-testid="retry-chunking"
-            :disabled="!canRetryPreview || !configValid || previewSubmitting"
+            :disabled="!canRetryPreview || !configValid || previewSubmitting || hasBlockingChunkSaves"
             @click="submitPreview(true)"
           >重试分块</el-button>
           <el-button
             v-if="canRetryVector"
             data-testid="retry-vectorizing"
             :loading="confirmSubmitting"
+            :disabled="hasBlockingChunkSaves"
             @click="retryVectorization"
           >重试建立索引</el-button>
         </div>
@@ -81,6 +83,8 @@
           :processing="isProcessing"
           :processing-label="processingLabel"
           :actions-disabled="chunkActionsDisabled"
+          :confirm-disabled="hasBlockingChunkSaves"
+          :reindex-disabled="hasBlockingChunkSaves"
           :show-confirm="canConfirm"
           :reindexing-ids="reindexingChunkIds"
           :reload-epochs="chunkReloadEpochs"
@@ -88,6 +92,7 @@
           @deleted="handleChunkDeleted"
           @reload="reloadChunks"
           @reindex="handleReindex"
+          @save-state="handleChunkSaveState"
           @confirm="openConfirmDialog"
         />
       </div>
@@ -99,7 +104,7 @@
       :server-error="confirmError"
       :server-conflict="confirmConflict"
       :reloading="confirmReloading"
-      :blocked="!canConfirm || confirmConflict"
+      :blocked="!canConfirm || confirmConflict || hasBlockingChunkSaves"
       :total-count="chunks.length"
       :enabled-count="overlapEnabledCount"
       :generated-count="overlapGeneratedCount"
@@ -209,6 +214,9 @@ export default {
       requestGeneration: 0,
       activeRouteKey: '',
       destroyed: false,
+      chunkSaveStates: {},
+      chunkRefreshPending: false,
+      chunkSaveRefreshRequest: null,
     }
   },
   computed: {
@@ -250,7 +258,12 @@ export default {
       return this.chunks.filter(chunk => chunk.overlapEnabled === true).length
     },
     overlapGeneratedCount() {
-      return this.chunks.filter(chunk => typeof chunk.overlapContent === 'string' && chunk.overlapContent.length > 0).length
+      return this.chunks.filter(chunk => chunk.overlapEnabled === true
+        && typeof chunk.overlapContent === 'string'
+        && chunk.overlapContent.trim().length > 0).length
+    },
+    hasBlockingChunkSaves() {
+      return Object.values(this.chunkSaveStates).some(state => state?.blocking === true)
     },
   },
   watch: {
@@ -306,6 +319,9 @@ export default {
       this.retainedChunksLoaded = false
       this.chunkReloadEpochs = {}
       this.reindexingChunkIds = new Set()
+      this.chunkSaveStates = {}
+      this.chunkRefreshPending = false
+      this.chunkSaveRefreshRequest = null
       const context = this.currentContext()
       this.initialize(context)
     },
@@ -448,7 +464,9 @@ export default {
       return this.refreshProcessing(true, this.currentContext())
     },
     async submitPreview(isRetry = false) {
-      if (!this.configValid || (isRetry ? !this.canRetryPreview : !this.canPreview)) return
+      if (this.hasBlockingChunkSaves
+        || !this.configValid
+        || (isRetry ? !this.canRetryPreview : !this.canPreview)) return
       const selected = this.strategies.find(strategy => strategy.code === this.selectedStrategy)
       if (!selected || selected.disabled) return
       const context = this.currentContext()
@@ -461,7 +479,7 @@ export default {
             '确认重新生成分块',
             { confirmButtonText: '替换并重新生成', cancelButtonText: '保留当前分块', type: 'warning' },
           )
-          if (!this.isCurrent(context)) return
+          if (!this.isCurrent(context) || this.hasBlockingChunkSaves) return
           replaceEditedDrafts = true
         } catch {
           return
@@ -491,13 +509,16 @@ export default {
       }
     },
     openConfirmDialog() {
-      if (!this.canConfirm) return
+      if (!this.canConfirm || this.hasBlockingChunkSaves) return
       this.confirmError = ''
       this.confirmConflict = false
       this.confirmDialogVisible = true
     },
     async submitVectorization(isRetry = false) {
-      if (isRetry ? !this.canRetryVector : (!this.canConfirm || this.confirmConflict || this.confirmReloading)) return
+      if (this.hasBlockingChunkSaves
+        || (isRetry
+          ? !this.canRetryVector
+          : (!this.canConfirm || this.confirmConflict || this.confirmReloading))) return
       const context = this.currentContext()
       this.confirmSubmitting = true
       this.submissionError = ''
@@ -527,7 +548,7 @@ export default {
       }
     },
     retryVectorization() {
-      if (!this.canRetryVector) return
+      if (!this.canRetryVector || this.hasBlockingChunkSaves) return
       return this.submitVectorization(true)
     },
     async reloadConfirmState() {
@@ -546,22 +567,56 @@ export default {
         }
       }
     },
-    async handleChunkUpdated(updated) {
-      const context = this.currentContext()
+    handleChunkUpdated(updated) {
       const index = this.chunks.findIndex(chunk => chunk.publicId === updated.publicId)
       if (index >= 0) this.chunks.splice(index, 1, updated)
-      await this.refreshProcessing(false, context)
-      await this.loadChunks({ force: true }, context)
+      this.chunkRefreshPending = true
+      if (!this.hasBlockingChunkSaves) return this.flushChunkSaveRefresh()
+      return false
     },
-    async handleChunkDeleted(publicId) {
+    handleChunkSaveState(state) {
+      if (!state?.publicId) return
+      const states = { ...this.chunkSaveStates }
+      if (state.blocking) states[state.publicId] = { ...state }
+      else delete states[state.publicId]
+      this.chunkSaveStates = states
+      if (!this.hasBlockingChunkSaves && this.chunkRefreshPending) {
+        return this.flushChunkSaveRefresh()
+      }
+    },
+    async flushChunkSaveRefresh() {
+      if (this.hasBlockingChunkSaves || !this.chunkRefreshPending) return false
+      if (this.chunkSaveRefreshRequest) return this.chunkSaveRefreshRequest
       const context = this.currentContext()
+      this.chunkRefreshPending = false
+      const request = (async () => {
+        const processingLoaded = await this.refreshProcessing(false, context)
+        if (!processingLoaded || !this.isCurrent(context)) return false
+        return this.loadChunks({ force: true }, context)
+      })()
+      this.chunkSaveRefreshRequest = request
+      try {
+        return await request
+      } finally {
+        if (this.chunkSaveRefreshRequest === request) this.chunkSaveRefreshRequest = null
+        if (this.isCurrent(context) && this.chunkRefreshPending && !this.hasBlockingChunkSaves) {
+          void this.flushChunkSaveRefresh()
+        }
+      }
+    },
+    handleChunkDeleted(publicId) {
       this.chunks = this.chunks.filter(chunk => chunk.publicId !== publicId)
-      await this.refreshProcessing(false, context)
-      await this.loadChunks({ force: true }, context)
+      const states = { ...this.chunkSaveStates }
+      delete states[publicId]
+      this.chunkSaveStates = states
+      this.chunkRefreshPending = true
+      if (!this.hasBlockingChunkSaves) return this.flushChunkSaveRefresh()
+      return false
     },
     async handleReindex(chunk) {
       if (
         this.chunkActionsDisabled
+        || this.hasBlockingChunkSaves
         || ![3, 6].includes(Number(this.processing.state))
         || Number(chunk.status) !== 0
         || !chunk.isModified

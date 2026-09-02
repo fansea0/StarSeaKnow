@@ -78,7 +78,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -479,11 +478,6 @@ class MarkdownChunkingWorkflowTest {
                             .filter(chunk -> Objects.equals(chunk.getPosition(), invocation.getArgument(3)))
                             .filter(chunk -> Boolean.TRUE.equals(chunk.getOverlapEnabled()))
                             .findFirst().orElse(null));
-            when(chunkMapper.updateContent(eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID),
-                    any(UUID.class), any(), anyInt(), any(), anyInt()))
-                    .thenAnswer(invocation -> updateContent(invocation));
-            when(chunkMapper.invalidateDependent(eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID),
-                    anyLong(), anyLong(), anyInt())).thenReturn(0);
             when(chunkMapper.deleteScoped(eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID),
                     any(UUID.class), anyInt())).thenAnswer(invocation -> deleteChunk(invocation));
             when(chunkMapper.update(any(DocumentChunk.class), any(Wrapper.class)))
@@ -505,24 +499,6 @@ class MarkdownChunkingWorkflowTest {
             chunks.removeIf(chunk -> chunk.getStatus() == ChunkStatus.DRAFT.code()
                     && (includeModified || !Boolean.TRUE.equals(chunk.getIsModified())));
             return before - chunks.size();
-        }
-
-        private int updateContent(org.mockito.invocation.InvocationOnMock invocation) {
-            DocumentChunk chunk = byPublicId(invocation.getArgument(3));
-            int expectedVersion = invocation.getArgument(7);
-            if (chunk == null || chunk.getLockVersion() != expectedVersion
-                    || chunk.getStatus() == ChunkStatus.INDEXING.code()) {
-                return 0;
-            }
-            chunk.setContent(invocation.getArgument(4));
-            chunk.setTokenCount(invocation.getArgument(5));
-            chunk.setContentHash(invocation.getArgument(6));
-            chunk.setStatus(ChunkStatus.DRAFT.code());
-            chunk.setIsModified(true);
-            chunk.setIndexContent(null);
-            chunk.setLastError(null);
-            chunk.setLockVersion(expectedVersion + 1);
-            return 1;
         }
 
         private int deleteChunk(org.mockito.invocation.InvocationOnMock invocation) {

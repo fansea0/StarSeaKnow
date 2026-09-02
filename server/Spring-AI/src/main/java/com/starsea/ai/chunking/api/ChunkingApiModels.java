@@ -9,6 +9,8 @@ import java.util.UUID;
 
 public final class ChunkingApiModels {
 
+    public static final String NO_AVAILABLE_OVERLAP_REASON_CODE = "NO_AVAILABLE_OVERLAP";
+
     private ChunkingApiModels() {
     }
 

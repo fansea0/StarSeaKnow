@@ -37,6 +37,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
+import static com.starsea.ai.chunking.api.ChunkingApiModels.NO_AVAILABLE_OVERLAP_REASON_CODE;
+
 /** Owns tenant-scoped, optimistic chunk read and mutation commands. */
 @Service
 public class ChunkCommandService {
@@ -182,14 +184,13 @@ public class ChunkCommandService {
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, lockVersion);
         FileProcessing processingSnapshot = processing;
-        DocumentChunk dependent = lockOverlapDependent(fileId, tenantId, knowledgeId, target);
+        DocumentChunk dependentCandidate = lockOverlapDependent(
+                fileId, tenantId, knowledgeId, target);
+        DocumentChunk dependent = changedOverlapAfterSourceDeletion(
+                dependentCandidate, configuredMaximum(processingSnapshot.getPolicySnapshot()));
         requireMutableDependent(dependent);
         if (dependent != null) {
-            DocumentChunk recalculated = copyForContext(dependent);
-            EnrichedChunk dependentContext = enrich(null, recalculated,
-                    configuredMaximum(processingSnapshot.getPolicySnapshot()));
-            applyDerivedContext(recalculated, dependentContext);
-            recalculateDependent(recalculated, dependent.getLockVersion());
+            recalculateDependent(dependent, dependentCandidate.getLockVersion());
         }
         int deleted = chunkMapper.deleteScoped(
                 fileId, tenantId, knowledgeId, chunkPublicId, lockVersion);
@@ -405,6 +406,16 @@ public class ChunkCommandService {
         return recalculated;
     }
 
+    private DocumentChunk changedOverlapAfterSourceDeletion(
+            DocumentChunk candidate, int maximum) {
+        if (candidate == null) {
+            return null;
+        }
+        DocumentChunk recalculated = copyForContext(candidate);
+        applyDerivedContext(recalculated, enrich(null, recalculated, maximum));
+        return sameDerivedContext(candidate, recalculated) ? null : recalculated;
+    }
+
     private boolean sameDerivedContext(DocumentChunk left, DocumentChunk right) {
         return Objects.equals(left.getOverlapContent(), right.getOverlapContent())
                 && Objects.equals(left.getOverlapSourceChunkId(), right.getOverlapSourceChunkId())
@@ -563,7 +574,7 @@ public class ChunkCommandService {
     private String overlapUnavailableReason(DocumentChunk chunk) {
         return Boolean.TRUE.equals(chunk.getOverlapEnabled())
                 && (chunk.getOverlapContent() == null || chunk.getOverlapContent().isBlank())
-                ? "NO_AVAILABLE_OVERLAP" : null;
+                ? NO_AVAILABLE_OVERLAP_REASON_CODE : null;
     }
 
     private PipelineState pipelineState(FileProcessing processing) {

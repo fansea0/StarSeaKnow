@@ -193,16 +193,26 @@ describe('ChunkCard', () => {
     expect(wrapper.text()).not.toContain('机密索引内容')
   })
 
-  it('uses 40 as the fallback limit and displays the backend reason or a generic explanation without constructing content', async () => {
-    const backendReason = mountCard({ overlapEnabled: true, overlapTokenLimit: 0, overlapUnavailableReason: '首块没有可补充的上文' })
+  it('uses 40 as the fallback limit and maps stable backend reason codes to Chinese', async () => {
+    const backendReason = mountCard({
+      overlapEnabled: true,
+      overlapTokenLimit: 0,
+      overlapUnavailableReason: 'NO_AVAILABLE_OVERLAP',
+    })
 
     expect(backendReason.get('[data-testid="overlap-token-limit"] input').element.value).toBe('40')
-    expect(backendReason.get('[data-testid="overlap-unavailable"]').text()).toContain('首块没有可补充的上文')
+    expect(backendReason.get('[data-testid="overlap-unavailable"]').text()).toContain('当前分块没有可补充的完整上文')
+    expect(backendReason.text()).not.toContain('NO_AVAILABLE_OVERLAP')
     expect(backendReason.text()).not.toContain('产品手册 / 安装原始正文')
 
-    const genericReason = mountCard({ overlapEnabled: true, overlapContent: null, overlapUnavailableReason: null })
-    expect(genericReason.get('[data-testid="overlap-unavailable"]').text()).toContain('暂无可补充的上文')
-    expect(genericReason.get('[data-testid="overlap-token-count"]').text()).toContain('0 Token')
+    const unknownReason = mountCard({
+      overlapEnabled: true,
+      overlapContent: null,
+      overlapUnavailableReason: 'FUTURE_REASON',
+    })
+    expect(unknownReason.get('[data-testid="overlap-unavailable"]').text()).toContain('暂时无法生成补充上文')
+    expect(unknownReason.text()).not.toContain('FUTURE_REASON')
+    expect(unknownReason.get('[data-testid="overlap-token-count"]').text()).toContain('0 Token')
   })
 
   it('serializes overlap changes behind an in-flight body save and reuses the returned lockVersion', async () => {

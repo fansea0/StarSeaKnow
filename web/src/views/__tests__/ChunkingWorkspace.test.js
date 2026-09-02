@@ -546,6 +546,137 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.findAll('.chunk-card')[1].attributes('aria-disabled')).toBe('true')
   })
 
+  it('waits for the latest queued save before refreshing processing and dependent chunks', async () => {
+    const firstSave = deferred()
+    const secondSave = deferred()
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    updateChunk
+      .mockReturnValueOnce(firstSave.promise)
+      .mockReturnValueOnce(secondSave.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('第一次正文')
+    await vi.advanceTimersByTimeAsync(650)
+    await wrapper.get('textarea').setValue('第二次正文')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(updateChunk).toHaveBeenCalledTimes(1)
+
+    firstSave.resolve({ data: { ...draftChunk, content: '第一次正文', lockVersion: 6 } })
+    await flushPromises()
+
+    expect(updateChunk).toHaveBeenCalledTimes(2)
+    expect(getProcessing).toHaveBeenCalledTimes(1)
+    expect(getChunks).toHaveBeenCalledTimes(1)
+
+    secondSave.resolve({ data: { ...draftChunk, content: '第二次正文', lockVersion: 7 } })
+    await flushPromises()
+
+    expect(getProcessing).toHaveBeenCalledTimes(2)
+    expect(getChunks).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes once only after two cards have both finished saving', async () => {
+    const firstSave = deferred()
+    const secondSave = deferred()
+    const secondChunk = {
+      ...draftChunk,
+      publicId: 'chunk-2',
+      position: 1,
+      content: '第二块正文',
+      lockVersion: 8,
+    }
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk, secondChunk] })
+    updateChunk.mockImplementation((knowledgeId, fileId, publicId) => (
+      publicId === 'chunk-1' ? firstSave.promise : secondSave.promise
+    ))
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    const editButtons = wrapper.findAll('[data-testid="edit-chunk"]')
+    await editButtons[0].trigger('click')
+    await editButtons[1].trigger('click')
+    const editors = wrapper.findAll('textarea')
+    await editors[0].setValue('第一块新正文')
+    await editors[1].setValue('第二块新正文')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(updateChunk).toHaveBeenCalledTimes(2)
+
+    firstSave.resolve({ data: { ...draftChunk, content: '第一块新正文', lockVersion: 6 } })
+    await flushPromises()
+    expect(getProcessing).toHaveBeenCalledTimes(1)
+    expect(getChunks).toHaveBeenCalledTimes(1)
+
+    secondSave.resolve({ data: { ...secondChunk, content: '第二块新正文', lockVersion: 9 } })
+    await flushPromises()
+    expect(getProcessing).toHaveBeenCalledTimes(2)
+    expect(getChunks).toHaveBeenCalledTimes(2)
+  })
+
+  it('blocks regeneration confirmation and every single-chunk rebuild immediately after an edit', async () => {
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="overlap-switch"] .el-switch').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="open-confirm"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="reindex-chunk"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await wrapper.get('[data-testid="open-confirm"]').trigger('click')
+    await wrapper.get('[data-testid="reindex-chunk"]').trigger('click')
+    expect(createPreview).not.toHaveBeenCalled()
+    expect(confirmVectorization).not.toHaveBeenCalled()
+    expect(reindexChunk).not.toHaveBeenCalled()
+  })
+
+  it('blocks failed-vectorization retry while a recovered draft has an unsaved change', async () => {
+    getProcessing.mockResolvedValue(processing(7, {
+      failedFromState: 5,
+      lastError: '向量服务不可用',
+    }))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="overlap-switch"] .el-switch').trigger('click')
+    await nextTick()
+
+    const retry = wrapper.get('[data-testid="retry-vectorizing"]')
+    expect(retry.attributes('disabled')).toBeDefined()
+    await retry.trigger('click')
+    expect(confirmVectorization).not.toHaveBeenCalled()
+  })
+
+  it('keeps file actions and rebuild blocked after a chunk save error', async () => {
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    updateChunk.mockRejectedValue({ response: { status: 503, data: { msg: '保存服务不可用' } } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('尚未保存的正文')
+    await nextTick()
+    expect(wrapper.get('[data-testid="open-confirm"]').attributes('disabled')).toBeDefined()
+
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('保存服务不可用')
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="open-confirm"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="reindex-chunk"]').attributes('disabled')).toBeDefined()
+    expect(getProcessing).toHaveBeenCalledTimes(1)
+    expect(getChunks).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     { failedFromState: 1, visible: 'retry-chunking', hidden: 'retry-vectorizing' },
     { failedFromState: 5, visible: 'retry-vectorizing', hidden: 'retry-chunking' },
@@ -723,7 +854,7 @@ describe('ChunkingWorkspace', () => {
     getChunks.mockResolvedValue({ data: [
       { ...draftChunk, publicId: 'chunk-1', isModified: false, overlapEnabled: true, overlapContent: '已生成上文', overlapTokenCount: 8 },
       { ...draftChunk, publicId: 'chunk-2', isModified: false, overlapEnabled: true, overlapContent: null, overlapTokenCount: 0 },
-      { ...draftChunk, publicId: 'chunk-3', isModified: false, overlapEnabled: false, overlapContent: null, overlapTokenCount: 0 },
+      { ...draftChunk, publicId: 'chunk-3', isModified: false, overlapEnabled: false, overlapContent: '历史残留上文', overlapTokenCount: 6 },
     ] })
     const wrapper = mountWorkspace()
     await flushPromises()

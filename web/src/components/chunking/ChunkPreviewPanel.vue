@@ -29,11 +29,13 @@
         :chunk="chunk"
         :disabled="actionsDisabled || isReindexing(chunk)"
         :show-reindex="canReindex(chunk)"
+        :reindex-disabled="reindexDisabled"
         :reload-epoch="reloadEpochs[chunk.publicId] || 0"
         @updated="$emit('updated', $event)"
         @deleted="$emit('deleted', $event)"
         @reload="$emit('reload', $event)"
         @reindex="$emit('reindex', $event)"
+        @save-state="$emit('save-state', $event)"
       />
     </div>
 
@@ -45,7 +47,7 @@
       <el-button
         type="primary"
         data-testid="open-confirm"
-        :disabled="processing"
+        :disabled="processing || confirmDisabled"
         @click="$emit('confirm')"
       >确认并建立索引</el-button>
     </footer>
@@ -66,12 +68,14 @@ const props = defineProps({
   processingLabel: { type: String, default: '' },
   loadingLabel: { type: String, default: '正在读取分块…' },
   actionsDisabled: { type: Boolean, default: false },
+  confirmDisabled: { type: Boolean, default: false },
+  reindexDisabled: { type: Boolean, default: false },
   showConfirm: { type: Boolean, default: true },
   reindexingIds: { type: Set, default: () => new Set() },
   reloadEpochs: { type: Object, default: () => ({}) },
 })
 
-defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm'])
+defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm', 'save-state'])
 
 function canReindex(chunk) {
   return [3, 6].includes(Number(props.fileState))

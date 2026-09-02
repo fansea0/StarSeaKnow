@@ -1,6 +1,7 @@
 package com.starsea.ai.chunking.preview;
 
 import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.chunking.api.ChunkingApiModels;
 import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
@@ -42,7 +43,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -113,6 +113,19 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void list_returns_the_stable_reason_code_when_enabled_overlap_is_unavailable() {
+        DocumentChunk chunk = chunk(31L, CHUNK_ID, 0, ChunkStatus.DRAFT, 2, "Body");
+        chunk.setOverlapEnabled(true);
+        chunk.setOverlapContent(null);
+        when(chunkMapper.findByFile(FILE_ID, TENANT_ID, KNOWLEDGE_ID)).thenReturn(List.of(chunk));
+
+        var response = service.list(KNOWLEDGE_ID, FILE_ID).get(0);
+
+        assertEquals(ChunkingApiModels.NO_AVAILABLE_OVERLAP_REASON_CODE,
+                response.overlapUnavailableReason());
+    }
+
+    @Test
     void edit_persists_body_and_per_chunk_settings_with_fresh_read_only_overlap() {
         DocumentChunk previous = chunk(30L, UUID.randomUUID(), 3,
                 ChunkStatus.ACTIVE, 1, "Source sentence.");
@@ -122,8 +135,6 @@ class ChunkCommandServiceTest {
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
         when(chunkMapper.findScopedByPosition(FILE_ID, TENANT_ID, KNOWLEDGE_ID, 3))
                 .thenReturn(previous);
-        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
         when(chunkMapper.update(any(DocumentChunk.class), any())).thenReturn(1);
 
         var response = service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
@@ -151,8 +162,6 @@ class ChunkCommandServiceTest {
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
         when(chunkMapper.findNextDependentForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenReturn(dependent);
-        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Edited source.", 14, sha256("Edited source."), 2)).thenReturn(1);
         when(chunkMapper.update(any(DocumentChunk.class), any())).thenReturn(1);
 
         service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
@@ -199,8 +208,7 @@ class ChunkCommandServiceTest {
 
         assertEquals(422, failure.status().value());
         verify(processingMapper, never()).findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID);
-        verify(chunkMapper, never()).updateContent(eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID),
-                eq(CHUNK_ID), anyString(), anyInt(), anyString(), anyInt());
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
     }
 
     @Test
@@ -222,8 +230,7 @@ class ChunkCommandServiceTest {
                 "bodyTokenCount", 6,
                 "totalTokenCount", 15,
                 "maxTokens", 12), failure.details());
-        verify(chunkMapper, never()).updateContent(eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID),
-                eq(CHUNK_ID), anyString(), anyInt(), anyString(), anyInt());
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
     }
 
     @Test
@@ -238,11 +245,6 @@ class ChunkCommandServiceTest {
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
         when(chunkMapper.findNextDependentForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenReturn(dependent);
-        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
-        when(chunkMapper.invalidateDependent(FILE_ID, TENANT_ID, KNOWLEDGE_ID,
-                32L, 31L, 7)).thenReturn(1);
-
         var response = service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
                 new EditChunkRequest("Edited", 2));
 
@@ -266,9 +268,6 @@ class ChunkCommandServiceTest {
         target.setSectionPath(List.of());
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Recovered", 9, sha256("Recovered"), 2)).thenReturn(1);
-
         var response = service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
                 new EditChunkRequest("Recovered", 2));
 
@@ -287,8 +286,7 @@ class ChunkCommandServiceTest {
                         new EditChunkRequest("Edited", 2)));
 
         assertEquals(409, failure.status().value());
-        verify(chunkMapper, never()).updateContent(eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID),
-                eq(CHUNK_ID), anyString(), anyInt(), anyString(), anyInt());
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
         verify(vectorGateway, never()).delete(CHUNK_ID);
     }
 
@@ -322,8 +320,6 @@ class ChunkCommandServiceTest {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Edited", 6, sha256("Edited"), 2)).thenReturn(0);
         when(chunkMapper.update(any(DocumentChunk.class), any())).thenReturn(0);
 
         ChunkingException failure = assertThrows(ChunkingException.class,
@@ -347,8 +343,6 @@ class ChunkCommandServiceTest {
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
         when(chunkMapper.findNextDependentForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenReturn(dependent);
-        when(chunkMapper.invalidateDependent(FILE_ID, TENANT_ID, KNOWLEDGE_ID,
-                32L, 31L, 7)).thenReturn(1);
         when(chunkMapper.deleteScoped(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2)).thenReturn(1);
 
         service.delete(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, 2);
@@ -389,6 +383,36 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void delete_ignores_source_free_indexing_neighbor_across_title_and_structure_boundaries() {
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Incomplete source");
+        target.setSectionPath(List.of("Previous section"));
+        target.setBoundaryReason(Map.of("end", "H2_SECTION"));
+        DocumentChunk rightNeighbor = chunk(
+                32L, NEXT_ID, 5, ChunkStatus.INDEXING, 7, "Unrelated");
+        rightNeighbor.setSectionPath(List.of("Next section"));
+        rightNeighbor.setBoundaryReason(Map.of("start", "H2_SECTION"));
+        rightNeighbor.setOverlapEnabled(true);
+        rightNeighbor.setOverlapTokenLimit(40);
+        rightNeighbor.setOverlapContent(null);
+        rightNeighbor.setOverlapSourceChunkId(null);
+        rightNeighbor.setOverlapTokenCount(0);
+        rightNeighbor.setIndexContent("标题：Next section\n\nUnrelated");
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+        when(chunkMapper.findNextDependentForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenReturn(rightNeighbor);
+        when(chunkMapper.deleteScoped(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2)).thenReturn(1);
+
+        assertDoesNotThrow(() -> service.delete(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, 2));
+
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+        verify(chunkMapper).deleteScoped(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2);
+        verify(vectorGateway).delete(CHUNK_ID);
+        verify(vectorGateway, never()).delete(NEXT_ID);
+    }
+
+    @Test
     void final_chunk_deletion_makes_the_file_explicitly_unconfirmable() {
         when(processingMapper.selectById(FILE_ID))
                 .thenReturn(processing(PipelineState.ADJUSTING, 5));
@@ -406,8 +430,6 @@ class ChunkCommandServiceTest {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
         doThrow(new IllegalStateException("vector unavailable")).when(vectorGateway).delete(CHUNK_ID);
 
         var response = service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
@@ -424,8 +446,6 @@ class ChunkCommandServiceTest {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
         doThrow(new IllegalStateException("vector unavailable")).when(vectorGateway).delete(CHUNK_ID);
 
         service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, new EditChunkRequest("Edited", 2));
@@ -448,8 +468,6 @@ class ChunkCommandServiceTest {
             DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
             when(chunkMapper.findScopedByPublicIdForUpdate(
                     FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-            when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                    "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
             ChunkCommandService attemptService = new ChunkCommandService(
                     chunkMapper, processingMapper, stateService, new CharacterTokenCounter(),
                     new ChunkIndexContentBuilder(), gateway, attemptSleeps::add);
@@ -591,38 +609,21 @@ class ChunkCommandServiceTest {
     }
 
     @Test
-    void command_sql_is_fully_scoped_conditional_and_delete_is_physical() throws Exception {
+    void delete_and_dependent_lock_sql_are_scoped_and_physical() throws Exception {
         Configuration configuration = new Configuration();
         try (var stream = getClass().getResourceAsStream("/mapper/DocumentChunkMapper.xml")) {
             new XMLMapperBuilder(stream, configuration,
                     "mapper/DocumentChunkMapper.xml", configuration.getSqlFragments()).parse();
         }
-        String update = sql(configuration,
-                "com.starsea.ai.mapper.DocumentChunkMapper.updateContent", Map.of(
-                        "fileId", FILE_ID, "tenantId", TENANT_ID, "knowledgeId", KNOWLEDGE_ID,
-                        "chunkPublicId", CHUNK_ID, "content", "Edited", "tokenCount", 6,
-                        "contentHash", "hash", "lockVersion", 2));
         String delete = sql(configuration,
                 "com.starsea.ai.mapper.DocumentChunkMapper.deleteScoped", Map.of(
                         "fileId", FILE_ID, "tenantId", TENANT_ID, "knowledgeId", KNOWLEDGE_ID,
                         "chunkPublicId", CHUNK_ID, "lockVersion", 2));
-        BoundSql dependentBinding = boundSql(configuration,
-                "com.starsea.ai.mapper.DocumentChunkMapper.invalidateDependent", Map.of(
-                        "fileId", FILE_ID, "tenantId", TENANT_ID, "knowledgeId", KNOWLEDGE_ID,
-                        "chunkId", 32L, "sourceChunkId", 31L, "lockVersion", 7));
-        String dependent = normalizeSql(dependentBinding);
         String dependentLock = sql(configuration,
                 "com.starsea.ai.mapper.DocumentChunkMapper.findNextDependentForUpdate", Map.of(
                         "fileId", FILE_ID, "tenantId", TENANT_ID,
                         "knowledgeId", KNOWLEDGE_ID, "position", 5));
 
-        assertTrue(update.contains("tenant_id = ?"));
-        assertTrue(update.contains("knowledge_id = ?"));
-        assertTrue(update.contains("file_id = ?"));
-        assertTrue(update.contains("public_id = ?"));
-        assertTrue(update.contains("status <> 1"));
-        assertTrue(update.contains("lock_version = ?"));
-        assertTrue(update.contains("index_content = NULL"));
         assertTrue(delete.startsWith("DELETE FROM document_chunk"));
         assertTrue(delete.contains("tenant_id = ?"));
         assertTrue(delete.contains("knowledge_id = ?"));
@@ -631,18 +632,6 @@ class ChunkCommandServiceTest {
         assertTrue(delete.contains("status <> 1"));
         assertTrue(delete.contains("lock_version = ?"));
         assertTrue(!delete.contains("UPDATE document_chunk"));
-        assertTrue(dependent.contains("tenant_id = ?"));
-        assertTrue(dependent.contains("knowledge_id = ?"));
-        assertTrue(dependent.contains("file_id = ?"));
-        assertEquals(1L, java.util.regex.Pattern.compile("\\bid\\s*=\\s*\\?")
-                .matcher(dependent).results().count());
-        assertEquals(1L, dependentBinding.getParameterMappings().stream()
-                .filter(mapping -> "chunkId".equals(mapping.getProperty()))
-                .count());
-        assertTrue(dependent.contains("overlap_source_chunk_id = ?"));
-        assertTrue(dependent.contains("status <> 1"));
-        assertTrue(dependent.contains("lock_version = ?"));
-        assertTrue(dependent.contains("index_content = NULL"));
         assertTrue(dependentLock.contains("tenant_id = ?"));
         assertTrue(dependentLock.contains("knowledge_id = ?"));
         assertTrue(dependentLock.contains("file_id = ?"));
@@ -692,30 +681,6 @@ class ChunkCommandServiceTest {
         when(mapper.findNextDependentForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5))
                 .thenAnswer(invocation -> database.get(1));
-        when(mapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
-                "Edited", 6, sha256("Edited"), 2)).thenAnswer(invocation -> {
-            DocumentChunk updated = copy(database.get(0));
-            updated.setContent("Edited");
-            updated.setTokenCount(6);
-            updated.setContentHash(sha256("Edited"));
-            updated.setStatus(ChunkStatus.DRAFT.code());
-            updated.setIsModified(true);
-            updated.setIndexContent(null);
-            updated.setLockVersion(3);
-            database.set(0, updated);
-            return 1;
-        });
-        when(mapper.invalidateDependent(FILE_ID, TENANT_ID, KNOWLEDGE_ID,
-                32L, 31L, 7)).thenAnswer(invocation -> {
-            DocumentChunk updated = copy(database.get(1));
-            updated.setStatus(ChunkStatus.DRAFT.code());
-            updated.setOverlapContent(null);
-            updated.setOverlapTokenCount(0);
-            updated.setIndexContent(null);
-            updated.setLockVersion(8);
-            database.set(1, updated);
-            return 1;
-        });
         when(mapper.update(any(DocumentChunk.class), any())).thenAnswer(invocation -> {
             DocumentChunk patch = invocation.getArgument(0);
             int index = patch.getContent() != null ? 0 : 1;

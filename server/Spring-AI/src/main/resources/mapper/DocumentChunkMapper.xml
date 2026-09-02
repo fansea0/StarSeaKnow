@@ -143,41 +143,6 @@
         FOR UPDATE
     </select>
 
-    <update id="updateContent">
-        UPDATE document_chunk
-        SET content = #{content},
-            token_count = #{tokenCount},
-            content_hash = #{contentHash},
-            status = 0,
-            is_modified = TRUE,
-            index_content = NULL,
-            last_error = NULL,
-            lock_version = lock_version + 1
-        WHERE tenant_id = #{tenantId}
-          AND knowledge_id = #{knowledgeId}
-          AND file_id = #{fileId}
-          AND public_id = #{chunkPublicId}
-          AND status &lt;&gt; 1
-          AND lock_version = #{lockVersion}
-    </update>
-
-    <update id="invalidateDependent">
-        UPDATE document_chunk
-        SET status = 0,
-            overlap_content = NULL,
-            overlap_token_count = 0,
-            index_content = NULL,
-            last_error = NULL,
-            lock_version = lock_version + 1
-        WHERE tenant_id = #{tenantId}
-          AND knowledge_id = #{knowledgeId}
-          AND file_id = #{fileId}
-          AND id = #{chunkId}
-          AND overlap_source_chunk_id = #{sourceChunkId}
-          AND status &lt;&gt; 1
-          AND lock_version = #{lockVersion}
-    </update>
-
     <delete id="deleteScoped">
         DELETE FROM document_chunk
         WHERE tenant_id = #{tenantId}

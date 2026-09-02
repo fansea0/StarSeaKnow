@@ -44,7 +44,7 @@
         type="primary"
         data-testid="create-preview"
         :loading="submitting"
-        :disabled="!selectedCode || !configValid || processing"
+        :disabled="!selectedCode || !configValid || processing || actionsBlocked"
         @click="$emit('preview')"
       >生成分块预览</el-button>
       <small v-if="processing">文件处理中，完成后可再次提交。</small>
@@ -64,6 +64,7 @@ defineProps({
   loading: { type: Boolean, default: false },
   submitting: { type: Boolean, default: false },
   processing: { type: Boolean, default: false },
+  actionsBlocked: { type: Boolean, default: false },
   showPreviewAction: { type: Boolean, default: true },
   error: { type: String, default: '' },
 })

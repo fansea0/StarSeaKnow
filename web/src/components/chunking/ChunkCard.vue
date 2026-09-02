@@ -72,7 +72,7 @@
             {{ localChunk.overlapContent }}
           </p>
           <p v-else class="overlap-unavailable" data-testid="overlap-unavailable">
-            {{ localChunk.overlapUnavailableReason || '暂无可补充的上文。' }}
+            {{ overlapUnavailableText }}
           </p>
         </div>
       </div>
@@ -89,8 +89,8 @@
           link
           type="primary"
           data-testid="reindex-chunk"
-          :disabled="actionsDisabled"
-          @click="$emit('reindex', localChunk)"
+          :disabled="actionsDisabled || reindexDisabled"
+          @click="requestReindex"
         >重新建立索引</el-button>
         <el-button
           link
@@ -121,10 +121,11 @@ const props = defineProps({
   chunk: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
   showReindex: { type: Boolean, default: false },
+  reindexDisabled: { type: Boolean, default: false },
   reloadEpoch: { type: Number, default: 0 },
 })
 
-const emit = defineEmits(['updated', 'deleted', 'reload', 'reindex'])
+const emit = defineEmits(['updated', 'deleted', 'reload', 'reindex', 'save-state'])
 const localChunk = reactive({ ...props.chunk })
 const editing = ref(false)
 const editorValue = ref(props.chunk.content || '')
@@ -137,13 +138,51 @@ let saveTimer = null
 let requestGeneration = 0
 let saveInFlight = false
 let queuedSave = false
+let saveError = false
+let destroyed = false
+
+const overlapUnavailableMessages = Object.freeze({
+  NO_AVAILABLE_OVERLAP: '当前分块没有可补充的完整上文。',
+})
 
 const chunkNumber = computed(() => String((Number(localChunk.position) || 0) + 1).padStart(2, '0'))
 const actionsDisabled = computed(() => props.disabled || Number(localChunk.status) === 1)
 const sectionPathText = computed(() => localChunk.sectionPath?.length ? localChunk.sectionPath.join(' / ') : '文档正文')
+const overlapUnavailableText = computed(() => {
+  const code = String(localChunk.overlapUnavailableReason || '').trim()
+  if (!code) return '暂无可补充的上文。'
+  return overlapUnavailableMessages[code] || '暂时无法生成补充上文，请稍后重试。'
+})
 
 function normalizeOverlapTokenLimit(value) {
   return Number.isInteger(value) && value >= 1 && value <= 512 ? value : 40
+}
+
+function currentSnapshot() {
+  return {
+    content: editorValue.value || '',
+    overlapEnabled: overlapEnabled.value,
+    overlapTokenLimit: normalizeOverlapTokenLimit(overlapTokenLimit.value),
+  }
+}
+
+function matchesServer(snapshot = currentSnapshot()) {
+  return snapshot.content === (localChunk.content || '')
+    && snapshot.overlapEnabled === Boolean(localChunk.overlapEnabled)
+    && snapshot.overlapTokenLimit === normalizeOverlapTokenLimit(localChunk.overlapTokenLimit)
+}
+
+function reportSaveState() {
+  if (destroyed) return
+  const dirty = !matchesServer()
+  const pending = Boolean(saveTimer || saveInFlight || queuedSave)
+  emit('save-state', {
+    publicId: localChunk.publicId,
+    dirty,
+    pending,
+    error: saveError,
+    blocking: dirty || pending || saveError,
+  })
 }
 
 watch(
@@ -176,6 +215,7 @@ watch(
     saveTimer = null
     queuedSave = false
     saveStatus.value = ''
+    reportSaveState()
   },
 )
 
@@ -185,6 +225,7 @@ function resetFromServer() {
   saveTimer = null
   saveInFlight = false
   queuedSave = false
+  saveError = false
   Object.assign(localChunk, props.chunk)
   editorValue.value = props.chunk.content || ''
   overlapEnabled.value = Boolean(props.chunk.overlapEnabled)
@@ -192,15 +233,18 @@ function resetFromServer() {
   saveStatus.value = ''
   errorMessage.value = ''
   conflict.value = false
+  reportSaveState()
 }
 
 function queueSave() {
   if (actionsDisabled.value) return
   errorMessage.value = ''
   conflict.value = false
+  saveError = false
   saveStatus.value = ''
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(saveBody, 650)
+  reportSaveState()
 }
 
 function changeOverlapTokenLimit(value) {
@@ -210,9 +254,13 @@ function changeOverlapTokenLimit(value) {
 
 async function saveBody() {
   saveTimer = null
-  if (actionsDisabled.value) return
+  if (actionsDisabled.value) {
+    reportSaveState()
+    return
+  }
   if (saveInFlight) {
     queuedSave = true
+    reportSaveState()
     return
   }
   const snapshot = {
@@ -222,6 +270,8 @@ async function saveBody() {
   }
   if (!snapshot.content.trim()) {
     errorMessage.value = '正文不能为空，请输入内容后再保存。'
+    saveError = true
+    reportSaveState()
     return
   }
 
@@ -229,6 +279,7 @@ async function saveBody() {
   let saveSucceeded = false
   let retryQueuedSave = false
   saveInFlight = true
+  saveError = false
   errorMessage.value = ''
   conflict.value = false
   saveStatus.value = '保存中'
@@ -256,6 +307,7 @@ async function saveBody() {
   } catch (cause) {
     if (generation !== requestGeneration) return
     saveStatus.value = ''
+    saveError = true
     const status = cause?.response?.status
     retryQueuedSave = status === 422
     conflict.value = status === 409
@@ -268,15 +320,28 @@ async function saveBody() {
     }
   } finally {
     saveInFlight = false
-    if (generation !== requestGeneration) return
+    if (generation !== requestGeneration) {
+      reportSaveState()
+      return
+    }
     if (queuedSave && (saveSucceeded || retryQueuedSave)) {
       queuedSave = false
+      reportSaveState()
       await saveBody()
     } else {
       queuedSave = false
-      if (saveSucceeded) saveStatus.value = saveTimer ? '' : '已保存'
+      if (saveSucceeded) {
+        saveError = false
+        saveStatus.value = saveTimer || !matchesServer() ? '' : '已保存'
+      }
+      reportSaveState()
     }
   }
+}
+
+function requestReindex() {
+  if (actionsDisabled.value || props.reindexDisabled) return
+  emit('reindex', localChunk)
 }
 
 async function requestDelete() {
@@ -315,6 +380,7 @@ async function requestDelete() {
 }
 
 onBeforeUnmount(() => {
+  destroyed = true
   requestGeneration += 1
   if (saveTimer) clearTimeout(saveTimer)
 })

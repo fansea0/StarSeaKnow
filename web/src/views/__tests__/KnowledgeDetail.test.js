@@ -122,6 +122,17 @@ describe('KnowledgeDetail', () => {
     await action.trigger('click')
     expect(axios.post).not.toHaveBeenCalled()
   })
+
+  it('uses the MD adaptive chunking name in the unsupported-file explanation', async () => {
+    const wrapper = mountDetail()
+    await flushPromises()
+
+    wrapper.vm.handleFileAction({ id: 31, type: 'pdf', fileName: 'guide.pdf' })
+
+    expect(wrapper.vm.$message.info).toHaveBeenCalledWith(
+      '当前仅支持 MD 自适应分块，其他文件类型暂不支持。',
+    )
+  })
   it('opens a Markdown row in the chunking workspace without the legacy embedding POST', async () => {
     const wrapper = mountDetail()
     await flushPromises()

@@ -439,7 +439,7 @@ export default {
         this.openChunkingWorkspace(row.id)
         return
       }
-      this.$message.info('当前仅支持 Markdown 智能分块，其他文件类型暂不支持。')
+      this.$message.info('当前仅支持 MD 自适应分块，其他文件类型暂不支持。')
     },
     openChunkingWorkspace(fileId, knowledgeId = this.knowledgeId) {
       return this.$router.push({

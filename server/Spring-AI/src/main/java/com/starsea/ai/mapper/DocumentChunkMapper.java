@@ -50,22 +50,6 @@ public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
                                              @Param("knowledgeId") long knowledgeId,
                                              @Param("position") int position);
 
-    int updateContent(@Param("fileId") long fileId,
-                      @Param("tenantId") long tenantId,
-                      @Param("knowledgeId") long knowledgeId,
-                      @Param("chunkPublicId") UUID chunkPublicId,
-                      @Param("content") String content,
-                      @Param("tokenCount") int tokenCount,
-                      @Param("contentHash") String contentHash,
-                      @Param("lockVersion") int lockVersion);
-
-    int invalidateDependent(@Param("fileId") long fileId,
-                            @Param("tenantId") long tenantId,
-                            @Param("knowledgeId") long knowledgeId,
-                            @Param("chunkId") long chunkId,
-                            @Param("sourceChunkId") long sourceChunkId,
-                            @Param("lockVersion") int lockVersion);
-
     int deleteScoped(@Param("fileId") long fileId,
                      @Param("tenantId") long tenantId,
                      @Param("knowledgeId") long knowledgeId,
