@@ -49,12 +49,12 @@ class PlatformTenantUserServiceTest {
         user.setTenantId(7L);
         user.setUsername("root");
         when(tenants.selectById(7L)).thenReturn(tenant);
-        when(users.selectList(any())).thenReturn(List.of(user));
+        when(users.selectByTenantIdForPlatform(7L)).thenReturn(List.of(user));
 
         var result = service.listUsers(7L);
 
         assertEquals(1, result.size());
         assertEquals("root", result.get(0).username());
-        verify(users).selectList(any());
+        verify(users).selectByTenantIdForPlatform(7L);
     }
 }

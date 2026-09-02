@@ -1,6 +1,5 @@
 package com.starsea.platform;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.starsea.ai.auth.AuthErrorCode;
 import com.starsea.ai.auth.AuthException;
 import com.starsea.ai.domain.AppUser;
@@ -24,8 +23,7 @@ public class PlatformTenantUserService {
 
     public List<UserView> listUsers(long tenantId) {
         requireTenant(tenantId);
-        return users.selectList(new QueryWrapper<AppUser>().eq("tenant_id", tenantId)
-                        .orderByAsc("id"))
+        return users.selectByTenantIdForPlatform(tenantId)
                 .stream().map(UserView::from).toList();
     }
 
