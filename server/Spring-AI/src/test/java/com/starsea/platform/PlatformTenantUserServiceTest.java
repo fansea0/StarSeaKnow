@@ -27,7 +27,7 @@ class PlatformTenantUserServiceTest {
         user.setTenantId(7L);
         user.setPasswordHash("existing-hash");
         when(tenants.selectById(7L)).thenReturn(tenant);
-        when(users.selectById(9L)).thenReturn(user);
+        when(users.selectByIdForPlatform(9L)).thenReturn(user);
         when(users.updateById(user)).thenReturn(1);
 
         service.resetPassword(7L, 9L);

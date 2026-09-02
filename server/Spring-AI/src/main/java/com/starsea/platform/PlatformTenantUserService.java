@@ -30,7 +30,7 @@ public class PlatformTenantUserService {
     @Transactional
     public void resetPassword(long tenantId, long userId) {
         requireTenant(tenantId);
-        AppUser user = users.selectById(userId);
+        AppUser user = users.selectByIdForPlatform(userId);
         if (user == null || !Long.valueOf(tenantId).equals(user.getTenantId())) {
             throw new AuthException(AuthErrorCode.CROSS_TENANT, "user not in tenant");
         }

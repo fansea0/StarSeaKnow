@@ -22,6 +22,11 @@ public interface AppUserMapper extends BaseMapper<AppUser> {
 
     @InterceptorIgnore(tenantLine = "true")
     @Select("SELECT id, tenant_id, username, password_hash, display_name, role, status, must_change_password, last_login_at, create_time, update_time " +
+            "FROM app_user WHERE id = #{id}")
+    AppUser selectByIdForPlatform(@Param("id") long id);
+
+    @InterceptorIgnore(tenantLine = "true")
+    @Select("SELECT id, tenant_id, username, password_hash, display_name, role, status, must_change_password, last_login_at, create_time, update_time " +
             "FROM app_user WHERE tenant_id = #{tenantId} ORDER BY id")
     java.util.List<AppUser> selectByTenantIdForPlatform(@Param("tenantId") long tenantId);
 }
