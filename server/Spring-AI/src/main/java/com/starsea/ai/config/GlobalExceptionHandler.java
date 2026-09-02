@@ -4,6 +4,7 @@ import com.starsea.ai.auth.AuthException;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.domain.dto.AjaxResult;
+import com.starsea.ai.model.provider.ModelProviderException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,6 +87,14 @@ public class GlobalExceptionHandler
     {
         String message = exception.getReason() == null ? exception.getMessage() : exception.getReason();
         return ResponseEntity.status(exception.getStatusCode()).body(AjaxResult.error(message));
+    }
+
+    @ExceptionHandler(ModelProviderException.class)
+    public ResponseEntity<AjaxResult> handleModelProvider(ModelProviderException exception)
+    {
+        AjaxResult result = AjaxResult.error(exception.getMessage());
+        result.put("errorCode", exception.code());
+        return ResponseEntity.status(exception.status()).body(result);
     }
 
     @ExceptionHandler(FileProcessingService.OwnershipException.class)

@@ -117,6 +117,8 @@ agent（可变草稿） ── agent_knowledge ── knowledge
 | `custom_name` | nullable | 自定义厂商名称 |
 | `custom_icon` | nullable | 自定义厂商图标 |
 | `base_url` | NOT NULL | 租户实际使用的 Base URL |
+| `protocol_type` | NOT NULL | 当前连接协议；首期为 `OPENAI_COMPATIBLE` |
+| `auth_type` | NOT NULL | `API_KEY` 或 `NONE`；决定密钥字段约束与请求认证方式 |
 | `selectable_models` | JSONB, NOT NULL, default `[]` | 当前连接可供 Agent 选择的模型 |
 | `api_key_ciphertext` | 条件必填 | AES-GCM 密文；`auth_type=API_KEY` 时必填 |
 | `api_key_nonce` | 条件必填 | 每次加密独立生成的随机 nonce |

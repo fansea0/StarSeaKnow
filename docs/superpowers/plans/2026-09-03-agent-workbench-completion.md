@@ -30,8 +30,8 @@
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/model/provider/ModelSuggestion.java`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/model/provider/ModelProviderCatalog.java`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/model/provider/TenantModelProvider.java`
-- Create: `server/Spring-AI/src/main/java/com/starsea/ai/model/provider/ModelProviderCatalogMapper.java`
-- Create: `server/Spring-AI/src/main/java/com/starsea/ai/model/provider/TenantModelProviderMapper.java`
+- Create: `server/Spring-AI/src/main/java/com/starsea/ai/mapper/ModelProviderCatalogMapper.java`
+- Create: `server/Spring-AI/src/main/java/com/starsea/ai/mapper/TenantModelProviderMapper.java`
 - Test: `server/Spring-AI/src/test/java/com/starsea/ai/model/provider/V11TenantModelProviderMigrationPostgresIT.java`
 
 **Interfaces:**
