@@ -36,7 +36,7 @@ public class GlobalExceptionHandler
                                                           HttpServletRequest request)
     {
         String requestURI = request.getRequestURI();
-        log.error("请求地址'{}',不支持'{}'请求", requestURI, e.getMethod());
+        log.warn("event=request_method_not_supported path={} method={}", requestURI, e.getMethod());
         return AjaxResult.error(e.getMessage());
     }
 

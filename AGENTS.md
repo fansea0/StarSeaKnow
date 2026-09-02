@@ -26,6 +26,15 @@
 - 如果仓库重新引入自动化测试，涉及相应模块的功能修改还必须运行对应测试套件。
 - 构建或测试产生的警告需要评估；可能影响正确性、安全性或发布的警告必须在提交前处理。
 
+## 后端日志与排障
+
+- 后端当前综合日志位于 `server/Spring-AI/logs/application.log`，仅 ERROR 日志位于 `server/Spring-AI/logs/error.log`。
+- 排查最新后端异常时，先读取 `error.log` 末尾，再按同一时间点读取 `application.log` 补齐 INFO、WARN 和调用上下文；需要更早记录时读取 `logs/archive/` 下的压缩滚动日志。
+- `server/Spring-AI/logs/` 是运行时目录，禁止提交。默认保留 30 天，单文件达到 100 MB 时滚动，综合日志与错误日志合计最多约 2 GB。
+- 可通过 `LOG_PATH`、`LOG_MAX_FILE_SIZE`、`LOG_MAX_HISTORY`、`LOG_APP_TOTAL_SIZE_CAP`、`LOG_ERROR_TOTAL_SIZE_CAP` 和 `LOG_ASYNC_QUEUE_SIZE` 覆盖日志路径、滚动保留与异步队列参数。
+- 临时调试业务代码时使用 `LOG_LEVEL_APP=debug` 启动；Spring AI 对话细节使用 `LOG_LEVEL_SPRING_AI=debug` 单独开启，避免长期产生高频 DEBUG 日志。
+- 日志消息不得记录密码、访问令牌、API Key、完整请求正文或其他敏感数据；ERROR 必须保留异常对象以输出堆栈。
+
 ## 仓库卫生
 
 - 提交前使用 `git status --short` 和 `git diff --check` 检查变更。

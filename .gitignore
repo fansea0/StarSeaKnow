@@ -62,3 +62,6 @@ Thumbs.db
 
 # Ignore local generated resource files
 server/Spring-AI/src/main/resources/file/
+
+# Runtime logs (active files and compressed rolling archives)
+server/Spring-AI/logs/

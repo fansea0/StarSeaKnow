@@ -4,6 +4,7 @@ import com.starsea.ai.auth.RequireLogin;
 import com.starsea.ai.auth.RequireRole;
 import com.starsea.ai.domain.dto.AjaxResult;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,6 +25,7 @@ import java.util.UUID;
  * @Date:2025/5/10 14:05
  */
 @RequiredArgsConstructor
+@Slf4j
 @RestController
 @RequestMapping("/tool")
 @RequireLogin
@@ -35,7 +37,8 @@ public class ToolController {
     @RequireRole("tenant_admin")
     @PostMapping(value = "/convmd")
     public AjaxResult createMarkdownFile(String fileName, @RequestBody String mdContent) {
-        System.out.println(mdContent);
+        log.debug("event=markdown_export_requested content_length={}",
+                mdContent == null ? 0 : mdContent.length());
         // 生成唯一的文件名，避免文件名冲突
         if (fileName == null || fileName.isEmpty()) {
             fileName = UUID.randomUUID().toString() + ".md";
@@ -55,7 +58,7 @@ public class ToolController {
             // 返回成功响应，包含文件名
             return AjaxResult.success("md文件生成成功!",outputPath+fileName);
         } catch (IOException e) {
-            // 处理IO异常
+            log.error("event=markdown_export_failed", e);
             return AjaxResult.error("md文件生成异常");
         }
     }

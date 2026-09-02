@@ -43,9 +43,13 @@ spring:
 
 
 logging:
-  level: # 配置启动查看对话日志
-    org.springframework.ai.chat.client.advisor: debug
-    com.starsea.ai: debug
+  file:
+    # 默认写入 server/Spring-AI/logs；部署时可通过 LOG_PATH 指向持久化目录。
+    path: ${LOG_PATH:${user.dir}/logs}
+  level:
+    root: ${LOG_LEVEL_ROOT:info}
+    com.starsea: ${LOG_LEVEL_APP:info}
+    org.springframework.ai.chat.client.advisor: ${LOG_LEVEL_SPRING_AI:info}
 mybatis-plus:
   configuration:
     cache-enabled: true

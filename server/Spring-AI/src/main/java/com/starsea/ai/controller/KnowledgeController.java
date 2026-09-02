@@ -97,7 +97,7 @@ public class KnowledgeController {
             key = "T(com.starsea.ai.auth.AuthContext).current().getTenantId()")
     @GetMapping("/list/vo")
     public AjaxResult listAllKnowledgeVo() {
-        log.info("查询所有知识库列表 - " + System.currentTimeMillis());
+        log.debug("event=knowledge_list_requested");
         List<Knowledge> knowledgeList = knowledgeService.list();
         List<KnowledgeVo> list = knowledgeList.stream().map(k -> {
             long fileCount = knowledgeFileService.count(new LambdaQueryWrapper<KnowledgeFile>().eq(KnowledgeFile::getKnowledgeId, k.getId()));
