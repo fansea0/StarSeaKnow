@@ -28,10 +28,11 @@
 
 ## 后端日志与排障
 
-- 后端当前综合日志位于 `server/Spring-AI/logs/application.log`，仅 ERROR 日志位于 `server/Spring-AI/logs/error.log`。
-- 排查最新后端异常时，先读取 `error.log` 末尾，再按同一时间点读取 `application.log` 补齐 INFO、WARN 和调用上下文；需要更早记录时读取 `logs/archive/` 下的压缩滚动日志。
-- `server/Spring-AI/logs/` 是运行时目录，禁止提交。默认保留 30 天，单文件达到 100 MB 时滚动，综合日志与错误日志合计最多约 2 GB。
-- 可通过 `LOG_PATH`、`LOG_MAX_FILE_SIZE`、`LOG_MAX_HISTORY`、`LOG_APP_TOTAL_SIZE_CAP`、`LOG_ERROR_TOTAL_SIZE_CAP` 和 `LOG_ASYNC_QUEUE_SIZE` 覆盖日志路径、滚动保留与异步队列参数。
+- default/dev 环境的综合日志位于 `server/Spring-AI/logs/application.log`，仅 ERROR 日志位于 `server/Spring-AI/logs/error.log`；每次启动都会清空上一次运行的内容。
+- prod 环境每天分别写入 `application.YYYY-MM-DD.log` 和 `error.YYYY-MM-DD.log`，跨天后旧文件压缩为 `.log.gz`。生产部署必须显式设置 `SPRING_PROFILES_ACTIVE=prod`。
+- 排查最新后端异常时，dev 先读取 `error.log` 末尾；prod 先按文件日期查找最新的 `error.*.log`，再读取同日期的 `application.*.log` 补齐 INFO、WARN 和调用上下文。
+- `server/Spring-AI/logs/` 是运行时目录，禁止提交。prod 默认保留 30 天，综合日志与错误日志合计最多约 2 GB。
+- 可通过 `LOG_PATH`、`LOG_MAX_HISTORY`、`LOG_APP_TOTAL_SIZE_CAP`、`LOG_ERROR_TOTAL_SIZE_CAP` 和 `LOG_ASYNC_QUEUE_SIZE` 覆盖日志路径、滚动保留与异步队列参数。
 - 临时调试业务代码时使用 `LOG_LEVEL_APP=debug` 启动；Spring AI 对话细节使用 `LOG_LEVEL_SPRING_AI=debug` 单独开启，避免长期产生高频 DEBUG 日志。
 - 日志消息不得记录密码、访问令牌、API Key、完整请求正文或其他敏感数据；ERROR 必须保留异常对象以输出堆栈。
 

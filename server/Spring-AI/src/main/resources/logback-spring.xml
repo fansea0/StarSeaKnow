@@ -3,7 +3,6 @@
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
     <property name="LOG_PATH" value="${LOG_PATH:-${user.dir}/logs}"/>
-    <property name="LOG_MAX_FILE_SIZE" value="${LOG_MAX_FILE_SIZE:-100MB}"/>
     <property name="LOG_MAX_HISTORY" value="${LOG_MAX_HISTORY:-30}"/>
     <property name="LOG_APP_TOTAL_SIZE_CAP" value="${LOG_APP_TOTAL_SIZE_CAP:-1536MB}"/>
     <property name="LOG_ERROR_TOTAL_SIZE_CAP" value="${LOG_ERROR_TOTAL_SIZE_CAP:-512MB}"/>
@@ -18,40 +17,63 @@
         </encoder>
     </appender>
 
-    <appender name="APPLICATION_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_PATH}/application.log</file>
-        <encoder>
-            <pattern>${LOG_PATTERN}</pattern>
-            <charset>UTF-8</charset>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_PATH}/archive/application.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
-            <maxFileSize>${LOG_MAX_FILE_SIZE}</maxFileSize>
-            <maxHistory>${LOG_MAX_HISTORY}</maxHistory>
-            <totalSizeCap>${LOG_APP_TOTAL_SIZE_CAP}</totalSizeCap>
-            <cleanHistoryOnStart>true</cleanHistoryOnStart>
-        </rollingPolicy>
-    </appender>
+    <springProfile name="dev | default">
+        <appender name="APPLICATION_FILE" class="ch.qos.logback.core.FileAppender">
+            <file>${LOG_PATH}/application.log</file>
+            <append>false</append>
+            <encoder>
+                <pattern>${LOG_PATTERN}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+        </appender>
 
-    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_PATH}/error.log</file>
-        <filter class="ch.qos.logback.classic.filter.LevelFilter">
-            <level>ERROR</level>
-            <onMatch>ACCEPT</onMatch>
-            <onMismatch>DENY</onMismatch>
-        </filter>
-        <encoder>
-            <pattern>${LOG_PATTERN}</pattern>
-            <charset>UTF-8</charset>
-        </encoder>
-        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_PATH}/archive/error.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
-            <maxFileSize>${LOG_MAX_FILE_SIZE}</maxFileSize>
-            <maxHistory>${LOG_MAX_HISTORY}</maxHistory>
-            <totalSizeCap>${LOG_ERROR_TOTAL_SIZE_CAP}</totalSizeCap>
-            <cleanHistoryOnStart>true</cleanHistoryOnStart>
-        </rollingPolicy>
-    </appender>
+        <appender name="ERROR_FILE" class="ch.qos.logback.core.FileAppender">
+            <file>${LOG_PATH}/error.log</file>
+            <append>false</append>
+            <filter class="ch.qos.logback.classic.filter.LevelFilter">
+                <level>ERROR</level>
+                <onMatch>ACCEPT</onMatch>
+                <onMismatch>DENY</onMismatch>
+            </filter>
+            <encoder>
+                <pattern>${LOG_PATTERN}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+        </appender>
+    </springProfile>
+
+    <springProfile name="prod">
+        <appender name="APPLICATION_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <encoder>
+                <pattern>${LOG_PATTERN}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>${LOG_PATH}/application.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+                <maxHistory>${LOG_MAX_HISTORY}</maxHistory>
+                <totalSizeCap>${LOG_APP_TOTAL_SIZE_CAP}</totalSizeCap>
+                <cleanHistoryOnStart>true</cleanHistoryOnStart>
+            </rollingPolicy>
+        </appender>
+
+        <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <filter class="ch.qos.logback.classic.filter.LevelFilter">
+                <level>ERROR</level>
+                <onMatch>ACCEPT</onMatch>
+                <onMismatch>DENY</onMismatch>
+            </filter>
+            <encoder>
+                <pattern>${LOG_PATTERN}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>${LOG_PATH}/error.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+                <maxHistory>${LOG_MAX_HISTORY}</maxHistory>
+                <totalSizeCap>${LOG_ERROR_TOTAL_SIZE_CAP}</totalSizeCap>
+                <cleanHistoryOnStart>true</cleanHistoryOnStart>
+            </rollingPolicy>
+        </appender>
+    </springProfile>
 
     <appender name="ASYNC_APPLICATION" class="ch.qos.logback.classic.AsyncAppender">
         <queueSize>${LOG_ASYNC_QUEUE_SIZE}</queueSize>
