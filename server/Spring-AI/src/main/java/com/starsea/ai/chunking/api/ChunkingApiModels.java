@@ -16,15 +16,29 @@ public final class ChunkingApiModels {
                                  boolean replaceEditedDrafts, int lockVersion) {
     }
 
-    public record EditChunkRequest(String content, Integer lockVersion) {
+    public record EditChunkRequest(String content, Boolean overlapEnabled,
+                                   Integer overlapTokenLimit, Integer lockVersion) {
+        public EditChunkRequest(String content, Integer lockVersion) {
+            this(content, false, 40, lockVersion);
+        }
     }
 
-    public record ConfirmRequest(boolean overlapEnabled, int overlapTokens, int lockVersion) {
+    public record ConfirmRequest(int lockVersion) {
     }
 
     public record ChunkResponse(UUID publicId, int position, String content,
                                 List<String> sectionPath, Map<String, Object> sourceLocator,
-                                int tokenCount, int status, boolean isModified, int lockVersion) {
+                                int tokenCount, int status, boolean isModified, int lockVersion,
+                                boolean overlapEnabled, int overlapTokenLimit,
+                                String overlapContent, int overlapTokenCount,
+                                String overlapUnavailableReason) {
+        public ChunkResponse(UUID publicId, int position, String content,
+                             List<String> sectionPath, Map<String, Object> sourceLocator,
+                             int tokenCount, int status, boolean isModified, int lockVersion) {
+            this(publicId, position, content, sectionPath, sourceLocator, tokenCount,
+                    status, isModified, lockVersion, false, 40, null, 0, null);
+        }
+
         public ChunkResponse {
             sectionPath = sectionPath == null ? List.of() : List.copyOf(sectionPath);
             sourceLocator = sourceLocator == null ? Map.of() : Map.copyOf(sourceLocator);

@@ -256,6 +256,8 @@ class ChunkPreviewWorkerTest {
                 saved.stream().map(DocumentChunk::getStatus).toList());
         assertTrue(saved.stream().allMatch(chunk -> !chunk.getContent().isBlank()));
         assertTrue(saved.stream().allMatch(chunk -> chunk.getPublicId() != null));
+        assertTrue(saved.stream().noneMatch(chunk -> Boolean.TRUE.equals(chunk.getOverlapEnabled())));
+        assertTrue(saved.stream().allMatch(chunk -> chunk.getOverlapTokenLimit() == 40));
         assertTrue(saved.stream().allMatch(chunk -> chunk.getOverlapTokenCount() == 0));
         assertTrue(saved.stream().allMatch(chunk -> chunk.getIndexContent() == null));
 

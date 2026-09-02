@@ -104,14 +104,14 @@ class ChunkVectorServiceTest {
         mvc.perform(post("/knowledge/10/files/20/confirm")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"overlapEnabled":true,"overlapTokens":40,"lockVersion":3}
+                                {"lockVersion":3}
                                 """))
                 .andExpect(status().isAccepted());
         mvc.perform(post("/knowledge/10/files/20/chunks/" + FIRST_PUBLIC_ID + "/reindex"))
                 .andExpect(status().isAccepted());
 
         verify(vectorService).confirm(KNOWLEDGE_ID, FILE_ID,
-                new ConfirmRequest(true, 40, 3));
+                new ConfirmRequest(3));
         verify(vectorService).reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID);
     }
 
@@ -130,7 +130,7 @@ class ChunkVectorServiceTest {
         mvc.perform(post("/knowledge/10/files/20/confirm")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"overlapEnabled":false,"overlapTokens":40,"lockVersion":3}
+                                {"lockVersion":3}
                                 """))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.msg").value(
@@ -145,7 +145,7 @@ class ChunkVectorServiceTest {
 
         ChunkingException exception = assertThrows(ChunkingException.class,
                 () -> fixture.service.confirm(KNOWLEDGE_ID, FILE_ID,
-                        new ConfirmRequest(true, 40, 3)));
+                        new ConfirmRequest(3)));
 
         assertEquals(422, exception.status().value());
         assertEquals("源文件已发生变化，请重新生成分块预览", exception.getMessage());
@@ -177,7 +177,7 @@ class ChunkVectorServiceTest {
     }
 
     @Test
-    void confirmation_commits_context_and_indexing_before_dispatch() throws Exception {
+    void confirmation_commits_indexing_without_mutating_legacy_context_policy() throws Exception {
         DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "first edited body");
         DocumentChunk second = chunk(2L, SECOND_PUBLIC_ID, ChunkStatus.ACTIVE, 4, "second body");
         Fixture fixture = fixture(PipelineState.ADJUSTING, 3, sourceHash(), List.of(first, second));
@@ -190,13 +190,10 @@ class ChunkVectorServiceTest {
                 KNOWLEDGE_ID, FILE_ID, PipelineState.CONFIRMED, PipelineState.VECTORIZING,
                 5, 0, null, null));
 
-        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
 
         assertEquals(1, fixture.transactionManager.commits());
-        var processingCaptor = org.mockito.ArgumentCaptor.forClass(FileProcessing.class);
-        verify(fixture.processingMapper).update(processingCaptor.capture(), any(Wrapper.class));
-        assertEquals(Map.of("overlapEnabled", true, "overlapTokens", 40),
-                processingCaptor.getValue().getContextPolicy());
+        verify(fixture.processingMapper, never()).update(any(), any(Wrapper.class));
         var chunkCaptor = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
         verify(fixture.chunkMapper, times(2)).update(chunkCaptor.capture(), any(Wrapper.class));
         assertTrue(chunkCaptor.getAllValues().stream()
@@ -215,6 +212,18 @@ class ChunkVectorServiceTest {
     }
 
     @Test
+    void chunk_snapshot_retains_per_chunk_settings_for_batch_single_and_failure_retry() {
+        DocumentChunk chunk = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.INDEXING, 4, "body");
+        chunk.setOverlapEnabled(true);
+        chunk.setOverlapTokenLimit(73);
+
+        DocumentChunk detached = ChunkVectorWorker.ChunkSnapshot.fromIndexing(chunk).detached();
+
+        assertEquals(true, detached.getOverlapEnabled());
+        assertEquals(73, detached.getOverlapTokenLimit());
+    }
+
+    @Test
     void completed_file_rejects_batch_confirmation_without_mutating_existing_index() throws Exception {
         DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.ACTIVE, 2, "first body");
         DocumentChunk second = chunk(2L, SECOND_PUBLIC_ID, ChunkStatus.ACTIVE, 4, "second body");
@@ -222,7 +231,7 @@ class ChunkVectorServiceTest {
 
         ChunkingException failure = assertThrows(ChunkingException.class,
                 () -> fixture.service.confirm(KNOWLEDGE_ID, FILE_ID,
-                        new ConfirmRequest(false, 40, 7)));
+                        new ConfirmRequest(7)));
 
         assertEquals(409, failure.status().value());
         verify(fixture.stateService, never()).transition(
@@ -238,7 +247,7 @@ class ChunkVectorServiceTest {
         fixture.processing.setFailedFromState(PipelineState.CHUNKING.code());
 
         assertThrows(ChunkingException.class, () -> fixture.service.confirm(
-                KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(false, 40, 3)));
+                KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3)));
 
         verify(fixture.stateService, never()).transition(
                 anyLong(), anyLong(), any(), any(), anyInt());
@@ -254,7 +263,7 @@ class ChunkVectorServiceTest {
                 KNOWLEDGE_ID, FILE_ID, PipelineState.FAILED, PipelineState.VECTORIZING,
                 4, 0, PipelineState.VECTORIZING.code(), "old failure"));
 
-        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(false, 40, 3));
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
 
         verify(fixture.stateService).transition(KNOWLEDGE_ID, FILE_ID,
                 PipelineState.FAILED, PipelineState.VECTORIZING, 3);
@@ -314,7 +323,7 @@ class ChunkVectorServiceTest {
         when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(List.of(first));
         when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
-        when(enricher.enrich(any(), eq(new ContextPolicy(true, 40)), eq(512)))
+        when(enricher.enrich(any(), eq(512)))
                 .thenReturn(List.of(new EnrichedChunk(first, null, "previous sentence.",
                         3, "标题：Guide\n上文：previous sentence.\n\nbody")));
         when(tokenCounter.count(any())).thenReturn(20);
@@ -371,7 +380,7 @@ class ChunkVectorServiceTest {
         when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(List.of(first, second));
         when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
-        when(enricher.enrich(any(), any(), eq(512))).thenReturn(List.of(
+        when(enricher.enrich(any(), eq(512))).thenReturn(List.of(
                 new EnrichedChunk(first, null, null, 0, "edited first"),
                 new EnrichedChunk(second, null, null, 0, "edited second")));
         when(tokenCounter.count(any())).thenReturn(10);
@@ -415,7 +424,7 @@ class ChunkVectorServiceTest {
         when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(List.of(first));
         when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
-        when(enricher.enrich(any(), eq(ContextPolicy.defaults()), eq(400)))
+        when(enricher.enrich(any(), eq(400)))
                 .thenReturn(List.of(new EnrichedChunk(first, null, null, 0, "too many tokens")));
         when(tokenCounter.count("too many tokens")).thenReturn(401);
         when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
@@ -455,7 +464,7 @@ class ChunkVectorServiceTest {
         when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(List.of(first));
         when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
-        when(enricher.enrich(any(), eq(ContextPolicy.defaults()), eq(512)))
+        when(enricher.enrich(any(), eq(512)))
                 .thenReturn(List.of(new EnrichedChunk(first, null, null, 0, "body")));
         when(tokenCounter.count("body")).thenReturn(2);
         when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
@@ -492,7 +501,7 @@ class ChunkVectorServiceTest {
         when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(List.of(target, draft));
         when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
-        when(enricher.enrich(any(), eq(ContextPolicy.defaults()), eq(512)))
+        when(enricher.enrich(any(), eq(512)))
                 .thenReturn(List.of(new EnrichedChunk(target, null, null, 0, "body")));
         when(tokenCounter.count("body")).thenReturn(2);
         when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
@@ -501,7 +510,7 @@ class ChunkVectorServiceTest {
         ChunkVectorWorker.ChunkSnapshot targetSnapshot =
                 ChunkVectorWorker.ChunkSnapshot.fromIndexing(target);
         ChunkVectorWorker.SingleJob job = new ChunkVectorWorker.SingleJob(
-                TENANT_ID, KNOWLEDGE_ID, FILE_ID, 8, "hash", ContextPolicy.defaults(), 512,
+                TENANT_ID, KNOWLEDGE_ID, FILE_ID, 8, "hash", 512,
                 new ChunkVectorWorker.FileSnapshot(
                         FILE_PUBLIC_ID, tempDir.resolve("source.md").toString(), "md"),
                 List.of(targetSnapshot, ChunkVectorWorker.ChunkSnapshot.current(draft)),
@@ -521,7 +530,7 @@ class ChunkVectorServiceTest {
             throws Exception {
         TopologyFixture fixture = topologyFixture(true);
 
-        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
 
         assertEquals(2, fixture.transactionManager.begins());
         assertEquals(2, fixture.transactionManager.commits());
@@ -595,7 +604,7 @@ class ChunkVectorServiceTest {
         fixture.chunk.setOverlapTokenCount(9);
         fixture.chunk.setIndexContent("stale index");
         fixture.chunk.setLastError("stale error");
-        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
         fixture.chunk.setContent("mutated backing body");
         fixture.chunk.getSectionPath().set(0, "Mutated");
         fixture.dispatched.get().run();
@@ -612,7 +621,7 @@ class ChunkVectorServiceTest {
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
-        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
         fixture.chunk.setLockVersion(99);
         fixture.chunk.setContent("concurrent batch edit");
         fixture.dispatched.get().run();
@@ -684,7 +693,7 @@ class ChunkVectorServiceTest {
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
-        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(true, 40, 3));
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
         fixture.chunk.setStatus(ChunkStatus.ACTIVE.code());
         fixture.chunk.setLockVersion(99);
         fixture.chunk.setContent("concurrent active body");
@@ -815,7 +824,7 @@ class ChunkVectorServiceTest {
                             PipelineState.VECTORIZING, PipelineState.ADJUSTING,
                             lockVersion + 1, processing.getProgress(), null, null);
                 });
-        when(enricher.enrich(any(), any(), anyInt())).thenAnswer(invocation -> {
+        when(enricher.enrich(any(), anyInt())).thenAnswer(invocation -> {
             assertFalse(transactionManager.active());
             assertEquals(PipelineState.VECTORIZING.code(), processing.getPipelineState());
             enrichCalls[0]++;
@@ -949,7 +958,7 @@ class ChunkVectorServiceTest {
         List<ChunkVectorWorker.ChunkSnapshot> snapshots = chunks.stream()
                 .map(ChunkVectorWorker.ChunkSnapshot::fromIndexing).toList();
         return new ChunkVectorWorker.BatchJob(TENANT_ID, KNOWLEDGE_ID, FILE_ID,
-                fileLockVersion, "hash", policy, 512,
+                fileLockVersion, "hash", 512,
                 new ChunkVectorWorker.FileSnapshot(
                         FILE_PUBLIC_ID, tempDir.resolve("source.md").toString(), "md"),
                 snapshots, snapshots);
@@ -968,7 +977,7 @@ class ChunkVectorServiceTest {
         ChunkVectorWorker.ChunkSnapshot snapshot =
                 ChunkVectorWorker.ChunkSnapshot.fromIndexing(chunk);
         return new ChunkVectorWorker.SingleJob(TENANT_ID, KNOWLEDGE_ID, FILE_ID,
-                fileLockVersion, "hash", policy, maxTokens,
+                fileLockVersion, "hash", maxTokens,
                 new ChunkVectorWorker.FileSnapshot(
                         FILE_PUBLIC_ID, tempDir.resolve("source.md").toString(), "md"),
                 List.of(snapshot), snapshot);

@@ -30,6 +30,8 @@ public class DocumentChunk implements Serializable {
     private Long fileId;
     private Integer position;
     private String content;
+    private Boolean overlapEnabled;
+    private Integer overlapTokenLimit;
     private String overlapContent;
     private Long overlapSourceChunkId;
     private Integer overlapTokenCount;

@@ -19,6 +19,35 @@ class ChunkContextEnricherTest {
     private final DefaultChunkContextEnricher enricher = new DefaultChunkContextEnricher(new CharacterTokenCounter());
 
     @Test
+    void per_chunk_enabled_setting_overrides_disabled_legacy_file_policy() {
+        DocumentChunk first = chunk(1L, 0, List.of(), "Clean source.",
+                "DOCUMENT_START", "PARAGRAPH_END");
+        first.setOverlapContent("poisoned derived overlap");
+        DocumentChunk second = chunk(2L, 1, List.of(), "Body",
+                "PARAGRAPH_END", "PARAGRAPH_END");
+        second.setOverlapEnabled(true);
+        second.setOverlapTokenLimit(40);
+
+        EnrichedChunk enriched = enricher.enrich(List.of(first, second), 512).get(1);
+
+        assertEquals("Clean source.", enriched.overlapContent());
+    }
+
+    @Test
+    void per_chunk_disabled_setting_overrides_enabled_legacy_file_policy() {
+        DocumentChunk first = chunk(1L, 0, List.of(), "Previous sentence.",
+                "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk second = chunk(2L, 1, List.of(), "Body",
+                "PARAGRAPH_END", "PARAGRAPH_END");
+        second.setOverlapEnabled(false);
+        second.setOverlapTokenLimit(40);
+
+        EnrichedChunk enriched = enricher.enrich(List.of(first, second), 512).get(1);
+
+        assertNull(enriched.overlapContent());
+    }
+
+    @Test
     void disabled_policy_returns_title_and_edited_body_without_overlap() {
         DocumentChunk first = chunk(11L, 0, List.of("招生录取类问题"), "第一段完整句。", "DOCUMENT_START", "PARAGRAPH_END");
         DocumentChunk second = chunk(12L, 1, List.of("招生录取类问题"), "编辑后的正文", "PARAGRAPH_END", "PARAGRAPH_END");

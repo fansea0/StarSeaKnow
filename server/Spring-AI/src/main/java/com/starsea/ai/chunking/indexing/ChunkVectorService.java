@@ -5,7 +5,6 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingApiModels.ConfirmRequest;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkStatus;
-import com.starsea.ai.chunking.model.ContextPolicy;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.domain.DocumentChunk;
@@ -29,7 +28,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -81,11 +79,10 @@ public class ChunkVectorService {
         if (request == null) {
             throw ChunkingException.unprocessable("Confirmation settings are required");
         }
-        ContextPolicy policy = contextPolicy(request.overlapEnabled(), request.overlapTokens());
         long tenantId = requireTenantId();
         SourceSnapshot source = readSourceOutsideTransaction(tenantId, knowledgeId, fileId);
         ChunkVectorWorker.BatchJob job = transactions.execute(status -> prepareBatch(
-                tenantId, knowledgeId, fileId, request.lockVersion(), policy, source));
+                tenantId, knowledgeId, fileId, request.lockVersion(), source));
         if (job == null) {
             throw new IllegalStateException("Vectorization preparation returned no job");
         }
@@ -127,8 +124,7 @@ public class ChunkVectorService {
     }
 
     private ChunkVectorWorker.BatchJob prepareBatch(long tenantId, long knowledgeId, long fileId,
-                                                     int lockVersion, ContextPolicy policy,
-                                                     SourceSnapshot source) {
+                                                     int lockVersion, SourceSnapshot source) {
         FileProcessing processing = requireLockedProcessing(tenantId, knowledgeId, fileId);
         PipelineState current = pipelineState(processing);
         if (!Integer.valueOf(lockVersion).equals(processing.getLockVersion())) {
@@ -160,17 +156,6 @@ public class ChunkVectorService {
             requireStableChunk(chunk);
         }
 
-        FileProcessing contextPatch = new FileProcessing();
-        contextPatch.setContextPolicy(contextPolicyMap(policy));
-        int contextUpdated = processingMapper.update(contextPatch,
-                processingScope(fileId, tenantId, knowledgeId)
-                        .eq("pipeline_state", current.code())
-                        .eq("lock_version", lockVersion)
-                        .eq("source_hash", source.hash()));
-        if (contextUpdated != 1) {
-            throw ChunkingException.conflict("Pipeline state or source snapshot changed concurrently");
-        }
-
         int vectorizingLockVersion;
         if (current == PipelineState.FAILED) {
             vectorizingLockVersion = stateService.transition(knowledgeId, fileId,
@@ -188,7 +173,7 @@ public class ChunkVectorService {
                 .toList();
         int maxTokens = ChunkVectorWorker.configuredMaximum(processing.getPolicySnapshot());
         return new ChunkVectorWorker.BatchJob(tenantId, knowledgeId, fileId,
-                vectorizingLockVersion, source.hash(), policy, maxTokens,
+                vectorizingLockVersion, source.hash(), maxTokens,
                 source.file(), snapshots, snapshots);
     }
 
@@ -236,7 +221,7 @@ public class ChunkVectorService {
                         : ChunkVectorWorker.ChunkSnapshot.current(chunk))
                 .toList();
         return new ChunkVectorWorker.SingleJob(tenantId, knowledgeId, fileId,
-                vectorizingLockVersion, source.hash(), readContextPolicy(processing),
+                vectorizingLockVersion, source.hash(),
                 ChunkVectorWorker.configuredMaximum(processing.getPolicySnapshot()),
                 source.file(), allSnapshots, targetSnapshot);
     }
@@ -316,34 +301,6 @@ public class ChunkVectorService {
                 && Long.valueOf(fileId).equals(processing.getFileId())
                 && Long.valueOf(tenantId).equals(processing.getTenantId())
                 && Long.valueOf(knowledgeId).equals(processing.getKnowledgeId());
-    }
-
-    private ContextPolicy contextPolicy(boolean enabled, int overlapTokens) {
-        try {
-            return new ContextPolicy(enabled, overlapTokens);
-        } catch (IllegalArgumentException exception) {
-            throw ChunkingException.unprocessable(exception.getMessage());
-        }
-    }
-
-    private ContextPolicy readContextPolicy(FileProcessing processing) {
-        Map<String, Object> values = processing.getContextPolicy();
-        boolean enabled = values != null && Boolean.TRUE.equals(values.get("overlapEnabled"));
-        Object configured = values == null ? null : values.get("overlapTokens");
-        int overlapTokens = configured instanceof Number number ? number.intValue() : 40;
-        return contextPolicy(enabled, overlapTokens);
-    }
-
-    private Map<String, Object> contextPolicyMap(ContextPolicy policy) {
-        return Map.of("overlapEnabled", policy.enabled(), "overlapTokens", policy.overlapTokens());
-    }
-
-    private UpdateWrapper<FileProcessing> processingScope(long fileId, long tenantId,
-                                                           long knowledgeId) {
-        return new UpdateWrapper<FileProcessing>()
-                .eq("file_id", fileId)
-                .eq("tenant_id", tenantId)
-                .eq("knowledge_id", knowledgeId);
     }
 
     private void requireStableChunk(DocumentChunk chunk) {

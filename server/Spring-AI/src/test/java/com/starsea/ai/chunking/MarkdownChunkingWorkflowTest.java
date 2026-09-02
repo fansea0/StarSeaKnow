@@ -122,12 +122,19 @@ class MarkdownChunkingWorkflowTest {
                     .findFirst()
                     .orElseThrow();
             assertQ1SourceRange(q1, uploadedSource);
+            List<DocumentChunk> overlapPair = continuousPairs(repository.chunks).stream()
+                    .findFirst().orElseThrow(() -> new AssertionError(
+                            "the fixture must produce adjacent chunks under one heading"));
             assertTrue(continuousPairs(repository.chunks).size() >= 1,
                     "the fixture must produce adjacent chunks under one heading");
 
             String editedBody = q1.getContent() + "\n\n自主招生咨询专线已经开通。";
             services.commands().edit(KNOWLEDGE_ID, FILE_ID, q1.getPublicId(),
-                    new EditChunkRequest(editedBody, q1.getLockVersion()));
+                    new EditChunkRequest(editedBody, false, 40, q1.getLockVersion()));
+            DocumentChunk overlapTarget = overlapPair.get(1);
+            services.commands().edit(KNOWLEDGE_ID, FILE_ID, overlapTarget.getPublicId(),
+                    new EditChunkRequest(overlapTarget.getContent(), true, 40,
+                            overlapTarget.getLockVersion()));
             DocumentChunk deleted = repository.chunks.stream()
                     .filter(chunk -> chunk != q1)
                     .filter(chunk -> !chunk.getSectionPath().contains("上下文连续性测试"))
@@ -141,13 +148,12 @@ class MarkdownChunkingWorkflowTest {
             assertFalse(repository.chunks.contains(deleted));
 
             services.vectors().confirm(KNOWLEDGE_ID, FILE_ID,
-                    new ConfirmRequest(true, 40, repository.processing.getLockVersion()));
+                    new ConfirmRequest(repository.processing.getLockVersion()));
 
             assertEquals(PipelineState.COMPLETED.code(), repository.processing.getPipelineState());
             assertEquals(6, repository.processing.getLockVersion(),
                     "six legal file transitions must each increment the lock version");
-            assertEquals(Map.of("overlapEnabled", true, "overlapTokens", 40),
-                    repository.processing.getContextPolicy());
+            assertEquals(Map.of(), repository.processing.getContextPolicy());
             assertTrue(repository.chunks.stream()
                     .allMatch(chunk -> chunk.getStatus() == ChunkStatus.ACTIVE.code()));
             repository.assertSuccessfulCasCoverage();
@@ -527,14 +533,20 @@ class MarkdownChunkingWorkflowTest {
 
         private int applyChunkPatch(DocumentChunk patch, Wrapper<?> wrapper) {
             boolean activation = patch.getStatus() == ChunkStatus.ACTIVE.code();
+            boolean draftMutation = patch.getStatus() == ChunkStatus.DRAFT.code();
             DocumentChunk target = chunks.stream()
-                    .filter(chunk -> matchesChunkCas(wrapper, chunk, activation))
+                    .filter(chunk -> draftMutation
+                            ? chunk.getStatus() != ChunkStatus.INDEXING.code()
+                            && matchesMutableChunkCas(wrapper, chunk)
+                            : matchesChunkCas(wrapper, chunk, activation))
                     .findFirst().orElse(null);
             Map<String, Object> required = target == null
                     ? Map.of()
                     : chunkCasValues(target, activation);
+            String stage = activation ? "ACTIVE"
+                    : draftMutation ? "DRAFT" : "INDEXING";
             chunkCasAudits.add(new CasAudit(
-                    activation ? "ACTIVE" : "INDEXING", required, target != null));
+                    stage, required, target != null));
             if (target == null) return 0;
             if (patch.getStatus() == ChunkStatus.INDEXING.code()) {
                 target.setStatus(ChunkStatus.INDEXING.code());
@@ -555,7 +567,31 @@ class MarkdownChunkingWorkflowTest {
                 target.setSourceFileType(file.getType());
                 return 1;
             }
+            if (draftMutation) {
+                if (patch.getContent() != null) target.setContent(patch.getContent());
+                if (patch.getTokenCount() != null) target.setTokenCount(patch.getTokenCount());
+                if (patch.getContentHash() != null) target.setContentHash(patch.getContentHash());
+                if (patch.getOverlapEnabled() != null) target.setOverlapEnabled(patch.getOverlapEnabled());
+                if (patch.getOverlapTokenLimit() != null) {
+                    target.setOverlapTokenLimit(patch.getOverlapTokenLimit());
+                }
+                target.setOverlapContent(patch.getOverlapContent());
+                target.setOverlapSourceChunkId(patch.getOverlapSourceChunkId());
+                target.setOverlapTokenCount(patch.getOverlapTokenCount());
+                target.setIndexContent(patch.getIndexContent());
+                target.setStatus(ChunkStatus.DRAFT.code());
+                if (patch.getIsModified() != null) target.setIsModified(patch.getIsModified());
+                target.setLastError(null);
+                target.setLockVersion(target.getLockVersion() + 1);
+                return 1;
+            }
             return 0;
+        }
+
+        private boolean matchesMutableChunkCas(Wrapper<?> wrapper, DocumentChunk chunk) {
+            Map<String, Object> required = new LinkedHashMap<>(chunkCasValues(chunk, false));
+            required.remove("status");
+            return matches(wrapper, required);
         }
 
         private boolean matchesChunkCas(Wrapper<?> wrapper, DocumentChunk chunk,
@@ -613,16 +649,12 @@ class MarkdownChunkingWorkflowTest {
         }
 
         private void assertSuccessfulCasCoverage() {
-            assertEquals(List.of("PREVIEW_METADATA", "CONTEXT_POLICY"),
+            assertEquals(List.of("PREVIEW_METADATA"),
                     processingCasAudits.stream().map(CasAudit::stage).toList());
             assertTrue(processingCasAudits.stream().allMatch(CasAudit::matched));
             assertTrue(processingCasAudits.get(0).required().keySet().containsAll(Set.of(
                     "file_id", "tenant_id", "knowledge_id", "pipeline_state", "lock_version")));
-            assertTrue(processingCasAudits.get(1).required().keySet().containsAll(Set.of(
-                    "file_id", "tenant_id", "knowledge_id", "pipeline_state", "lock_version",
-                    "source_hash")));
             assertEquals(1, processingCasAudits.get(0).required().get("lock_version"));
-            assertEquals(3, processingCasAudits.get(1).required().get("lock_version"));
             long indexing = chunkCasAudits.stream()
                     .filter(audit -> audit.stage().equals("INDEXING")).count();
             long active = chunkCasAudits.stream()

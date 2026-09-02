@@ -1,15 +1,19 @@
 package com.starsea.ai.chunking.preview;
 
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingApiModels.ChunkResponse;
 import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
+import com.starsea.ai.chunking.context.DefaultChunkContextEnricher;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
+import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.FileProcessing;
@@ -30,6 +34,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /** Owns tenant-scoped, optimistic chunk read and mutation commands. */
@@ -44,6 +49,7 @@ public class ChunkCommandService {
     private final FileProcessingService stateService;
     private final TokenCounter tokenCounter;
     private final ChunkIndexContentBuilder contentBuilder;
+    private final ChunkContextEnricher contextEnricher;
     private final ChunkVectorGateway vectorGateway;
     private final RetrySleeper retrySleeper;
 
@@ -53,9 +59,20 @@ public class ChunkCommandService {
                                FileProcessingService stateService,
                                TokenCounter tokenCounter,
                                ChunkIndexContentBuilder contentBuilder,
-                               ChunkVectorGateway vectorGateway) {
+                               ChunkVectorGateway vectorGateway,
+                               ChunkContextEnricher contextEnricher) {
         this(chunkMapper, processingMapper, stateService, tokenCounter,
-                contentBuilder, vectorGateway, Thread::sleep);
+                contentBuilder, vectorGateway, contextEnricher, Thread::sleep);
+    }
+
+    public ChunkCommandService(DocumentChunkMapper chunkMapper,
+                               FileProcessingMapper processingMapper,
+                               FileProcessingService stateService,
+                               TokenCounter tokenCounter,
+                               ChunkIndexContentBuilder contentBuilder,
+                               ChunkVectorGateway vectorGateway) {
+        this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
+                vectorGateway, new DefaultChunkContextEnricher(tokenCounter), Thread::sleep);
     }
 
     ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -65,11 +82,24 @@ public class ChunkCommandService {
                         ChunkIndexContentBuilder contentBuilder,
                         ChunkVectorGateway vectorGateway,
                         RetrySleeper retrySleeper) {
+        this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
+                vectorGateway, new DefaultChunkContextEnricher(tokenCounter), retrySleeper);
+    }
+
+    ChunkCommandService(DocumentChunkMapper chunkMapper,
+                        FileProcessingMapper processingMapper,
+                        FileProcessingService stateService,
+                        TokenCounter tokenCounter,
+                        ChunkIndexContentBuilder contentBuilder,
+                        ChunkVectorGateway vectorGateway,
+                        ChunkContextEnricher contextEnricher,
+                        RetrySleeper retrySleeper) {
         this.chunkMapper = chunkMapper;
         this.processingMapper = processingMapper;
         this.stateService = stateService;
         this.tokenCounter = tokenCounter;
         this.contentBuilder = contentBuilder;
+        this.contextEnricher = contextEnricher;
         this.vectorGateway = vectorGateway;
         this.retrySleeper = retrySleeper;
     }
@@ -92,6 +122,14 @@ public class ChunkCommandService {
         if (request.lockVersion() == null) {
             throw ChunkingException.unprocessable("Chunk lockVersion is required");
         }
+        if (request.overlapEnabled() == null) {
+            throw ChunkingException.unprocessable("Chunk overlapEnabled is required");
+        }
+        if (request.overlapTokenLimit() == null
+                || request.overlapTokenLimit() < 1 || request.overlapTokenLimit() > 512) {
+            throw ChunkingException.unprocessable(
+                    "Chunk overlapTokenLimit must be between 1 and 512");
+        }
         long tenantId = requireTenantId();
         FileProcessing processing = lockMutableProcessing(knowledgeId, fileId, tenantId);
         DocumentChunk target = requireLockedChunk(
@@ -105,20 +143,38 @@ public class ChunkCommandService {
                     "maxTokens", budget.maximum()));
         }
 
-        DocumentChunk dependent = lockMutableDependent(target, tenantId);
-        int updated = chunkMapper.updateContent(fileId, tenantId, knowledgeId, chunkPublicId,
-                request.content(), budget.body(), sha256(request.content()), request.lockVersion());
+        List<DocumentChunk> lockedChunks = chunkMapper.findByFileForUpdate(
+                fileId, tenantId, knowledgeId);
+        DocumentChunk previous = adjacent(lockedChunks, target, -1);
+        DocumentChunk dependent = adjacent(lockedChunks, target, 1);
+        requireMutableDependent(dependent);
+        DocumentChunk edited = copyForContext(target);
+        edited.setContent(request.content());
+        edited.setTokenCount(budget.body());
+        edited.setContentHash(sha256(request.content()));
+        edited.setOverlapEnabled(request.overlapEnabled());
+        edited.setOverlapTokenLimit(request.overlapTokenLimit());
+        EnrichedChunk editedContext = enrich(previous, edited, budget.maximum());
+        applyDerivedContext(edited, editedContext);
+        edited.setStatus(ChunkStatus.DRAFT.code());
+        edited.setIsModified(true);
+        edited.setLastError(null);
+        edited.setLockVersion(request.lockVersion() + 1);
+        int updated = updateEdited(edited, request.lockVersion());
         if (updated != 1) {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
         }
-        invalidateDependent(dependent, target, tenantId);
+        if (dependent != null) {
+            DocumentChunk recalculated = copyForContext(dependent);
+            EnrichedChunk dependentContext = enrich(edited, recalculated, budget.maximum());
+            applyDerivedContext(recalculated, dependentContext);
+            recalculateDependent(recalculated, dependent.getLockVersion());
+        }
         int adjustingLockVersion = moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
         scheduleVectorCleanup(tenantId, knowledgeId, fileId, adjustingLockVersion,
                 vectorIds(target, dependent));
 
-        return new ChunkResponse(target.getPublicId(), value(target.getPosition()), request.content(),
-                target.getSectionPath(), target.getSourceLocator(), budget.body(),
-                ChunkStatus.DRAFT.code(), true, request.lockVersion() + 1);
+        return toResponse(edited);
     }
 
     @Transactional
@@ -127,8 +183,18 @@ public class ChunkCommandService {
         FileProcessing processing = lockMutableProcessing(knowledgeId, fileId, tenantId);
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, lockVersion);
-        DocumentChunk dependent = lockMutableDependent(target, tenantId);
-        invalidateDependent(dependent, target, tenantId);
+        FileProcessing processingSnapshot = processing;
+        List<DocumentChunk> lockedChunks = chunkMapper.findByFileForUpdate(
+                fileId, tenantId, knowledgeId);
+        DocumentChunk dependent = adjacent(lockedChunks, target, 1);
+        requireMutableDependent(dependent);
+        if (dependent != null) {
+            DocumentChunk recalculated = copyForContext(dependent);
+            EnrichedChunk dependentContext = enrich(null, recalculated,
+                    configuredMaximum(processingSnapshot.getPolicySnapshot()));
+            applyDerivedContext(recalculated, dependentContext);
+            recalculateDependent(recalculated, dependent.getLockVersion());
+        }
         int deleted = chunkMapper.deleteScoped(
                 fileId, tenantId, knowledgeId, chunkPublicId, lockVersion);
         if (deleted != 1) {
@@ -227,31 +293,131 @@ public class ChunkCommandService {
         return chunk;
     }
 
-    private DocumentChunk lockMutableDependent(DocumentChunk target, long tenantId) {
-        if (target.getId() == null || target.getPosition() == null) {
-            return null;
-        }
-        DocumentChunk dependent = chunkMapper.findNextDependentForUpdate(
-                target.getFileId(), tenantId, target.getKnowledgeId(),
-                target.getPosition() + 1, target.getId());
+    private void requireMutableDependent(DocumentChunk dependent) {
         if (dependent != null && chunkStatus(dependent) == ChunkStatus.INDEXING) {
             throw ChunkingException.conflict(
                     "The dependent INDEXING chunk cannot be invalidated");
         }
-        return dependent;
     }
 
-    private void invalidateDependent(DocumentChunk dependent, DocumentChunk target, long tenantId) {
-        if (dependent == null) {
-            return;
-        }
-        int updated = chunkMapper.invalidateDependent(
-                target.getFileId(), tenantId, target.getKnowledgeId(), dependent.getId(),
-                target.getId(), dependent.getLockVersion());
+    private void recalculateDependent(DocumentChunk dependent, int expectedLockVersion) {
+        dependent.setStatus(ChunkStatus.DRAFT.code());
+        dependent.setLastError(null);
+        dependent.setLockVersion(expectedLockVersion + 1);
+        int updated = updateDerived(dependent, expectedLockVersion);
         if (updated != 1) {
             throw ChunkingException.conflict(
                     "Dependent chunk state or lock version changed concurrently");
         }
+    }
+
+    private int updateEdited(DocumentChunk chunk, int expectedLockVersion) {
+        DocumentChunk patch = new DocumentChunk();
+        patch.setOverlapEnabled(chunk.getOverlapEnabled());
+        patch.setOverlapTokenLimit(chunk.getOverlapTokenLimit());
+        patch.setContent(chunk.getContent());
+        patch.setTokenCount(chunk.getTokenCount());
+        patch.setContentHash(chunk.getContentHash());
+        patch.setOverlapContent(chunk.getOverlapContent());
+        patch.setOverlapSourceChunkId(chunk.getOverlapSourceChunkId());
+        patch.setOverlapTokenCount(chunk.getOverlapTokenCount());
+        patch.setIndexContent(chunk.getIndexContent());
+        patch.setStatus(ChunkStatus.DRAFT.code());
+        patch.setIsModified(true);
+        patch.setLastError(null);
+        UpdateWrapper<DocumentChunk> update =
+                chunkScope(chunk, expectedLockVersion)
+                        .set("last_error", null)
+                        .setSql("lock_version = lock_version + 1");
+        if (chunk.getOverlapContent() == null) {
+            update.set("overlap_content", null);
+        }
+        if (chunk.getOverlapSourceChunkId() == null) {
+            update.set("overlap_source_chunk_id", null);
+        }
+        return chunkMapper.update(patch, update);
+    }
+
+    private int updateDerived(DocumentChunk chunk, int expectedLockVersion) {
+        DocumentChunk patch = new DocumentChunk();
+        patch.setStatus(ChunkStatus.DRAFT.code());
+        patch.setOverlapContent(chunk.getOverlapContent());
+        patch.setOverlapSourceChunkId(chunk.getOverlapSourceChunkId());
+        patch.setOverlapTokenCount(chunk.getOverlapTokenCount());
+        patch.setIndexContent(chunk.getIndexContent());
+        UpdateWrapper<DocumentChunk> update =
+                chunkScope(chunk, expectedLockVersion)
+                        .set("last_error", null)
+                        .setSql("lock_version = lock_version + 1");
+        if (chunk.getOverlapContent() == null) {
+            update.set("overlap_content", null);
+        }
+        if (chunk.getOverlapSourceChunkId() == null) {
+            update.set("overlap_source_chunk_id", null);
+        }
+        return chunkMapper.update(patch, update);
+    }
+
+    private UpdateWrapper<DocumentChunk> chunkScope(
+            DocumentChunk chunk, int expectedLockVersion) {
+        return new UpdateWrapper<DocumentChunk>()
+                .eq("id", chunk.getId())
+                .eq("tenant_id", chunk.getTenantId())
+                .eq("knowledge_id", chunk.getKnowledgeId())
+                .eq("file_id", chunk.getFileId())
+                .eq("public_id", chunk.getPublicId())
+                .ne("status", ChunkStatus.INDEXING.code())
+                .eq("lock_version", expectedLockVersion);
+    }
+
+    private DocumentChunk adjacent(List<DocumentChunk> chunks, DocumentChunk target, int delta) {
+        if (target.getPosition() == null) {
+            return null;
+        }
+        int position = target.getPosition() + delta;
+        return chunks.stream()
+                .filter(chunk -> Integer.valueOf(position).equals(chunk.getPosition()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private EnrichedChunk enrich(DocumentChunk previous, DocumentChunk current, int maximum) {
+        List<DocumentChunk> input = previous == null
+                ? List.of(current) : List.of(previous, current);
+        return contextEnricher.enrich(input, maximum).stream()
+                .filter(value -> Objects.equals(value.chunk().getId(), current.getId()))
+                .findFirst()
+                .orElseThrow(() -> ChunkingException.conflict(
+                        "The context enhancer omitted a mutable chunk"));
+    }
+
+    private void applyDerivedContext(DocumentChunk chunk, EnrichedChunk enriched) {
+        chunk.setOverlapContent(enriched.overlapContent());
+        chunk.setOverlapSourceChunkId(enriched.overlapSourceChunkId());
+        chunk.setOverlapTokenCount(enriched.overlapTokenCount());
+        chunk.setIndexContent(enriched.indexContent());
+    }
+
+    private DocumentChunk copyForContext(DocumentChunk source) {
+        DocumentChunk copy = new DocumentChunk();
+        copy.setId(source.getId());
+        copy.setPublicId(source.getPublicId());
+        copy.setTenantId(source.getTenantId());
+        copy.setKnowledgeId(source.getKnowledgeId());
+        copy.setFileId(source.getFileId());
+        copy.setPosition(source.getPosition());
+        copy.setContent(source.getContent());
+        copy.setOverlapEnabled(source.getOverlapEnabled());
+        copy.setOverlapTokenLimit(source.getOverlapTokenLimit());
+        copy.setSectionPath(source.getSectionPath());
+        copy.setSourceLocator(source.getSourceLocator());
+        copy.setTokenCount(source.getTokenCount());
+        copy.setContentHash(source.getContentHash());
+        copy.setBoundaryReason(source.getBoundaryReason());
+        copy.setStatus(source.getStatus());
+        copy.setIsModified(source.getIsModified());
+        copy.setLockVersion(source.getLockVersion());
+        return copy;
     }
 
     private int moveToAdjustingIfNeeded(FileProcessing processing,
@@ -353,7 +519,20 @@ public class ChunkCommandService {
         return new ChunkResponse(chunk.getPublicId(), value(chunk.getPosition()), chunk.getContent(),
                 chunk.getSectionPath(), chunk.getSourceLocator(), value(chunk.getTokenCount()),
                 value(chunk.getStatus()), Boolean.TRUE.equals(chunk.getIsModified()),
-                value(chunk.getLockVersion()));
+                value(chunk.getLockVersion()), Boolean.TRUE.equals(chunk.getOverlapEnabled()),
+                overlapTokenLimit(chunk), chunk.getOverlapContent(),
+                value(chunk.getOverlapTokenCount()), overlapUnavailableReason(chunk));
+    }
+
+    private int overlapTokenLimit(DocumentChunk chunk) {
+        Integer limit = chunk.getOverlapTokenLimit();
+        return limit == null ? 40 : limit;
+    }
+
+    private String overlapUnavailableReason(DocumentChunk chunk) {
+        return Boolean.TRUE.equals(chunk.getOverlapEnabled())
+                && (chunk.getOverlapContent() == null || chunk.getOverlapContent().isBlank())
+                ? "NO_AVAILABLE_OVERLAP" : null;
     }
 
     private PipelineState pipelineState(FileProcessing processing) {

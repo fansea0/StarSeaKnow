@@ -106,6 +106,8 @@ public class ChunkPreviewPersistenceService {
         chunk.setFileId(job.fileId());
         chunk.setPosition(position);
         chunk.setContent(draft.content());
+        chunk.setOverlapEnabled(false);
+        chunk.setOverlapTokenLimit(40);
         chunk.setOverlapContent(null);
         chunk.setOverlapSourceChunkId(null);
         chunk.setOverlapTokenCount(0);

@@ -41,6 +41,19 @@ public final class DefaultChunkContextEnricher implements ChunkContextEnricher {
     public List<EnrichedChunk> enrich(List<DocumentChunk> chunks, ContextPolicy policy, int maxTokens) {
         Objects.requireNonNull(chunks, "chunks");
         Objects.requireNonNull(policy, "policy");
+        return enrich(chunks, maxTokens, current -> policy);
+    }
+
+    @Override
+    public List<EnrichedChunk> enrich(List<DocumentChunk> chunks, int maxTokens) {
+        Objects.requireNonNull(chunks, "chunks");
+        return enrich(chunks, maxTokens, current -> new ContextPolicy(
+                Boolean.TRUE.equals(current.getOverlapEnabled()),
+                overlapTokenLimit(current)));
+    }
+
+    private List<EnrichedChunk> enrich(List<DocumentChunk> chunks, int maxTokens,
+                                       java.util.function.Function<DocumentChunk, ContextPolicy> policies) {
         if (maxTokens < 1 || maxTokens > GLOBAL_MAX_TOKENS) {
             throw new IllegalArgumentException("maxTokens must be between 1 and 512");
         }
@@ -51,6 +64,7 @@ public final class DefaultChunkContextEnricher implements ChunkContextEnricher {
         List<EnrichedChunk> enriched = new ArrayList<>(ordered.size());
         DocumentChunk previous = null;
         for (DocumentChunk current : ordered) {
+            ContextPolicy policy = policies.apply(current);
             String body = current.getContent() == null ? "" : current.getContent();
             String withoutOverlap = contentBuilder.build(current.getSectionPath(), null, body);
             int baseTokens = tokenCounter.count(withoutOverlap);
@@ -75,6 +89,12 @@ public final class DefaultChunkContextEnricher implements ChunkContextEnricher {
             previous = current;
         }
         return List.copyOf(enriched);
+    }
+
+    private int overlapTokenLimit(DocumentChunk chunk) {
+        Integer configured = chunk.getOverlapTokenLimit();
+        return configured != null && configured >= 1 && configured <= GLOBAL_MAX_TOKENS
+                ? configured : 40;
     }
 
     private String boundedOverlap(String previousBody, List<String> path, String currentBody,
