@@ -677,6 +677,76 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.findAll('.chunk-card').every(card => card.attributes('aria-disabled') === 'false')).toBe(true)
   })
 
+  it('owns the file mutation barrier while edited-draft regeneration confirmation is pending', async () => {
+    const confirmation = deferred()
+    const secondChunk = {
+      ...draftChunk,
+      publicId: 'chunk-2',
+      position: 1,
+      content: '第二块人工修改正文',
+      lockVersion: 8,
+    }
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk, secondChunk] })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmation.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await nextTick()
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(createPreview).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.chunk-card').every(card => card.attributes('aria-disabled') === 'true')).toBe(true)
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="open-confirm"]').attributes('disabled')).toBeDefined()
+
+    const duplicatePreview = wrapper.vm.submitPreview()
+    const parallelReindex = wrapper.vm.handleReindex(secondChunk)
+    const parallelConfirm = wrapper.vm.submitVectorization()
+    wrapper.vm.openConfirmDialog()
+    await nextTick()
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(createPreview).not.toHaveBeenCalled()
+    expect(reindexChunk).not.toHaveBeenCalled()
+    expect(confirmVectorization).not.toHaveBeenCalled()
+    expect(wrapper.vm.confirmDialogVisible).toBe(false)
+
+    confirmation.resolve('confirm')
+    await Promise.all([duplicatePreview, parallelReindex, parallelConfirm])
+    await flushPromises()
+
+    expect(createPreview).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.fileMutationInProgress).toBe(false)
+    expect(wrapper.vm.hasBlockingChunkSaves).toBe(false)
+    expect(wrapper.findAll('.chunk-card').every(card => card.attributes('aria-disabled') === 'false')).toBe(true)
+  })
+
+  it('releases the preview mutation barrier when edited-draft regeneration is cancelled', async () => {
+    const confirmation = deferred()
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmation.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('true')
+    expect(wrapper.vm.fileMutationInProgress).toBe(true)
+
+    confirmation.reject(new Error('cancelled'))
+    await flushPromises()
+
+    expect(createPreview).not.toHaveBeenCalled()
+    expect(wrapper.vm.fileMutationInProgress).toBe(false)
+    expect(wrapper.vm.hasBlockingChunkSaves).toBe(false)
+    expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('false')
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('blocks failed-vectorization retry while a recovered draft has an unsaved change', async () => {
     getProcessing.mockResolvedValue(processing(7, {
       failedFromState: 5,

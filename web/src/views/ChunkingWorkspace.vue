@@ -475,25 +475,24 @@ export default {
       const selected = this.strategies.find(strategy => strategy.code === this.selectedStrategy)
       if (!selected || selected.disabled) return
       const context = this.currentContext()
-
-      let replaceEditedDrafts = false
-      if (this.chunks.some(chunk => Number(chunk.status) === 0 && chunk.isModified)) {
-        try {
-          await ElMessageBox.confirm(
-            '当前预览包含人工修改的草稿。重新生成会替换这些人工修改，是否继续？',
-            '确认重新生成分块',
-            { confirmButtonText: '替换并重新生成', cancelButtonText: '保留当前分块', type: 'warning' },
-          )
-          if (!this.isCurrent(context) || this.hasBlockingChunkSaves) return
-          replaceEditedDrafts = true
-        } catch {
-          return
-        }
-      }
-
       this.previewSubmitting = true
       this.submissionError = ''
       try {
+        let replaceEditedDrafts = false
+        if (this.chunks.some(chunk => Number(chunk.status) === 0 && chunk.isModified)) {
+          try {
+            await ElMessageBox.confirm(
+              '当前预览包含人工修改的草稿。重新生成会替换这些人工修改，是否继续？',
+              '确认重新生成分块',
+              { confirmButtonText: '替换并重新生成', cancelButtonText: '保留当前分块', type: 'warning' },
+            )
+          } catch {
+            return
+          }
+          if (!this.isCurrent(context) || !this.previewSubmitting || this.hasBlockingChunkSaves) return
+          replaceEditedDrafts = true
+        }
+
         await createPreview(context.knowledgeId, context.fileId, {
           strategyCode: this.selectedStrategy,
           strategyConfig: { ...this.strategyConfig },
