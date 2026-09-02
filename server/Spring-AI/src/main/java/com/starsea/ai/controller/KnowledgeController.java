@@ -17,7 +17,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 
@@ -79,6 +81,9 @@ public class KnowledgeController {
     @GetMapping("/{knowledgeId}")
     public AjaxResult getKnowledgeById(@PathVariable Long knowledgeId) {
         Knowledge knowledge = knowledgeService.getById(knowledgeId);
+        if (knowledge == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "知识库不存在或无权访问");
+        }
         return AjaxResult.success(knowledge);
     }
 
@@ -88,7 +93,8 @@ public class KnowledgeController {
         return AjaxResult.success(knowledgeList);
     }
 
-    @Cacheable(value = "knowledge")
+    @Cacheable(value = "knowledge",
+            key = "T(com.starsea.ai.auth.AuthContext).current().getTenantId()")
     @GetMapping("/list/vo")
     public AjaxResult listAllKnowledgeVo() {
         log.info("查询所有知识库列表 - " + System.currentTimeMillis());

@@ -54,8 +54,64 @@ function mountDetail(route = { params: { id: '11' } }) {
 describe('KnowledgeDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    axios.get.mockResolvedValue({ data: { code: 200, data: [] } })
+    axios.get.mockImplementation((url) => {
+      if (url.endsWith('/knowledge/11')) {
+        return Promise.resolve({
+          data: { code: 200, data: { id: 11, name: '测试知识库', description: '测试描述' } },
+        })
+      }
+      return Promise.resolve({ data: { code: 200, data: [] } })
+    })
   })
+
+  it('does not render the MaxKB fixture while knowledge details are loading', async () => {
+    const pendingInfo = deferred()
+    axios.get.mockImplementation((url) => {
+      if (url.endsWith('/knowledge/11')) return pendingInfo.promise
+      return Promise.resolve({ data: { code: 200, data: [] } })
+    })
+
+    const wrapper = mountDetail()
+    await nextTick()
+
+    expect(wrapper.text()).not.toContain('MaxKB 用户手册')
+    expect(wrapper.get('[data-testid="knowledge-loading"]').text()).toContain('正在加载知识库')
+  })
+
+  it('shows an unavailable state and does not load files when knowledge details are missing', async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.endsWith('/knowledge/11')) {
+        return Promise.resolve({ data: { code: 200, data: null } })
+      }
+      return Promise.resolve({ data: { code: 200, data: [] } })
+    })
+
+    const wrapper = mountDetail()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="knowledge-unavailable"]').text()).toContain('知识库不存在或无权访问')
+    expect(wrapper.text()).not.toContain('MaxKB 用户手册')
+    expect(axios.get.mock.calls.filter(([url]) => url.endsWith('/knowledge/file/list'))).toHaveLength(0)
+  })
+
+  it('shows the backend unavailable message when the tenant-scoped detail request returns 404', async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.endsWith('/knowledge/11')) {
+        return Promise.reject({
+          response: { data: { msg: '知识库不存在或无权访问' } },
+        })
+      }
+      return Promise.resolve({ data: { code: 200, data: [] } })
+    })
+
+    const wrapper = mountDetail()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="knowledge-unavailable"]').text()).toContain('知识库不存在或无权访问')
+    expect(wrapper.vm.$message.error).toHaveBeenCalledWith('知识库不存在或无权访问')
+    expect(axios.get.mock.calls.filter(([url]) => url.endsWith('/knowledge/file/list'))).toHaveLength(0)
+  })
+
   it('loads each route exactly once instead of duplicating watcher and mounted initialization', async () => {
     mountDetail()
     await flushPromises()
@@ -82,16 +138,14 @@ describe('KnowledgeDetail', () => {
     expect(result).toBe(response)
   })
 
-  it('discards late knowledge and file responses from the previous reused route', async () => {
+  it('discards a late knowledge response from the previous reused route', async () => {
     const route = reactive({ params: { id: '11' } })
     const oldInfo = deferred()
-    const oldFiles = deferred()
     axios.get.mockImplementation((url, options) => {
       if (url.endsWith('/knowledge/11')) return oldInfo.promise
       if (url.endsWith('/knowledge/12')) {
         return Promise.resolve({ data: { code: 200, data: { name: '知识库 B', description: 'B' } } })
       }
-      if (url.endsWith('/knowledge/file/list') && options?.params?.knowledgeId === 11) return oldFiles.promise
       if (url.endsWith('/knowledge/file/list') && options?.params?.knowledgeId === 12) {
         return Promise.resolve({ data: { code: 200, data: [{ ...markdownFile, id: 120, fileName: 'b.md' }] } })
       }
@@ -104,6 +158,35 @@ describe('KnowledgeDetail', () => {
     await nextTick()
     await flushPromises()
     oldInfo.resolve({ data: { code: 200, data: { name: '知识库 A', description: 'A' } } })
+    await flushPromises()
+
+    expect(wrapper.vm.kbInfo.name).toBe('知识库 B')
+    expect(wrapper.vm.docList.map(row => row.fileName)).toEqual(['b.md'])
+  })
+
+  it('discards a late file response from the previous reused route', async () => {
+    const route = reactive({ params: { id: '11' } })
+    const oldFiles = deferred()
+    axios.get.mockImplementation((url, options) => {
+      if (url.endsWith('/knowledge/11')) {
+        return Promise.resolve({ data: { code: 200, data: { name: '知识库 A', description: 'A' } } })
+      }
+      if (url.endsWith('/knowledge/12')) {
+        return Promise.resolve({ data: { code: 200, data: { name: '知识库 B', description: 'B' } } })
+      }
+      if (url.endsWith('/knowledge/file/list') && options?.params?.knowledgeId === 11) return oldFiles.promise
+      if (url.endsWith('/knowledge/file/list') && options?.params?.knowledgeId === 12) {
+        return Promise.resolve({ data: { code: 200, data: [{ ...markdownFile, id: 120, fileName: 'b.md' }] } })
+      }
+      return Promise.resolve({ data: { code: 200, data: [] } })
+    })
+    const wrapper = mountDetail(route)
+    await flushPromises()
+    expect(axios.get.mock.calls.some(([, options]) => options?.params?.knowledgeId === 11)).toBe(true)
+
+    route.params.id = '12'
+    await nextTick()
+    await flushPromises()
     oldFiles.resolve({ data: { code: 200, data: [{ ...markdownFile, id: 110, fileName: 'a.md' }] } })
     await flushPromises()
 
@@ -168,6 +251,7 @@ describe('KnowledgeDetail', () => {
 
   it('refreshes and opens the workspace after an uploaded Markdown file returns its id', async () => {
     const wrapper = mountDetail()
+    await flushPromises()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
 
     await completeUpload(wrapper, { code: 200, data: 23 })
@@ -249,6 +333,7 @@ describe('KnowledgeDetail', () => {
     [{ code: 200, data: true }, false],
   ])('handles upload envelope %p as success: %s', async (response, succeeds) => {
     const wrapper = mountDetail()
+    await flushPromises()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
 
     await completeUpload(wrapper, response)
@@ -267,6 +352,7 @@ describe('KnowledgeDetail', () => {
 
   it('awaits the document refresh before opening the Markdown workspace', async () => {
     const wrapper = mountDetail()
+    await flushPromises()
     let resolveRefresh
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockImplementation(() => new Promise((resolve) => {
       resolveRefresh = resolve
@@ -285,6 +371,7 @@ describe('KnowledgeDetail', () => {
 
   it('does not refresh or navigate when an HTTP-success upload envelope has a business error', async () => {
     const wrapper = mountDetail()
+    await flushPromises()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
 
     await completeUpload(wrapper, { code: 500, msg: '文件解析失败', data: 23 })
@@ -297,6 +384,7 @@ describe('KnowledgeDetail', () => {
 
   it('does not treat a successful envelope without a valid file id as uploaded', async () => {
     const wrapper = mountDetail()
+    await flushPromises()
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
 
     await completeUpload(wrapper, { code: 200, data: null })

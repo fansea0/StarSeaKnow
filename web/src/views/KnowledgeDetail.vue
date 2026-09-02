@@ -1,5 +1,27 @@
 <template>
   <main class="kb-detail">
+    <section
+      v-if="knowledgeLoading"
+      class="kb-route-state"
+      data-testid="knowledge-loading"
+      aria-live="polite"
+    >
+      <p class="kb-route-state__title">正在加载知识库…</p>
+    </section>
+
+    <section
+      v-else-if="knowledgeError"
+      class="kb-route-state kb-route-state--error"
+      data-testid="knowledge-unavailable"
+      role="alert"
+    >
+      <el-icon class="kb-route-state__icon"><FolderOpened /></el-icon>
+      <h1 class="kb-route-state__title">无法打开知识库</h1>
+      <p class="kb-route-state__desc">{{ knowledgeError }}</p>
+      <el-button type="primary" @click="goBackToList">返回知识库列表</el-button>
+    </section>
+
+    <template v-else>
     <!-- ============ Hero 区 ============ -->
     <header class="kb-hero">
       <div class="kb-hero__intro">
@@ -263,6 +285,7 @@
         </div>
       </section>
     </div>
+    </template>
   </main>
 </template>
 
@@ -314,11 +337,13 @@ export default {
         { label: '已禁用', value: 'off' },
       ],
       kbInfo: {
-        name: 'MaxKB 用户手册',
-        desc: 'MaxKB 用户手册说明',
+        name: '',
+        desc: '',
       },
       docList: [],
       knowledgeId: null,
+      knowledgeLoading: true,
+      knowledgeError: '',
       uploadUrl: '',
       deleteLoadingId: null,
       statusLoadingId: null,
@@ -361,9 +386,18 @@ export default {
     startKnowledgeRoute(routeId) {
       this.requestGeneration += 1
       this.setKnowledgeId(routeId)
+      this.kbInfo = { name: '', desc: '' }
+      this.docList = []
+      this.knowledgeError = ''
+      this.knowledgeLoading = true
       const context = this.currentRequestContext()
-      this.fetchKnowledgeInfo(context)
-      this.fetchDocList(context)
+      this.loadKnowledgeRoute(context)
+    },
+    async loadKnowledgeRoute(context) {
+      const available = await this.fetchKnowledgeInfo(context)
+      if (available && this.isCurrentRequest(context)) {
+        await this.fetchDocList(context)
+      }
     },
     currentRequestContext() {
       return { generation: this.requestGeneration, knowledgeId: this.knowledgeId }
@@ -379,13 +413,21 @@ export default {
     async fetchKnowledgeInfo(context = this.currentRequestContext()) {
       try {
         const res = await axios.get(apiUrl(`/knowledge/${context.knowledgeId}`))
-        if (!this.isCurrentRequest(context)) return
+        if (!this.isCurrentRequest(context)) return false
         if (res.data && res.data.code === 200 && res.data.data) {
           this.kbInfo.name = res.data.data.name
           this.kbInfo.desc = res.data.data.description
+          return true
         }
+        this.knowledgeError = res.data?.msg || '知识库不存在或无权访问'
+        return false
       } catch (e) {
-        if (this.isCurrentRequest(context)) this.$message.error('获取知识库信息失败')
+        if (!this.isCurrentRequest(context)) return false
+        this.knowledgeError = e.response?.data?.msg || '知识库不存在或无权访问'
+        this.$message.error(this.knowledgeError)
+        return false
+      } finally {
+        if (this.isCurrentRequest(context)) this.knowledgeLoading = false
       }
     },
     async fetchDocList(context = this.currentRequestContext()) {
@@ -570,6 +612,10 @@ export default {
 
 <style scoped>
 .kb-detail { width: 100%; padding: 12px 0 40px; }
+.kb-route-state { display: grid; place-items: center; min-height: 360px; padding: 48px 24px; border: 1px dashed #bdd0d8; border-radius: 12px; background: color-mix(in srgb, var(--sea-paper) 82%, var(--sea-mist)); text-align: center; }
+.kb-route-state__icon { margin-bottom: 14px; color: var(--sea-signal); font-size: 34px; }
+.kb-route-state__title { margin: 0; color: var(--sea-deep); font-family: 'Noto Serif SC', serif; font-size: 22px; font-weight: 700; }
+.kb-route-state__desc { margin: 10px 0 20px; color: var(--sea-muted); font-size: 14px; }
 
 /* ============ Hero ============ */
 .kb-hero {
