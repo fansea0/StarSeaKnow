@@ -23,14 +23,8 @@ public class AesGcmModelProviderSecretCipher implements ModelProviderSecretCiphe
     private final SecureRandom secureRandom;
 
     public AesGcmModelProviderSecretCipher(ModelProviderEncryptionProperties properties) {
-        this(properties, new SecureRandom());
-    }
-
-    AesGcmModelProviderSecretCipher(
-            ModelProviderEncryptionProperties properties,
-            SecureRandom secureRandom) {
         this.properties = Objects.requireNonNull(properties, "properties");
-        this.secureRandom = Objects.requireNonNull(secureRandom, "secureRandom");
+        this.secureRandom = new SecureRandom();
     }
 
     @Override
