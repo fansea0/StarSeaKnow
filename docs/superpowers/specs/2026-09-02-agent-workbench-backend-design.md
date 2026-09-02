@@ -125,6 +125,7 @@ agent（可变草稿） ── agent_knowledge ── knowledge
 | `api_key_version` | 条件必填 | 主密钥版本 |
 | `api_key_last_four` | 条件必填 | 仅供界面辨识的末四位 |
 | `last_verified_at` | NOT NULL | 最近一次成功连接验证时间 |
+| `deleted_at` | nullable | 删除连接时保留历史模型映射外键；普通查询排除已删除行 |
 | `created_by` | NOT NULL | 创建用户 |
 | `create_time` | NOT NULL | 创建时间 |
 | `update_time` | NOT NULL | 更新时间 |
@@ -132,9 +133,9 @@ agent（可变草稿） ── agent_knowledge ── knowledge
 约束：
 
 - `UNIQUE (id, tenant_id)`，供下游复合外键使用。
-- 当 `catalog_provider_id` 非空时，`UNIQUE (tenant_id, catalog_provider_id)`，保证同租户同内置厂商只有一套连接。
+- 当 `catalog_provider_id` 非空且 `deleted_at IS NULL` 时，`UNIQUE (tenant_id, catalog_provider_id)`，保证同租户同内置厂商只有一套有效连接。
 - 当 `catalog_provider_id` 为空时，`custom_name`、`custom_icon` 和 `base_url` 必填。
-- 自定义厂商名称在同一租户内不区分大小写唯一。
+- 未删除的自定义厂商名称在同一租户内不区分大小写唯一。
 - `selectable_models` 结构与公共目录一致，`modelId` 在单个连接内唯一。
 - `auth_type=API_KEY` 时四个密钥字段必填；`auth_type=NONE` 时四个字段必须为空。
 - 不设置 `status` 或 `enabled`；记录存在即表示厂商已配置，模型存在于 JSON 列表即表示可选择。
@@ -142,6 +143,8 @@ agent（可变草稿） ── agent_knowledge ── knowledge
 内置厂商首次配置时，以公共 `suggested_models` 初始化租户候选列表。连接测试或用户刷新可以合并厂商 `/models` 返回结果；用户也可以手动补充模型 ID。
 
 租户厂商配置仅在连接测试成功后创建或替换。更新密钥时先验证新连接，验证失败则保留旧密文和旧配置。
+
+实现验收补充：删除无有效引用的厂商采用软删除（V14），不能物理删除被历史 `agent_model` 引用的行。创建/更新模型引用与厂商更新/删除通过同一厂商行的共享/排他锁协调，避免并发引用失效连接。完整接口与迁移说明见 [工作台接口](../../api/agent-workbench.md)。
 
 ### 5.3 API Key 加密
 

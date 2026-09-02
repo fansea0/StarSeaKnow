@@ -4,7 +4,7 @@
 
 **Goal:** 完成智能体工作台模块 2—7 的后端能力及与最终 HTML 原型一致的 Vue 工作台页面。
 
-**Architecture:** 按“租户厂商连接 → Agent 草稿与独占模型 → 发布快照 → 统一执行 → Caffeine 调试 → 正式调用”的依赖顺序演进数据库和服务。前端使用独立 API 层消费这些聚合接口，模型管理、Agent 列表和三栏工作台直接复刻最终原型的信息架构与 sea 主题，不继续调用旧 `/agent/*` 和 `/ai/agent/chat` 接口。
+**Architecture:** 按“租户厂商连接 → Agent 草稿与独占模型 → 发布快照 → 统一执行 → Caffeine 调试 → 正式调用”的依赖顺序演进数据库和服务。前端使用独立 API 层消费这些聚合接口，模型管理、Agent 列表和双栏工作台采用最终原型的信息架构与 sea 主题，不继续调用旧 `/agent/*` 和 `/ai/agent/chat` 接口。保留项目现有全局导航壳。
 
 **Tech Stack:** Java 17、Spring Boot 3.3、MyBatis-Plus、PostgreSQL/pgvector、Caffeine、Spring AI、Vue 3、Vue Router、Element Plus、Vitest
 
@@ -18,7 +18,7 @@
 - 不实现真正混合检索；前端保留原型按钮，后端仍只使用 pgvector。
 - Agent、独占模型和快照使用同一时间戳软删除；知识库关系、厂商连接和快照历史规则按设计文档执行。
 - `tenant_admin` 管理厂商、草稿、调试、发布、回滚和删除；`tenant_member` 只查看和调用已发布 Agent。
-- 页面颜色、字体、圆角、阴影、三栏结构和文案以最终 HTML 原型及其 `style-guide.md` 为准。
+- 页面颜色、字体、圆角、阴影、双栏结构和文案以最终 HTML 原型及其 `style-guide.md` 为准。
 - 每个后端模块完成后运行 `mvn -q test` 和 `mvn -q -DskipTests package`；前端模块运行 `npm test` 和 `npm run build`。
 
 ---
@@ -198,17 +198,18 @@
 
 执行验证：正式调用权限/快照来源、旧接口 410、ORM 不再读取旧明文列、成员发布字段筛选及管理员分页查询边界均通过测试；完整后端测试、打包、真实启动通过。成员列表批量加载发布快照，避免泄露草稿及全租户 N+1 查询。独立审查通过。
 
-### Task 9: 前端—原型一致的 Agent 列表与三栏工作台
+### Task 9: 前端—原型一致的 Agent 列表与双栏工作台
 
 **Files:**
 - Create: `web/src/api/agents.js`
 - Rewrite: `web/src/views/Agent.vue`
 - Rewrite: `web/src/views/AgentDetail.vue`
-- Create: `web/src/components/agent/AgentEditorTabs.vue`
+- Implement editor tabs and snapshot history inside `AgentDetail.vue`.
 - Create: `web/src/components/agent/AgentModelSelector.vue`
 - Create: `web/src/components/agent/AgentDebugPanel.vue`
 - Create: `web/src/components/agent/AgentReferences.vue`
-- Create: `web/src/components/agent/AgentSnapshotHistory.vue`
+- Create: `web/src/components/agent/safeMarkdown.js`
+- Create: `web/src/components/agent/workbench.css`
 - Test: `web/src/views/__tests__/AgentList.test.js`
 - Test: `web/src/views/__tests__/AgentWorkbench.test.js`
 - Test: `web/src/components/agent/__tests__/AgentDebugPanel.test.js`
@@ -217,12 +218,12 @@
 - List consumes `/agents` and `/agents/metrics`.
 - Detail consumes aggregate draft, configured provider models, snapshots and SSE endpoints from Tasks 2—8.
 
-- [ ] Write component/API RED tests from PRD acceptance scenarios.
-- [ ] Reproduce prototype desktop structure: 60px action bar, left configuration rail/editor, center prompt workspace, right dark-headed debug instrument and snapshot side panel.
-- [ ] Keep “混合检索” as visual placeholder only; never send a retrieval mode field.
-- [ ] Implement keyboard focus, reduced-motion behavior and mobile stacked layout.
-- [ ] Run all frontend tests/build and compare screenshots at prototype desktop width and 390px mobile.
-- [ ] Commit `feat: 完成智能体工作台前端`.
+- [x] Write component/API RED tests from PRD acceptance scenarios.
+- [x] Reproduce final prototype desktop structure: action bar, left scrollable configuration with section navigation, right dark-headed debug instrument with system-prompt and published-snapshot tabs.
+- [x] Keep “混合检索” as visual placeholder only; never send a retrieval mode field.
+- [x] Implement visible keyboard focus, reduced-motion behavior and mobile stacked layout.
+- [x] Run all frontend tests/build and compare screenshots at 1440px desktop width and 390px mobile.
+- [x] Commit `feat: 完成智能体工作台前端` (`2a9a786`).
 
 ### Task 10: 全链路验收与文档收口
 
@@ -231,9 +232,11 @@
 - Modify: `docs/prd/2026-09-01-智能体工作台-prd.md`
 - Create: `docs/api/agent-workbench.md`
 
-- [ ] Run fresh-database Flyway migration V1 through final version and inspect constraints.
-- [ ] Run full backend tests/build and full frontend tests/build.
-- [ ] Exercise model configuration → Agent draft → debug → publish → member chat → rollback → soft-delete flow against local backend.
-- [ ] Inspect `error.log` and confirm the acceptance flow produces no new ERROR entries or secret leakage.
-- [ ] Compare final desktop/mobile screenshots with the supplied prototype and correct material visual differences.
-- [ ] Run `git diff --check`, secret scan and `git status --short`; commit final documentation and mark modules 2—7 complete only when evidence covers every requirement.
+- [x] Run fresh-database Flyway migration V1 through V15 and inspect constraints.
+- [x] Run full backend tests/build and full frontend tests/build: 338 backend tests (including PostgreSQL IT), 154 frontend tests; both production builds exit 0.
+- [x] Exercise model configuration → Agent draft → debug → publish → member chat → rollback → soft-delete with real Spring services and a disposable PostgreSQL database; controller permissions separately covered by MockMvc. Only a local simulated provider is used.
+- [x] Inspect isolated acceptance `error.log` (empty), then isolate test logging at startup to console only; do not truncate running development logs.
+- [x] Compare desktop/mobile screenshots with the supplied prototype and correct material visual differences using isolated browser fixtures.
+- [x] Run `git diff --check`, secret scan and `git status --short`; finish modules 2—7 and commit final documentation. Backend acceptance fixes committed as `5035a1e`; no generated artifacts or credentials staged.
+
+验收边界：真实浏览器登录已过期，未使用用户实际 API Key 做收费调用；现有业务 JVM 未重启。部署者需重启后端、登录后配置真实厂商。保留全局导航壳，工作台内部采用最终原型双栏布局。前端主包体积、Flyway 对 PostgreSQL 18 的版本提示为已记录的非阻塞告警。
