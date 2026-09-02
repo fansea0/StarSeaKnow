@@ -4,7 +4,6 @@ package com.starsea.ai.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.starsea.ai.domain.Agent;
-import org.apache.ibatis.annotations.CacheNamespace;
 import org.apache.ibatis.annotations.Mapper;
 
 /**
@@ -14,7 +13,6 @@ import org.apache.ibatis.annotations.Mapper;
 * @Entity generator.domain.Agent
 */
 @Mapper
-@CacheNamespace
 public interface AgentMapper extends BaseMapper<Agent> {
 
     @org.apache.ibatis.annotations.Update("""
@@ -34,5 +32,4 @@ public interface AgentMapper extends BaseMapper<Agent> {
                 .last("FOR UPDATE"));
     }
 }
-
 

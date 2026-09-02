@@ -1,6 +1,7 @@
 package com.starsea.ai.domain;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -22,7 +23,9 @@ public class Agent implements Serializable {
     private Long id;
     private Long tenantId;
     private String name;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String description;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String prologue;
 
     private String systemPrompt;
@@ -30,6 +33,7 @@ public class Agent implements Serializable {
     private List<String> tags;
     @TableField(value = "variables", typeHandler = PostgresJsonbTypeHandler.class)
     private List<AgentWorkbenchApiModels.VariableDefinition> variables;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long agentModelId;
     private Integer retrievalTopK;
     private BigDecimal retrievalScoreThreshold;
