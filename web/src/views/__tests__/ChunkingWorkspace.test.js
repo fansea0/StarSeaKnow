@@ -55,6 +55,11 @@ const draftChunk = {
   status: 0,
   isModified: true,
   lockVersion: 5,
+  overlapEnabled: false,
+  overlapTokenLimit: 40,
+  overlapContent: null,
+  overlapTokenCount: 0,
+  overlapUnavailableReason: null,
 }
 
 const mountedWrappers = []
@@ -139,6 +144,8 @@ describe('ChunkingWorkspace', () => {
     await vi.advanceTimersByTimeAsync(650)
     expect(updateChunk).toHaveBeenCalledWith('11', '33', 'chunk-new', {
       content: '新文件已编辑',
+      overlapEnabled: false,
+      overlapTokenLimit: 40,
       lockVersion: 8,
     })
   })
@@ -491,6 +498,8 @@ describe('ChunkingWorkspace', () => {
     await vi.advanceTimersByTimeAsync(650)
     expect(updateChunk).toHaveBeenLastCalledWith('11', '22', 'chunk-1', {
       content: '基于新版本编辑',
+      overlapEnabled: false,
+      overlapTokenLimit: 40,
       lockVersion: 9,
     })
   })
@@ -549,6 +558,22 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find(`[data-testid="${hidden}"]`).exists()).toBe(false)
     expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
+  })
+
+  it('retries failed vectorization with only the current file lock', async () => {
+    getProcessing.mockResolvedValue(processing(7, {
+      failedFromState: 5,
+      lockVersion: 12,
+      contextPolicy: { overlapEnabled: true, overlapTokens: 128 },
+    }))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="retry-vectorizing"]').trigger('click')
+    await flushPromises()
+
+    expect(confirmVectorization).toHaveBeenCalledWith('11', '22', { lockVersion: 12 })
   })
 
   it.each([1, 4, 5])('does not expose normal file actions in processing state %s', async (state) => {
@@ -642,6 +667,25 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(true)
   })
 
+  it('keeps the existing reindex entry after an overlap setting changes a completed chunk back to modified DRAFT', async () => {
+    const cleanChunk = { ...draftChunk, isModified: false, overlapEnabled: false }
+    const changedChunk = { ...cleanChunk, isModified: true, overlapEnabled: true, lockVersion: 6 }
+    getProcessing.mockResolvedValue(processing(6))
+    getChunks
+      .mockResolvedValueOnce({ data: [cleanChunk] })
+      .mockResolvedValueOnce({ data: [changedChunk] })
+    updateChunk.mockResolvedValue({ data: changedChunk })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="overlap-switch"] .el-switch').trigger('click')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(true)
+  })
+
   it('FAILED vectorization keeps DRAFT chunks editable and reindexable after recovery edit', async () => {
     getProcessing.mockResolvedValue(processing(7, { failedFromState: 5, lastError: '向量服务不可用' }))
     getChunks.mockResolvedValue({ data: [draftChunk] })
@@ -674,28 +718,28 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('owns overlap in the final dialog: disabled by default, enabling reveals 40 Token, and current file lock is submitted', async () => {
+  it('summarizes per-chunk overlap in the final dialog and submits only the current file lock', async () => {
     getProcessing.mockResolvedValue(processing(3, { lockVersion: 9 }))
-    getChunks.mockResolvedValue({ data: [{ ...draftChunk, isModified: false }] })
+    getChunks.mockResolvedValue({ data: [
+      { ...draftChunk, publicId: 'chunk-1', isModified: false, overlapEnabled: true, overlapContent: '已生成上文', overlapTokenCount: 8 },
+      { ...draftChunk, publicId: 'chunk-2', isModified: false, overlapEnabled: true, overlapContent: null, overlapTokenCount: 0 },
+      { ...draftChunk, publicId: 'chunk-3', isModified: false, overlapEnabled: false, overlapContent: null, overlapTokenCount: 0 },
+    ] })
     const wrapper = mountWorkspace()
     await flushPromises()
 
     await wrapper.get('[data-testid="open-confirm"]').trigger('click')
     await flushPromises()
-    expect(document.body.textContent).toContain('上下文补充')
-    expect(document.body.querySelector('[data-testid="overlap-tokens"]')).toBeNull()
-
-    const overlapSwitch = document.body.querySelector('[data-testid="overlap-switch"]')
-    overlapSwitch.click()
-    await flushPromises()
-    const tokenInput = document.body.querySelector('[data-testid="overlap-tokens"] input')
-    expect(tokenInput.value).toBe('40')
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog.querySelector('[data-testid="confirm-total-count"]').textContent).toContain('3')
+    expect(dialog.querySelector('[data-testid="confirm-enabled-count"]').textContent).toContain('2')
+    expect(dialog.querySelector('[data-testid="confirm-generated-count"]').textContent).toContain('1')
+    expect(dialog.querySelector('[data-testid="overlap-switch"]')).toBeNull()
+    expect(dialog.querySelector('[data-testid="overlap-tokens"]')).toBeNull()
 
     document.body.querySelector('[data-testid="confirm-vectorization"]').click()
     await flushPromises()
     expect(confirmVectorization).toHaveBeenCalledWith('11', '22', {
-      overlapEnabled: true,
-      overlapTokens: 40,
       lockVersion: 9,
     })
     wrapper.unmount()
@@ -770,8 +814,6 @@ describe('ChunkingWorkspace', () => {
     document.body.querySelector('[data-testid="confirm-vectorization"]').click()
     await flushPromises()
     expect(confirmVectorization).toHaveBeenLastCalledWith('11', '22', {
-      overlapEnabled: false,
-      overlapTokens: 40,
       lockVersion: 9,
     })
   })
@@ -813,8 +855,6 @@ describe('ChunkingWorkspace', () => {
     dialog.querySelector('[data-testid="confirm-vectorization"]').click()
     await flushPromises()
     expect(confirmVectorization).toHaveBeenLastCalledWith('11', '22', {
-      overlapEnabled: false,
-      overlapTokens: 40,
       lockVersion: 10,
     })
   })

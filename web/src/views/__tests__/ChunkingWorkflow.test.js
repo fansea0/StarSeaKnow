@@ -29,12 +29,16 @@ const originalChunks = [
     sectionPath: ['科大百事通', '招生录取类问题'],
     sourceLocator: { startLine: 1, endLine: 8 }, tokenCount: 18,
     status: 0, isModified: false, lockVersion: 1,
+    overlapEnabled: false, overlapTokenLimit: 40,
+    overlapContent: null, overlapTokenCount: 0, overlapUnavailableReason: null,
   },
   {
     publicId: 'chunk-2', position: 1, content: '第二块原文。',
     sectionPath: ['科大百事通', '校园生活类问题'],
     sourceLocator: { startLine: 11, endLine: 20 }, tokenCount: 16,
     status: 0, isModified: false, lockVersion: 1,
+    overlapEnabled: false, overlapTokenLimit: 40,
+    overlapContent: null, overlapTokenCount: 0, overlapUnavailableReason: null,
   },
 ]
 
@@ -82,7 +86,7 @@ describe('Markdown chunking workflow', () => {
     vi.useRealTimers()
   })
 
-  it('restores ADJUSTING edits, keeps overlap hidden, and completes after overlap confirmation', async () => {
+  it('restores ADJUSTING edits, saves per-chunk overlap, and completes after summary confirmation', async () => {
     let chunks = originalChunks.map(chunk => ({ ...chunk }))
     let fileState = 2
     let fileLock = 3
@@ -92,6 +96,11 @@ describe('Markdown chunking workflow', () => {
       const chunk = chunks.find(candidate => candidate.publicId === chunkId)
       Object.assign(chunk, {
         content: request.content,
+        overlapEnabled: request.overlapEnabled,
+        overlapTokenLimit: request.overlapTokenLimit,
+        overlapContent: request.overlapEnabled ? '仅来自服务端的补充文本' : null,
+        overlapTokenCount: request.overlapEnabled ? 7 : 0,
+        overlapUnavailableReason: null,
         tokenCount: 24,
         status: 0,
         isModified: true,
@@ -108,7 +117,7 @@ describe('Markdown chunking workflow', () => {
       return Promise.resolve({ status: 204 })
     })
     confirmVectorization.mockImplementation((knowledgeId, fileId, request) => {
-      expect(request).toEqual({ overlapEnabled: true, overlapTokens: 40, lockVersion: fileLock })
+      expect(request).toEqual({ lockVersion: fileLock })
       fileState = 5
       fileLock += 1
       return Promise.resolve({ status: 202 })
@@ -129,15 +138,22 @@ describe('Markdown chunking workflow', () => {
     wrapper = mountWorkspace()
     await flushPromises()
     expect(wrapper.text()).toContain('人工保存后的第一块正文。')
-    expect(wrapper.text()).not.toMatch(/overlap|上文：/i)
     expect(wrapper.findAll('.chunk-card')).toHaveLength(1)
+
+    await wrapper.get('[data-testid="overlap-switch"] .el-switch').trigger('click')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="overlap-token-limit"] input').element.value).toBe('40')
+    expect(wrapper.get('[data-testid="overlap-content"]').text()).toContain('仅来自服务端的补充文本')
+    expect(wrapper.text()).not.toMatch(/上文：/)
 
     await wrapper.get('[data-testid="open-confirm"]').trigger('click')
     await flushPromises()
-    document.body.querySelector('[data-testid="overlap-switch"]').click()
-    await flushPromises()
-    expect(document.body.querySelector('[data-testid="overlap-tokens"] input').value).toBe('40')
-    expect(wrapper.text()).not.toMatch(/上文：/)
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog.querySelector('[data-testid="confirm-total-count"]').textContent).toContain('1')
+    expect(dialog.querySelector('[data-testid="confirm-enabled-count"]').textContent).toContain('1')
+    expect(dialog.querySelector('[data-testid="confirm-generated-count"]').textContent).toContain('1')
+    expect(dialog.querySelector('[data-testid="overlap-switch"]')).toBeNull()
     document.body.querySelector('[data-testid="confirm-vectorization"]').click()
     await flushPromises()
 
@@ -148,13 +164,10 @@ describe('Markdown chunking workflow', () => {
       status: 2,
       lockVersion: chunk.lockVersion + 1,
     }))
-    getProcessing.mockResolvedValueOnce(processing(6, fileLock, {
-      overlapEnabled: true,
-      overlapTokens: 40,
-    }))
+    getProcessing.mockResolvedValueOnce(processing(6, fileLock))
     await vi.advanceTimersByTimeAsync(1000)
     await flushPromises()
-    expect(wrapper.text()).not.toMatch(/overlap|上文：/i)
+    expect(wrapper.text()).toContain('仅来自服务端的补充文本')
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(false)
     expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('false')

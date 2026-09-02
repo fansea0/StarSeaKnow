@@ -6,21 +6,22 @@
     :close-on-click-modal="false"
     @update:model-value="$emit('update:modelValue', $event)"
   >
-    <p class="dialog-intro">为本次索引选择是否补充相邻正文。原始分块预览不会因此改变。</p>
+    <p class="dialog-intro">确认当前逐块审核结果后，将开始为这份文件建立向量索引。</p>
 
-    <div class="context-setting">
-      <div>
-        <strong>上下文补充</strong>
-        <span>把上一块结尾附加到索引内容中</span>
+    <dl class="confirm-summary" aria-label="分块补充上文统计">
+      <div data-testid="confirm-total-count">
+        <dt>总块数</dt>
+        <dd>{{ totalCount }}</dd>
       </div>
-      <el-switch v-model="overlapEnabled" data-testid="overlap-switch" aria-label="启用上下文补充" />
-    </div>
-
-    <label v-if="overlapEnabled" class="token-setting" data-testid="overlap-tokens">
-      <span>补充 Token</span>
-      <el-input-number v-model="overlapTokens" :min="0" :max="512" controls-position="right" />
-      <small>最多 512 Token</small>
-    </label>
+      <div data-testid="confirm-enabled-count">
+        <dt>已开启补充上文</dt>
+        <dd>{{ enabledCount }}</dd>
+      </div>
+      <div data-testid="confirm-generated-count">
+        <dt>已生成补充内容</dt>
+        <dd>{{ generatedCount }}</dd>
+      </div>
+    </dl>
     <div v-if="displayError" class="dialog-error" role="alert">
       <span>{{ displayError }}</span>
       <el-button
@@ -46,7 +47,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -55,66 +56,26 @@ const props = defineProps({
   serverConflict: { type: Boolean, default: false },
   reloading: { type: Boolean, default: false },
   blocked: { type: Boolean, default: false },
+  totalCount: { type: Number, default: 0 },
+  enabledCount: { type: Number, default: 0 },
+  generatedCount: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['update:modelValue', 'confirm', 'reload'])
-const overlapEnabled = ref(false)
-const overlapTokens = ref(40)
-const errorMessage = ref('')
-const displayError = computed(() => props.serverError || errorMessage.value)
-
-watch(
-  () => props.modelValue,
-  visible => {
-    if (!visible) return
-    overlapEnabled.value = false
-    overlapTokens.value = 40
-    errorMessage.value = ''
-  },
-)
+const displayError = computed(() => props.serverError)
 
 function confirm() {
   if (props.submitting || props.reloading || props.blocked) return
-  if (overlapEnabled.value && (!Number.isInteger(overlapTokens.value) || overlapTokens.value < 0 || overlapTokens.value > 512)) {
-    errorMessage.value = '补充 Token 必须在 0 到 512 之间。'
-    return
-  }
-  emit('confirm', {
-    overlapEnabled: overlapEnabled.value,
-    overlapTokens: overlapTokens.value,
-  })
+  emit('confirm')
 }
 </script>
 
 <style scoped>
 .dialog-intro { margin: 0 0 18px; color: var(--sea-muted); font-size: 13px; line-height: 1.65; }
 
-.context-setting {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--sea-muted) 20%, var(--sea-paper));
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--sea-mist) 42%, var(--sea-paper));
-}
-
-.context-setting div { display: grid; gap: 3px; }
-.context-setting strong { color: var(--sea-deep); font-size: 14px; }
-.context-setting span { color: var(--sea-muted); font-size: 12px; }
-
-.token-setting {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 7px 14px;
-  margin-top: 14px;
-  color: var(--sea-deep);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.token-setting small { grid-column: 1 / -1; color: var(--sea-muted); font-size: 11px; font-weight: 400; }
+.confirm-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0; }
+.confirm-summary div { display: grid; gap: 5px; padding: 13px 10px; border-radius: 8px; background: var(--sea-mist); text-align: center; }
+.confirm-summary dt { color: var(--sea-muted); font-size: 11px; }
+.confirm-summary dd { margin: 0; color: var(--sea-deep); font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 600; }
 .dialog-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 0; color: var(--sea-danger); font-size: 12px; }
 </style>

@@ -9,7 +9,7 @@ export const placeholderStrategies = Object.freeze([
 
 const presentation = {
   MARKDOWN_OPTIMIZED: {
-    title: 'MD 优化分块',
+    title: 'MD 自适应分块',
     description: '按 Markdown 标题结构生成可调整的语义分块。',
   },
 }

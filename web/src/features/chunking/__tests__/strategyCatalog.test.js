@@ -28,7 +28,7 @@ describe('mergeStrategies', () => {
 
     expect(strategies[2]).toMatchObject({
       code: 'MARKDOWN_OPTIMIZED',
-      title: 'MD 优化分块',
+      title: 'MD 自适应分块',
       description: expect.any(String),
       disabled: false,
     })
@@ -51,7 +51,7 @@ describe('mergeStrategies', () => {
       'MARKDOWN_OPTIMIZED',
       'FUTURE_MODE',
     ])
-    expect(strategies[2]).toMatchObject({ marker: 'first', title: 'MD 优化分块' })
+    expect(strategies[2]).toMatchObject({ marker: 'first', title: 'MD 自适应分块' })
     expect(strategies[3]).toMatchObject({ title: 'FUTURE MODE', description: expect.any(String), disabled: false })
     expect(backend).toEqual(original)
   })

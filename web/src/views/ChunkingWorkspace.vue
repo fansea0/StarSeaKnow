@@ -100,6 +100,9 @@
       :server-conflict="confirmConflict"
       :reloading="confirmReloading"
       :blocked="!canConfirm || confirmConflict"
+      :total-count="chunks.length"
+      :enabled-count="overlapEnabledCount"
+      :generated-count="overlapGeneratedCount"
       @confirm="submitVectorization"
       @reload="reloadConfirmState"
     />
@@ -242,6 +245,12 @@ export default {
     },
     processingLabel() {
       return Number(this.processing.state) === 1 ? '正在生成分块' : '正在建立索引'
+    },
+    overlapEnabledCount() {
+      return this.chunks.filter(chunk => chunk.overlapEnabled === true).length
+    },
+    overlapGeneratedCount() {
+      return this.chunks.filter(chunk => typeof chunk.overlapContent === 'string' && chunk.overlapContent.length > 0).length
     },
   },
   watch: {
@@ -487,7 +496,7 @@ export default {
       this.confirmConflict = false
       this.confirmDialogVisible = true
     },
-    async submitVectorization(contextPolicy, isRetry = false) {
+    async submitVectorization(isRetry = false) {
       if (isRetry ? !this.canRetryVector : (!this.canConfirm || this.confirmConflict || this.confirmReloading)) return
       const context = this.currentContext()
       this.confirmSubmitting = true
@@ -496,7 +505,6 @@ export default {
       this.confirmConflict = false
       try {
         await confirmVectorization(context.knowledgeId, context.fileId, {
-          ...contextPolicy,
           lockVersion: this.processing.lockVersion,
         })
         if (!this.isCurrent(context)) return
@@ -520,11 +528,7 @@ export default {
     },
     retryVectorization() {
       if (!this.canRetryVector) return
-      const policy = this.processing.contextPolicy || {}
-      return this.submitVectorization({
-        overlapEnabled: Boolean(policy.overlapEnabled),
-        overlapTokens: Number.isInteger(policy.overlapTokens) ? policy.overlapTokens : 40,
-      }, true)
+      return this.submitVectorization(true)
     },
     async reloadConfirmState() {
       if (this.confirmReloading) return

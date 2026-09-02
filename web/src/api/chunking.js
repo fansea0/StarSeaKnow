@@ -31,7 +31,12 @@ export function getChunks(knowledgeId, fileId) {
 }
 
 export function updateChunk(knowledgeId, fileId, chunkPublicId, request) {
-  return http.patch(filePath(knowledgeId, fileId, `/chunks/${chunkPublicId}`), request)
+  return http.patch(filePath(knowledgeId, fileId, `/chunks/${chunkPublicId}`), {
+    content: request?.content,
+    overlapEnabled: request?.overlapEnabled,
+    overlapTokenLimit: request?.overlapTokenLimit,
+    lockVersion: request?.lockVersion,
+  })
 }
 
 export function deleteChunk(knowledgeId, fileId, chunkPublicId, lockVersion) {
@@ -41,7 +46,9 @@ export function deleteChunk(knowledgeId, fileId, chunkPublicId, lockVersion) {
 }
 
 export function confirmVectorization(knowledgeId, fileId, request) {
-  return http.post(filePath(knowledgeId, fileId, '/confirm'), request)
+  return http.post(filePath(knowledgeId, fileId, '/confirm'), {
+    lockVersion: request?.lockVersion,
+  })
 }
 
 export function reindexChunk(knowledgeId, fileId, chunkPublicId) {

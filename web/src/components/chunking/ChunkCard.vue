@@ -36,6 +36,46 @@
         <span>{{ errorMessage }}</span>
         <el-button v-if="conflict" link data-testid="reload-chunk" @click="$emit('reload', localChunk.publicId)">重新加载</el-button>
       </div>
+
+      <section class="overlap-setting" data-testid="overlap-switch">
+        <div class="overlap-setting__heading">
+          <strong>补充上文</strong>
+          <span>使用服务端生成的相邻正文补充当前块语境</span>
+        </div>
+        <el-switch
+          v-model="overlapEnabled"
+          aria-label="补充上文"
+          :disabled="actionsDisabled"
+          @change="queueSave"
+        />
+      </section>
+
+      <div v-if="overlapEnabled" class="overlap-details">
+        <label class="overlap-limit" data-testid="overlap-token-limit">
+          <span>补充上限</span>
+          <el-input-number
+            v-model="overlapTokenLimit"
+            :min="1"
+            :max="512"
+            controls-position="right"
+            :disabled="actionsDisabled"
+            @change="changeOverlapTokenLimit"
+          />
+          <small>1–512 Token</small>
+        </label>
+        <div class="overlap-preview">
+          <div class="overlap-preview__heading">
+            <strong>补充内容</strong>
+            <span data-testid="overlap-token-count">{{ localChunk.overlapTokenCount }} Token</span>
+          </div>
+          <p v-if="localChunk.overlapContent" class="overlap-content" data-testid="overlap-content">
+            {{ localChunk.overlapContent }}
+          </p>
+          <p v-else class="overlap-unavailable" data-testid="overlap-unavailable">
+            {{ localChunk.overlapUnavailableReason || '暂无可补充的上文。' }}
+          </p>
+        </div>
+      </div>
     </div>
 
     <footer class="chunk-card__footer">
@@ -88,6 +128,8 @@ const emit = defineEmits(['updated', 'deleted', 'reload', 'reindex'])
 const localChunk = reactive({ ...props.chunk })
 const editing = ref(false)
 const editorValue = ref(props.chunk.content || '')
+const overlapEnabled = ref(Boolean(props.chunk.overlapEnabled))
+const overlapTokenLimit = ref(normalizeOverlapTokenLimit(props.chunk.overlapTokenLimit))
 const saveStatus = ref('')
 const errorMessage = ref('')
 const conflict = ref(false)
@@ -100,11 +142,19 @@ const chunkNumber = computed(() => String((Number(localChunk.position) || 0) + 1
 const actionsDisabled = computed(() => props.disabled || Number(localChunk.status) === 1)
 const sectionPathText = computed(() => localChunk.sectionPath?.length ? localChunk.sectionPath.join(' / ') : '文档正文')
 
+function normalizeOverlapTokenLimit(value) {
+  return Number.isInteger(value) && value >= 1 && value <= 512 ? value : 40
+}
+
 watch(
   () => props.chunk,
   value => {
     Object.assign(localChunk, value)
     if (!editing.value) editorValue.value = value.content || ''
+    if (!saveInFlight && !queuedSave && !saveTimer) {
+      overlapEnabled.value = Boolean(value.overlapEnabled)
+      overlapTokenLimit.value = normalizeOverlapTokenLimit(value.overlapTokenLimit)
+    }
   },
   { deep: true },
 )
@@ -137,6 +187,8 @@ function resetFromServer() {
   queuedSave = false
   Object.assign(localChunk, props.chunk)
   editorValue.value = props.chunk.content || ''
+  overlapEnabled.value = Boolean(props.chunk.overlapEnabled)
+  overlapTokenLimit.value = normalizeOverlapTokenLimit(props.chunk.overlapTokenLimit)
   saveStatus.value = ''
   errorMessage.value = ''
   conflict.value = false
@@ -151,6 +203,11 @@ function queueSave() {
   saveTimer = setTimeout(saveBody, 650)
 }
 
+function changeOverlapTokenLimit(value) {
+  overlapTokenLimit.value = normalizeOverlapTokenLimit(value)
+  queueSave()
+}
+
 async function saveBody() {
   saveTimer = null
   if (actionsDisabled.value) return
@@ -158,8 +215,12 @@ async function saveBody() {
     queuedSave = true
     return
   }
-  const body = editorValue.value
-  if (!body.trim()) {
+  const snapshot = {
+    content: editorValue.value,
+    overlapEnabled: overlapEnabled.value,
+    overlapTokenLimit: normalizeOverlapTokenLimit(overlapTokenLimit.value),
+  }
+  if (!snapshot.content.trim()) {
     errorMessage.value = '正文不能为空，请输入内容后再保存。'
     return
   }
@@ -173,19 +234,23 @@ async function saveBody() {
   saveStatus.value = '保存中'
   try {
     const response = await updateChunk(props.knowledgeId, props.fileId, localChunk.publicId, {
-      content: body,
+      ...snapshot,
       lockVersion: localChunk.lockVersion,
     })
     if (generation !== requestGeneration) return
     const updated = response?.data || {
       ...localChunk,
-      content: body,
+      ...snapshot,
       lockVersion: Number(localChunk.lockVersion) + 1,
       status: 0,
       isModified: true,
     }
     Object.assign(localChunk, updated)
-    if (editorValue.value === body) editorValue.value = updated.content
+    if (editorValue.value === snapshot.content) editorValue.value = updated.content
+    if (overlapEnabled.value === snapshot.overlapEnabled) overlapEnabled.value = Boolean(updated.overlapEnabled)
+    if (overlapTokenLimit.value === snapshot.overlapTokenLimit) {
+      overlapTokenLimit.value = normalizeOverlapTokenLimit(updated.overlapTokenLimit)
+    }
     saveSucceeded = true
     emit('updated', { ...localChunk })
   } catch (cause) {
@@ -301,6 +366,39 @@ onBeforeUnmount(() => {
 
 .chunk-card__body { padding: 17px 18px 13px; }
 .chunk-content { margin: 0; color: var(--sea-ink); font-size: 14px; line-height: 1.78; white-space: pre-wrap; }
+
+.overlap-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--sea-muted) 14%, var(--sea-paper));
+}
+
+.overlap-setting__heading { display: grid; gap: 3px; }
+.overlap-setting__heading strong { color: var(--sea-deep); font-size: 13px; }
+.overlap-setting__heading span { color: var(--sea-muted); font-size: 11px; line-height: 1.45; }
+
+.overlap-details {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--sea-signal) 18%, var(--sea-paper));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sea-signal) 4%, var(--sea-paper));
+}
+
+.overlap-limit { display: flex; align-items: center; gap: 10px; color: var(--sea-deep); font-size: 12px; font-weight: 600; }
+.overlap-limit small { color: var(--sea-muted); font-size: 11px; font-weight: 400; }
+.overlap-preview { display: grid; gap: 7px; }
+.overlap-preview__heading { display: flex; align-items: center; justify-content: space-between; color: var(--sea-deep); font-size: 12px; }
+.overlap-preview__heading span { color: var(--sea-muted); font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+.overlap-content,
+.overlap-unavailable { margin: 0; color: var(--sea-muted); font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
+.overlap-unavailable { font-style: italic; }
 
 .chunk-error {
   display: flex;
