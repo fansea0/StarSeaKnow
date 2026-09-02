@@ -64,6 +64,6 @@ public class AcceptInviteService {
         var rr = refresh.issue(u.getId(), ua, ip);
         return new AuthService.LoginResult(access, rr.rawToken(), rr.expiresAt(),
                 new AuthService.UserView(u.getId(), u.getTenantId(), u.getUsername(),
-                        u.getDisplayName(), u.getRole()));
+                        u.getDisplayName(), u.getRole()), false);
     }
 }

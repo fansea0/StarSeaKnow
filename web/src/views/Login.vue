@@ -38,10 +38,14 @@ async function onSubmit() {
   try {
     if (loginType.value === 'platform') {
       await auth.loginPlatform(form.username, form.password)
-      router.push(auth.mustChangePassword ? '/change-initial-password' : '/system')
+      router.push(auth.mustChangePassword
+        ? { path: '/change-initial-password', query: { redirect: '/system' } }
+        : '/system')
     } else {
       await auth.login(form.username, form.password)
-      router.push(route.query.redirect || '/knowledge')
+      router.push(auth.mustChangePassword
+        ? { path: '/change-initial-password', query: { redirect: route.query.redirect || '/knowledge' } }
+        : (route.query.redirect || '/knowledge'))
     }
   } catch (e) {
     ElMessage.error(e.response?.data?.msg || '登录失败')

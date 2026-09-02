@@ -87,7 +87,7 @@ export const routes = [
   },
   { path: '/login', name: 'Login', component: Login, meta: { public: true } },
   { path: '/register', name: 'Register', component: Register, meta: { public: true } },
-  { path: '/change-initial-password', name: 'ChangeInitialPassword', component: ChangeInitialPassword, meta: { requiresPlatformAdmin: true } },
+  { path: '/change-initial-password', name: 'ChangeInitialPassword', component: ChangeInitialPassword },
   { path: '/accept-invite/:code', name: 'AcceptInvite', component: AcceptInvite, meta: { public: true } },
   { path: '/403', name: 'Forbidden', component: Forbidden, meta: { public: true } },
   { path: '/tenant', redirect: '/tenant/members', meta: { requiresAdmin: true } },
