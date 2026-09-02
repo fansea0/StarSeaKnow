@@ -17,6 +17,7 @@
           <el-menu :default-active="activeMenu" router class="workspace-menu">
             <template v-if="auth.user?.role !== 'platform_admin'">
               <el-menu-item index="/agent">智能体</el-menu-item>
+              <el-menu-item v-if="auth.user?.role === 'tenant_admin'" index="/models">模型</el-menu-item>
               <el-menu-item index="/knowledge">知识库</el-menu-item>
               <el-menu-item index="/tools">工具</el-menu-item>
             </template>
@@ -82,6 +83,7 @@ const isPublicPage = computed(() => (
 
 const activeSection = computed(() => {
   if (route.path.startsWith('/agent')) return 'agent'
+  if (route.path.startsWith('/models')) return 'models'
   if (route.path.startsWith('/knowledge')) return 'knowledge'
   if (route.path.startsWith('/tools')) return 'tools'
   if (route.path.startsWith('/tenant')) return 'tenant'
@@ -91,6 +93,7 @@ const activeSection = computed(() => {
 
 const sectionLabels = {
   agent: '智能体',
+  models: '模型',
   knowledge: '知识库',
   tools: '工具',
   tenant: '租户管理',
@@ -283,6 +286,7 @@ onMounted(() => {
 }
 
 .tide-line[data-section='agent'] span { width: 92px; }
+.tide-line[data-section='models'] span { width: 84px; }
 .tide-line[data-section='knowledge'] span { width: 120px; }
 .tide-line[data-section='tools'] span { width: 76px; }
 .tide-line[data-section='tenant'] span { width: 104px; }

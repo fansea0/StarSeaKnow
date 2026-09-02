@@ -38,10 +38,10 @@
 - Produces `tenant_model_provider` with composite tenant identity, built-in uniqueness, case-insensitive custom-name uniqueness, JSON model validation, authentication-field consistency, timestamps and encrypted secret columns.
 - Produces mapper operations `nextId()`, catalog listing, current-tenant connection listing and row locking by ID.
 
-- [ ] Write PostgreSQL tests that reject cross-tenant references, duplicate built-in/custom providers, malformed model JSON and invalid API-key field combinations.
-- [ ] Run `mvn -q -Dtest=V11TenantModelProviderMigrationPostgresIT test` and observe RED because V11 is absent.
-- [ ] Implement V11 and mappings; add `auth_type` to the tenant row so custom providers and `NONE` authentication can enforce their own database constraint.
-- [ ] Re-run the migration test and observe GREEN.
+- [x] Write PostgreSQL tests that reject cross-tenant references, duplicate built-in/custom providers, malformed model JSON and invalid API-key field combinations.
+- [x] Run `mvn -q -Dtest=V11TenantModelProviderMigrationPostgresIT test` and observe RED because V11 is absent.
+- [x] Implement V11 and mappings; add `auth_type` to the tenant row so custom providers and `NONE` authentication can enforce their own database constraint.
+- [x] Re-run the migration test and observe GREEN.
 
 ### Task 2: 模块 2—连接验证、加密事务与管理 API
 
@@ -61,10 +61,10 @@
 - `POST /model-providers/connections/test|connections`, `PUT|DELETE /model-providers/connections/{id}`, `POST|PUT .../{id}/models` implement the confirmed API boundary.
 - `ModelProviderConnectionVerifier.verify(baseUrl, authType, apiKey)` returns discovered models or a sanitized 401/429/timeout/upstream error.
 
-- [ ] Write service/controller/gateway RED tests for tenant isolation, verify-before-write, failed-update preservation, encryption fields, no secret response, discovered-model merge and candidate replacement.
-- [ ] Implement the verifier with bounded timeout and `/models`; never log headers or upstream bodies.
-- [ ] Implement transactional service and admin-only controller; create rows with preallocated sequence IDs before AAD-bound encryption.
-- [ ] Run module tests, full backend tests and package; commit `feat: 完成租户模型厂商配置`.
+- [x] Write service/controller/gateway RED tests for tenant isolation, verify-before-write, failed-update preservation, encryption fields, no secret response, discovered-model merge and candidate replacement.
+- [x] Implement the verifier with bounded timeout and `/models`; never log headers or upstream bodies.
+- [x] Implement transactional service and admin-only controller; create rows with preallocated sequence IDs before AAD-bound encryption.
+- [x] Run module tests, full backend tests and package; commit `feat: 完成租户模型厂商配置`.
 
 ### Task 3: 模块 2 前端—模型管理页面
 
@@ -79,9 +79,9 @@
 - Route `/models` is tenant-admin only and consumes Task 2 APIs.
 - Page reproduces prototype provider rail, provider header, model table, connection state and add/configure modal; no enabled-state control is shown.
 
-- [ ] Write Vitest RED tests for route visibility, provider selection, API-key non-echo, connection test, save and model add/remove.
-- [ ] Implement the page using exact sea tokens, Noto fonts, 280px provider rail, model-table density, modal hierarchy and responsive fallback from the prototype.
-- [ ] Run `npm test` and `npm run build`; capture desktop and mobile screenshots for comparison; commit `feat: 添加租户模型管理页面`.
+- [x] Write Vitest RED tests for route visibility, provider selection, API-key non-echo, connection test, save and model add/remove.
+- [x] Implement the page using exact sea tokens, Noto fonts, 240px provider rail, model-table density, modal hierarchy and responsive fallback from the prototype.
+- [x] Run `npm test` and `npm run build`; capture desktop and mobile screenshots for comparison; commit `feat: 添加租户模型管理页面`.
 
 ### Task 4: 模块 3—Agent 草稿、独占模型和软删除
 

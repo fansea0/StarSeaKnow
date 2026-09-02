@@ -26,6 +26,12 @@ export const routes = [
     component: Agent
   },
   {
+    path: '/models',
+    name: 'ModelProviders',
+    component: () => import('../views/ModelProviders.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
     path: '/knowledge',
     name: 'Knowledge',
     component: Knowledge
