@@ -17,7 +17,13 @@
 .aw-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--sea-signal) 12%, var(--sea-paper)); color: var(--sea-ink); font-family: 'Noto Sans SC', sans-serif; font-size: 11px; font-weight: 500; white-space: nowrap; }
 .aw-chip.sand { background: color-mix(in srgb, var(--sea-sand) 32%, var(--sea-paper)); }
 button.aw-chip { min-height: 22px; }
-.aw-markdown { white-space: normal; }.aw-markdown p:first-child { margin-top: 0; }.aw-markdown p:last-child { margin-bottom: 0; }.aw-markdown pre { max-width: 100%; overflow-x: auto; padding: 10px; background: var(--sea-mist); border-radius: 6px; }.aw-markdown a { color: var(--sea-signal); }.aw-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }.aw-markdown th, .aw-markdown td { border: 1px solid #dfe8ec; padding: 6px; }
+.aw-bubble.aw-markdown { white-space: normal; line-height: 1.6; }
+.aw-markdown p, .aw-markdown ul, .aw-markdown ol { margin: 0 0 8px; }
+.aw-markdown li + li { margin-top: 4px; }
+.aw-markdown li > p { margin: 4px 0; }
+.aw-markdown > :first-child { margin-top: 0; }
+.aw-markdown > :last-child { margin-bottom: 0; }
+.aw-markdown pre { white-space: pre; max-width: 100%; overflow-x: auto; padding: 10px; background: var(--sea-mist); border-radius: 6px; }.aw-markdown a { color: var(--sea-signal); }.aw-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }.aw-markdown th, .aw-markdown td { border: 1px solid #dfe8ec; padding: 6px; }
 .aw-editor-body { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 14px; padding-top: 14px; height: calc(100vh - 172px); min-height: 650px; }
 .aw-editor-body--readonly { grid-template-columns: minmax(0, 1fr); }
 .aw-pane { min-width: 0; min-height: 0; background: var(--sea-paper); border: 1px solid var(--aw-rule); border-radius: 12px; box-shadow: 0 8px 28px rgb(17 36 59 / 7%); display: flex; flex-direction: column; overflow: hidden; }

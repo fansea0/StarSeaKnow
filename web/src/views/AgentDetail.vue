@@ -8,7 +8,7 @@
           <div><h1>{{ draft.name }} <span class="aw-chip" :class="{ sand: draft.status !== 'PUBLISHED' }">{{ statusLabel }}</span></h1><small>关联 {{ draft.knowledgeIds.length }} 个知识库 · {{ saveState }}</small></div>
         </div>
         <div v-if="draft.editable" class="aw-actions">
-          <button class="aw-button" data-testid="save-agent" :disabled="saving || conflict" @click="save">{{ saving ? '保存中…' : '保存草稿' }}</button>
+          <button class="aw-button" data-testid="save-agent" :disabled="saving || conflict" @click="save(true)">{{ saving ? '保存中…' : '保存草稿' }}</button>
           <button class="aw-button sand" :disabled="saving || conflict" @click="publishOpen = true">发布</button>
         </div>
       </header>
@@ -100,14 +100,15 @@ async function load() {
   } catch (error) { if (generation === loadGeneration) loadError.value = errorMessage(error) }
   finally { if (generation === loadGeneration) loading.value = false }
 }
-async function save() {
+async function save(force = false) {
   clearTimeout(timer)
   if (!draft.value?.editable) return true
   if (conflict.value) return false
   if (savePromise) { const ok = await savePromise; return ok && dirty.value ? save() : ok }
-  if (!dirty.value) return true
+  // Explicit saves always reach the server; background saves still skip unchanged drafts.
+  if (!dirty.value && !force) return true
   const command = draftCommand(draft.value), sentFingerprint = fingerprint(command), id = agentId.value
-  saving.value = true
+  saving.value = true; feedback.value = ''; feedbackError.value = false
   savePromise = (async () => {
     try {
       const value = await saveAgent(id, command)

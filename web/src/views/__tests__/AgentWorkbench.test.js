@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentDetail from '../AgentDetail.vue'
 import { http } from '../../api/http'
 vi.mock('../../api/http', () => ({ apiUrl: p => `/api${p}`, http: { get: vi.fn(), put: vi.fn(), post: vi.fn(), delete: vi.fn() } }))
@@ -9,14 +9,56 @@ vi.mock('vue-router', () => ({ useRoute: () => ({ params: { id: '3' } }), useRou
 const detail = { id: 3, name: '客服', description: '', prologue: '欢迎', systemPrompt: '你是助手', tags: [], variables: [], knowledgeIds: [], retrievalTopK: 5, retrievalScoreThreshold: .7, model: null, status: 'UNPUBLISHED', lockVersion: 2, editable: true }
 function page() { return mount(AgentDetail, { global: { stubs: { RouterLink: { template: '<a><slot /></a>' } }, mocks: { $route: { params: { id: '3' } }, $message: { success: vi.fn(), error: vi.fn() } } } }) }
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   http.get.mockImplementation(path => Promise.resolve({ data: { code: 200, data: path === '/agents/3' ? structuredClone(detail) : path === '/model-providers' ? [
     { configured: false, name: '不可选', selectableModels: [{ modelId: 'hidden' }] },
     { configured: true, connectionId: 7, name: '厂商', selectableModels: [{ modelId: 'model-b', displayName: '模型 B' }] },
   ] : [] } }))
   http.put.mockImplementation((path, command) => Promise.resolve({ data: { code: 200, data: { ...detail, ...command, lockVersion: 3 } } }))
 })
+afterEach(() => { vi.useRealTimers() })
 describe('Agent workbench', () => {
+  it('submits an unchanged draft on explicit save and shows pending then success feedback', async () => {
+    let finishSave
+    http.put.mockImplementation(() => new Promise(resolve => { finishSave = resolve }))
+    const wrapper = page(); await flushPromises()
+    try {
+      await wrapper.get('[data-testid="save-agent"]').trigger('click')
+      expect(http.put).toHaveBeenCalledWith('/agents/3/draft', expect.objectContaining({ name: '客服', lockVersion: 2 }))
+      expect(wrapper.get('[data-testid="save-agent"]').text()).toBe('保存中…')
+      expect(wrapper.get('[data-testid="save-agent"]').element.disabled).toBe(true)
+      finishSave({ data: { code: 200, data: { ...detail, lockVersion: 3 } } })
+      await flushPromises()
+      expect(wrapper.get('[role="status"]').text()).toContain('草稿已保存')
+      expect(wrapper.get('[data-testid="save-agent"]').element.disabled).toBe(false)
+    } finally { wrapper.unmount() }
+  })
+  it('uses the latest lock version when manually saving after autosave', async () => {
+    vi.useFakeTimers()
+    const wrapper = page(); await flushPromises()
+    try {
+      await wrapper.get('#config-basic input').setValue('修改后的客服')
+      await vi.advanceTimersByTimeAsync(1200); await flushPromises()
+      expect(http.put).toHaveBeenCalledTimes(1)
+      await wrapper.get('[data-testid="save-agent"]').trigger('click'); await flushPromises()
+      expect(http.put).toHaveBeenCalledTimes(2)
+      expect(http.put).toHaveBeenLastCalledWith('/agents/3/draft', expect.objectContaining({ name: '修改后的客服', lockVersion: 3 }))
+      await vi.advanceTimersByTimeAsync(2400)
+      expect(http.put).toHaveBeenCalledTimes(2)
+    } finally { wrapper.unmount() }
+  })
+  it('reports manual save failures and allows retry instead of silently returning', async () => {
+    http.put.mockRejectedValueOnce({ response: { status: 500, data: { msg: '保存失败，请重试' } } })
+    const wrapper = page(); await flushPromises()
+    try {
+      await wrapper.get('[data-testid="save-agent"]').trigger('click'); await flushPromises()
+      expect(wrapper.get('[role="status"]').text()).toContain('保存失败，请重试')
+      expect(wrapper.get('[data-testid="save-agent"]').element.disabled).toBe(false)
+      await wrapper.get('[data-testid="save-agent"]').trigger('click'); await flushPromises()
+      expect(http.put).toHaveBeenCalledTimes(2)
+      expect(wrapper.get('[role="status"]').text()).toContain('草稿已保存')
+    } finally { wrapper.unmount() }
+  })
   it('saves unsaved changes before a parameter-only route switch', async () => {
     const wrapper = page(); await flushPromises()
     await wrapper.get('#config-basic input').setValue('修改后的客服')
