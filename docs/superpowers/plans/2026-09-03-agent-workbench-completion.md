@@ -145,10 +145,12 @@
 - `AgentExecutionService.execute(ExecutionSource source, ExecutionRequest request)` emits `retrieval/delta/usage/complete/error` events.
 - Draft loader and published snapshot loader are explicit, never selected implicitly by controller state.
 
-- [ ] Write RED tests for prompt variables, pgvector Top-K/threshold, C1/C2 order, no-result behavior, current-key decrypt and sanitized upstream errors.
-- [ ] Implement loaders, prompt/context assembler, citations and model adapter.
-- [ ] Verify existing RAG tenant/file-state tests plus new execution tests.
-- [ ] Commit `feat: 建立统一智能体执行内核`.
+- [x] Write RED tests for prompt variables, pgvector Top-K/threshold, C1/C2 order, no-result behavior, current-key decrypt and sanitized upstream errors.
+- [x] Implement loaders, prompt/context assembler, citations and model adapter.
+- [x] Verify existing RAG tenant/file-state tests plus new execution tests.
+- [x] Commit `feat: 建立统一智能体执行内核`.
+
+执行验证：完整后端测试、打包和真实应用启动通过。模型适配采用现有 WebClient 实现 OpenAI-compatible SSE，避免旧 ChatMemory 和日志 advisor；本地 HTTP 测试覆盖当前密钥轮换、快照参数、上游认证失败、截断响应、绝对超时及 URL scheme 大小写兼容。独立审查无阻塞问题。
 
 ### Task 7: 模块 6—Caffeine 临时调试上下文与 SSE
 

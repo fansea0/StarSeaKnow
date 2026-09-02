@@ -133,7 +133,8 @@ public class PgVectorRagServiceImpl implements RagService {
         return new RetrievedChunk(chunk.getIndexContent(), candidate.score(), chunk.getSourceFileName(),
                 chunk.getSourceDocumentPublicId(), chunk.getPublicId(), chunk.getSourceFileType(),
                 mapInteger(chunk.getSourceLocator(), "pageNumber", "page_number"), chunk.getPosition(),
-                chunk.getSectionPath(), chunk.getSourceLocator());
+                chunk.getSectionPath(), chunk.getSourceLocator(),
+                chunk.getSourceKnowledgePublicId(), chunk.getSourceKnowledgeName());
     }
 
     private static List<Document> safeDocuments(List<Document> documents) {

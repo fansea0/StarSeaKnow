@@ -15,7 +15,16 @@ public record RetrievedChunk(
         Integer pageNumber,
         Integer chunkIndex,
         List<String> sectionPath,
-        Map<String, Object> sourceLocator) {
+        Map<String, Object> sourceLocator,
+        UUID knowledgeId,
+        String knowledgeName) {
+
+    public RetrievedChunk(String content, double score, String title, UUID documentId, UUID chunkId,
+                          String fileType, Integer pageNumber, Integer chunkIndex, List<String> sectionPath,
+                          Map<String, Object> sourceLocator) {
+        this(content, score, title, documentId, chunkId, fileType, pageNumber, chunkIndex, sectionPath,
+                sourceLocator, null, null);
+    }
 
     public RetrievedChunk {
         sectionPath = sectionPath == null ? List.of() : List.copyOf(sectionPath);

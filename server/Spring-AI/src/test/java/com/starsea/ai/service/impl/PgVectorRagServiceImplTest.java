@@ -307,6 +307,8 @@ class PgVectorRagServiceImplTest {
         current.setSourceDocumentPublicId(CURRENT_FILE_PUBLIC_ID);
         current.setSourceFileName("current-guide.markdown");
         current.setSourceFileType("markdown");
+        current.setSourceKnowledgePublicId(UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc"));
+        current.setSourceKnowledgeName("当前知识库");
         when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
                 .thenReturn(List.of(current));
 
@@ -316,6 +318,8 @@ class PgVectorRagServiceImplTest {
         assertEquals(CURRENT_FILE_PUBLIC_ID, result.documentId());
         assertEquals("current-guide.markdown", result.title());
         assertEquals("markdown", result.fileType());
+        assertEquals(UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc"), result.knowledgeId());
+        assertEquals("当前知识库", result.knowledgeName());
     }
 
     @Test
@@ -349,6 +353,9 @@ class PgVectorRagServiceImplTest {
 
         assertTrue(sql.contains("join file f"));
         assertTrue(sql.contains("join knowledge_file kf"));
+        assertTrue(sql.contains("join knowledge k"));
+        assertTrue(sql.contains("k.tenant_id = dc.tenant_id"));
+        assertTrue(sql.contains("k.public_id as source_knowledge_public_id"));
         assertTrue(sql.contains("dc.tenant_id = ?"));
         assertTrue(sql.contains("f.tenant_id = ?"));
         assertTrue(sql.contains("kf.tenant_id = ?"));
@@ -368,7 +375,7 @@ class PgVectorRagServiceImplTest {
                 .map(mapping -> mapping.getProperty())
                 .collect(java.util.stream.Collectors.toSet());
         assertTrue(resultProperties.containsAll(Set.of(
-                "sourceDocumentPublicId", "sourceFileName", "sourceFileType")));
+                "sourceDocumentPublicId", "sourceFileName", "sourceFileType", "sourceKnowledgePublicId", "sourceKnowledgeName")));
     }
 
     private Fixture fixture() {

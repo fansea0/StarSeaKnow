@@ -68,5 +68,11 @@ public class DocumentChunk implements Serializable {
     private String sourceFileType;
 
     @TableField(exist = false)
+    private UUID sourceKnowledgePublicId;
+
+    @TableField(exist = false)
+    private String sourceKnowledgeName;
+
+    @TableField(exist = false)
     private static final long serialVersionUID = 1L;
 }

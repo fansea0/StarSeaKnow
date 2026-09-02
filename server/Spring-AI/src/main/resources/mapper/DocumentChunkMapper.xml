@@ -32,6 +32,8 @@
         <result property="sourceDocumentPublicId" column="source_document_public_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
         <result property="sourceFileName" column="source_file_name" jdbcType="VARCHAR"/>
         <result property="sourceFileType" column="source_file_type" jdbcType="VARCHAR"/>
+        <result property="sourceKnowledgePublicId" column="source_knowledge_public_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
+        <result property="sourceKnowledgeName" column="source_knowledge_name" jdbcType="VARCHAR"/>
     </resultMap>
 
     <update id="restoreIndexingByFile">
@@ -53,8 +55,13 @@
         SELECT dc.*,
                f.public_id AS source_document_public_id,
                f.file_name AS source_file_name,
-               f.type AS source_file_type
+               f.type AS source_file_type,
+               k.public_id AS source_knowledge_public_id,
+               k.name AS source_knowledge_name
         FROM document_chunk dc
+        JOIN knowledge k
+          ON k.id = dc.knowledge_id
+         AND k.tenant_id = dc.tenant_id
         JOIN file f
           ON f.id = dc.file_id
          AND f.tenant_id = dc.tenant_id
