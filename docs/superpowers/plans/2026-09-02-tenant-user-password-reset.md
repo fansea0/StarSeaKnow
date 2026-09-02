@@ -23,12 +23,12 @@
 ### Task 1: 添加租户用户强制修改密码字段
 
 **Files:**
-- Create: `server/Spring-AI/src/main/resources/db/V3__tenant_user_password_reset.sql`
+- Create: `server/Spring-AI/src/main/resources/db/V9__tenant_user_password_reset.sql`
 - Modify: `server/Spring-AI/src/main/java/com/starsea/ai/domain/AppUser.java`
 
 - [ ] 写数据库/实体回归测试或最小验证，确认已有用户默认 `must_change_password=false`，字段可被 MyBatis 映射。
 - [ ] 运行验证并确认在实现前失败或暴露字段不存在。
-- [ ] 添加 Flyway migration：`app_user.must_change_password BOOLEAN NOT NULL DEFAULT FALSE`。
+- [ ] 添加 Flyway migration：`app_user.must_change_password BOOLEAN NOT NULL DEFAULT FALSE`，使用当前迁移序列下一个版本 `V9`。
 - [ ] 在 `AppUser` 增加 `Boolean mustChangePassword`。
 - [ ] 运行后端编译验证。
 
