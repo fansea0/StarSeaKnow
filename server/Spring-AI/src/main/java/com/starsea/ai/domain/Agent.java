@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.starsea.ai.agent.AgentWorkbenchApiModels;
 import com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler;
 import lombok.Data;
@@ -16,7 +15,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 @Data
-@ToString(exclude = "modelApiKey")
+@ToString(exclude = {"systemPrompt", "variables"})
 @TableName(value = "agent", autoResultMap = true)
 public class Agent implements Serializable {
     @TableId(type = IdType.AUTO)
@@ -25,15 +24,6 @@ public class Agent implements Serializable {
     private String name;
     private String description;
     private String prologue;
-
-    /** Legacy fields retained only during the V12-to-V14 migration window. */
-    private String roleDescription;
-    private String modelUrl;
-    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
-    private String modelApiKey;
-    private String modelId;
-    @TableField(exist = false)
-    private boolean modelApiKeyConfigured;
 
     private String systemPrompt;
     @TableField(value = "tags", typeHandler = PostgresJsonbTypeHandler.class)

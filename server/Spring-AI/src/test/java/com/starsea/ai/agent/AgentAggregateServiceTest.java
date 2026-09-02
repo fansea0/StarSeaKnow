@@ -158,6 +158,11 @@ class AgentAggregateServiceTest {
                         "OPENAI_COMPATIBLE", "API_KEY", "gpt-4o-mini", new BigDecimal("0.4"),
                         new BigDecimal("0.9"), 2048, 30), 5, new BigDecimal("0.2")));
         when(snapshots.selectOne(any())).thenReturn(snapshot);
+        snapshot.setId(801L); snapshot.setAgentId(102L); snapshot.setTenantId(9L);
+        AgentSnapshot changedSnapshot = new AgentSnapshot();
+        changedSnapshot.setId(802L); changedSnapshot.setAgentId(103L); changedSnapshot.setTenantId(9L);
+        changedSnapshot.setVersionNumber(3L); changedSnapshot.setSnapshotData(snapshot.getSnapshotData());
+        when(snapshots.selectList(any())).thenReturn(List.of(snapshot, changedSnapshot));
         AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 72L, 9L, "tenant_member", "jti"));
 
         AgentWorkbenchApiModels.AgentPage result = service.list(
@@ -167,6 +172,10 @@ class AgentAggregateServiceTest {
                 .containsExactly(102L, 103L);
         assertThat(result.items()).extracting(AgentWorkbenchApiModels.AgentListItem::name)
                 .containsOnly("已发布名称");
+        var byPublishedFields = service.list(new AgentWorkbenchApiModels.AgentListQuery(1, 20, "PUBLISHED", "已发布", "已发布名称"));
+        assertThat(byPublishedFields.items()).hasSize(2);
+        assertThat(service.list(new AgentWorkbenchApiModels.AgentListQuery(1, 20, null, null, "Agent")).items()).isEmpty();
+        assertThat(service.metrics().draftChanged()).isZero();
         assertThatThrownBy(() -> service.get(101L))
                 .isInstanceOf(AgentWorkbenchException.class)
                 .extracting("status")
@@ -190,6 +199,14 @@ class AgentAggregateServiceTest {
         assertThat(model.getDeletedBy()).isEqualTo(71L);
         verify(agents).updateById(existing);
         verify(models).updateById(model);
+    }
+
+    @Test void administrator_empty_search_does_not_load_relations_for_every_tenant_agent() {
+        when(agents.selectList(any())).thenReturn(java.util.stream.LongStream.range(1, 101)
+                .mapToObj(id -> agent(id, 9L, 0L, 1L, null)).toList());
+        var page = service.list(new AgentWorkbenchApiModels.AgentListQuery(1, 20, null, null, "no-such-agent"));
+        assertThat(page.items()).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(agentKnowledge, snapshots);
     }
 
     private AgentWorkbenchApiModels.DraftCommand command(long lockVersion) {

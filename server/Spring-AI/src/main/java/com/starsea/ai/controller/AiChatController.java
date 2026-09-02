@@ -1,16 +1,11 @@
 package com.starsea.ai.controller;
 
 import com.starsea.ai.auth.RequireLogin;
-import com.starsea.ai.domain.Agent;
+import com.starsea.ai.agent.AgentWorkbenchException;
 import com.starsea.ai.history.RepositoryHistory;
-import com.starsea.ai.model.AgentChatClientFactory;
 import com.starsea.ai.openapi.retrieval.RetrievalQuery;
 import com.starsea.ai.openapi.retrieval.RetrievedChunk;
-import com.starsea.ai.service.AgentRagContextService;
-import com.starsea.ai.service.AgentService;
 import com.starsea.ai.service.RagService;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -40,9 +35,6 @@ public class AiChatController {
     private final RepositoryHistory repositoryHistory;
     private final ChatClient chatClient;
     private final RagService ragService;
-    private final AgentService agentService;
-    private final AgentRagContextService agentRagContextService;
-    private final AgentChatClientFactory agentChatClientFactory;
 
 
     // 指定字符编码否则无法正确展示
@@ -73,20 +65,9 @@ public class AiChatController {
                 .content();
     }
 
-    // 指定智能体回复
-    @PostMapping(value = "/agent/chat",produces = "text/html;charset=utf-8")
-    public Flux<String> agentChat(@Valid @RequestBody AgentChatRequest request, String chatId, Long agentId){
-        Agent agent = agentService.getById(agentId);
-        String content = agentRagContextService.retrieveContext(agentId, request.prompt());
-        return agentChatClientFactory.create(agent).prompt()
-                .system(agent.getRoleDescription())
-                .user(getChatPrompt2String(request.prompt(), content))
-                .advisors(a -> a.param(CHAT_MEMORY_CONVERSATION_ID_KEY,chatId))
-                .stream()
-                .content();
-    }
-
-    public record AgentChatRequest(@NotBlank String prompt) {
+    @RequestMapping("/agent/chat")
+    public void agentChat() {
+        throw new AgentWorkbenchException(410, "AGENT_LEGACY_API_RETIRED", "旧智能体聊天接口已停用，请使用发布快照调用接口");
     }
 
     private String getChatPrompt2String(String message, String context) {

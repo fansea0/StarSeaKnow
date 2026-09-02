@@ -81,7 +81,7 @@ public class AgentAggregateService {
         long tenantId = tenantId();
         Agent row = new Agent();
         row.setTenantId(tenantId);
-        applyDraft(row, draft, false);
+        applyDraft(row, draft);
         row.setDraftRevision(1L);
         row.setPublishedRevision(0L);
         row.setLockVersion(0L);
@@ -111,7 +111,7 @@ public class AgentAggregateService {
         }
         ValidatedDraft draft = validate(command, tenantId);
         AgentModel model = replaceModel(row, draft.model(), tenantId);
-        applyDraft(row, draft, true);
+        applyDraft(row, draft);
         row.setDraftRevision(value(row.getDraftRevision(), 1L) + 1);
         row.setLockVersion(value(row.getLockVersion(), 0L) + 1);
         row.setLastEditedBy(userId());
@@ -133,11 +133,11 @@ public class AgentAggregateService {
             AgentSnapshotData.ModelConfiguration model = data.model();
             return new AgentWorkbenchApiModels.AgentDetailView(
                     row.getId(), data.name(), data.description(), data.prologue(), null,
-                    data.tags(), List.of(), data.knowledgeIds(), data.retrievalTopK(),
+                    data.tags(), data.variables(), data.knowledgeIds(), data.retrievalTopK(),
                     data.retrievalScoreThreshold(), snapshotModelView(model), "PUBLISHED",
-                    value(row.getDraftRevision(), 1L), value(row.getPublishedRevision(), 0L),
-                    row.getCurrentSnapshotId(), value(row.getLockVersion(), 0L),
-                    row.getLastDebuggedAt(), row.getLastDebuggedBy(), row.getUpdateTime(), false);
+                    snapshot.getSourceRevision(), snapshot.getSourceRevision(),
+                    row.getCurrentSnapshotId(), 0L,
+                    null, null, snapshot.getCreateTime(), false);
         }
         List<Long> knowledgeIds = safeList(agentKnowledge.selectKnowledgeIds(agentId, tenantId));
         AgentModel model = activeModel(row.getAgentModelId(), tenantId);
@@ -155,21 +155,38 @@ public class AgentAggregateService {
         String requestedStatus = trimUpper(request.status());
         String tag = trimToNull(request.tag());
         boolean admin = isAdmin();
-        List<Agent> filtered = rows.stream()
-                .filter(row -> admin || row.getCurrentSnapshotId() != null)
-                .filter(row -> requestedStatus == null || requestedStatus.equals(status(row)))
-                .filter(row -> tag == null || safeList(row.getTags()).contains(tag))
-                .filter(row -> keyword == null || contains(row.getName(), keyword) || contains(row.getDescription(), keyword))
-                .sorted(Comparator.comparing(Agent::getUpdateTime,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .toList();
         int page = request.normalizedPage();
         int pageSize = request.normalizedPageSize();
-        int from = Math.min(filtered.size(), (page - 1) * pageSize);
-        int to = Math.min(filtered.size(), from + pageSize);
-        List<AgentWorkbenchApiModels.AgentListItem> items = filtered.subList(from, to).stream()
-                .map(this::toListItem)
+        if (admin) {
+            List<Agent> filtered = rows.stream()
+                    .filter(row -> requestedStatus == null || requestedStatus.equals(status(row)))
+                    .filter(row -> tag == null || safeList(row.getTags()).contains(tag))
+                    .filter(row -> keyword == null || contains(row.getName(), keyword) || contains(row.getDescription(), keyword))
+                    .sorted(Comparator.comparing(Agent::getUpdateTime, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .toList();
+            int from = (int) Math.min(filtered.size(), (long) (page - 1) * pageSize);
+            var items = filtered.subList(from, Math.min(filtered.size(), from + pageSize)).stream().map(this::toListItem).toList();
+            return new AgentWorkbenchApiModels.AgentPage(items, page, pageSize, filtered.size());
+        }
+        List<Agent> publishedRows = rows.stream().filter(row -> row.getCurrentSnapshotId() != null).toList();
+        if (publishedRows.isEmpty()) return new AgentWorkbenchApiModels.AgentPage(List.of(), page, pageSize, 0);
+        java.util.Map<Long, AgentSnapshot> published = safeList(snapshots.selectList(new LambdaQueryWrapper<AgentSnapshot>()
+                .eq(AgentSnapshot::getTenantId, tenantId()).isNull(AgentSnapshot::getDeletedAt)
+                .in(AgentSnapshot::getId, publishedRows.stream().map(Agent::getCurrentSnapshotId).toList())))
+                .stream().collect(java.util.stream.Collectors.toMap(AgentSnapshot::getId, snapshot -> snapshot));
+        List<AgentWorkbenchApiModels.AgentListItem> filtered = publishedRows.stream()
+                .filter(row -> published.containsKey(row.getCurrentSnapshotId()))
+                .filter(row -> Objects.equals(published.get(row.getCurrentSnapshotId()).getAgentId(), row.getId()))
+                .map(row -> memberListItem(row, published.get(row.getCurrentSnapshotId())))
+                .filter(item -> requestedStatus == null || requestedStatus.equals(item.status()))
+                .filter(item -> tag == null || item.tags().contains(tag))
+                .filter(item -> keyword == null || contains(item.name(), keyword) || contains(item.description(), keyword))
+                .sorted(Comparator.comparing(AgentWorkbenchApiModels.AgentListItem::updateTime,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
+        int from = (int) Math.min(filtered.size(), (long) (page - 1) * pageSize);
+        int to = Math.min(filtered.size(), from + pageSize);
+        List<AgentWorkbenchApiModels.AgentListItem> items = filtered.subList(from, to);
         return new AgentWorkbenchApiModels.AgentPage(items, page, pageSize, filtered.size());
     }
 
@@ -177,7 +194,10 @@ public class AgentAggregateService {
         List<Agent> rows = agents.selectList(new LambdaQueryWrapper<Agent>()
                 .eq(Agent::getTenantId, tenantId())
                 .isNull(Agent::getDeletedAt));
-        if (!isAdmin()) rows = rows.stream().filter(row -> row.getCurrentSnapshotId() != null).toList();
+        if (!isAdmin()) {
+            long count = rows.stream().filter(row -> row.getCurrentSnapshotId() != null).count();
+            return new AgentWorkbenchApiModels.AgentMetrics(count, count, 0, 0);
+        }
         OffsetDateTime now = OffsetDateTime.now(clock);
         OffsetDateTime weekStart = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
                 .toLocalDate().atStartOfDay(clock.getZone()).toOffsetDateTime();
@@ -305,7 +325,7 @@ public class AgentAggregateService {
         return List.copyOf(normalized);
     }
 
-    private void applyDraft(Agent row, ValidatedDraft draft, boolean preserveIdentity) {
+    private void applyDraft(Agent row, ValidatedDraft draft) {
         row.setName(draft.name());
         row.setDescription(draft.description());
         row.setPrologue(draft.prologue());
@@ -314,7 +334,6 @@ public class AgentAggregateService {
         row.setVariables(draft.variables());
         row.setRetrievalTopK(draft.retrievalTopK());
         row.setRetrievalScoreThreshold(draft.retrievalScoreThreshold());
-        if (!preserveIdentity) row.setRoleDescription(null);
     }
 
     private AgentModel replaceModel(
@@ -403,20 +422,23 @@ public class AgentAggregateService {
     }
 
     private AgentWorkbenchApiModels.AgentListItem toListItem(Agent row) {
-        List<Long> ids = safeList(agentKnowledge.selectKnowledgeIds(row.getId(), tenantId()));
         if (!isAdmin() && row.getCurrentSnapshotId() != null) {
-            AgentSnapshot snapshot = currentSnapshot(row);
-            AgentSnapshotData data = snapshot.getSnapshotData();
-            return new AgentWorkbenchApiModels.AgentListItem(
-                    row.getId(), data.name(), data.description(), data.tags(), "PUBLISHED",
-                    data.knowledgeIds().size(), snapshot.getVersionNumber(), data.model() != null,
-                    row.getLastDebuggedAt(), row.getLastDebuggedBy(), row.getUpdateTime());
+            return memberListItem(row, currentSnapshot(row));
         }
+        List<Long> ids = safeList(agentKnowledge.selectKnowledgeIds(row.getId(), tenantId()));
         AgentSnapshot snapshot = row.getCurrentSnapshotId() == null ? null : currentSnapshot(row);
         return new AgentWorkbenchApiModels.AgentListItem(
                 row.getId(), row.getName(), row.getDescription(), row.getTags(), status(row), ids.size(),
                 snapshot == null ? null : snapshot.getVersionNumber(),
                 row.getAgentModelId() != null, row.getLastDebuggedAt(), row.getLastDebuggedBy(), row.getUpdateTime());
+    }
+
+    private AgentWorkbenchApiModels.AgentListItem memberListItem(Agent row, AgentSnapshot snapshot) {
+        AgentSnapshotData data = snapshot.getSnapshotData();
+        return new AgentWorkbenchApiModels.AgentListItem(
+                row.getId(), data.name(), data.description(), data.tags(), "PUBLISHED",
+                data.knowledgeIds().size(), snapshot.getVersionNumber(), data.model() != null,
+                null, null, snapshot.getCreateTime());
     }
 
     private AgentSnapshot currentSnapshot(Agent row) {

@@ -179,22 +179,24 @@
 
 **Files:**
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/execution/PublishedAgentChatController.java`
-- Create: `server/Spring-AI/src/main/resources/db/V14__drop_legacy_agent_model_columns.sql`
+- Defer destructive legacy-column migration until the approved reconfiguration window ends; remove runtime mappings now.
 - Modify: `server/Spring-AI/src/main/java/com/starsea/ai/controller/AgentController.java`
 - Modify: `server/Spring-AI/src/main/java/com/starsea/ai/controller/AiChatController.java`
 - Delete: `server/Spring-AI/src/main/java/com/starsea/ai/model/AgentChatClientFactory.java`
 - Delete: `server/Spring-AI/src/main/java/com/starsea/ai/model/OpenAiCompatibleAgentChatClientFactory.java`
 - Test: `server/Spring-AI/src/test/java/com/starsea/ai/agent/execution/PublishedAgentChatControllerTest.java`
-- Test: `server/Spring-AI/src/test/java/com/starsea/ai/agent/execution/V14LegacyModelColumnsMigrationPostgresIT.java`
+- Test: `server/Spring-AI/src/test/java/com/starsea/ai/agent/execution/LegacyAgentRetirementTest.java`
 
 **Interfaces:**
-- `POST /agents/{id}/chat/stream` always loads `current_snapshot_id`; unpublished/deleted Agent is rejected.
+- `POST /agents/{id}/chat/stream` accepts a single invocation `{message, variables}` and always loads `current_snapshot_id`; unpublished/deleted Agent is rejected. It does not accept debug contexts or caller-provided history/system messages.
 - Old `/ai/agent/chat` and plaintext model fields are unused before columns are dropped.
 
-- [ ] Write RED permission and source-selection tests for tenant admin/member and unpublished/deleted/cross-tenant cases.
-- [ ] Switch runtime and retire old endpoints without compatibility fallback to plaintext keys.
-- [ ] Add migration dropping `model_url/model_api_key/model_id` only after repository search proves no production reads.
-- [ ] Verify and commit `refactor: 切换智能体正式调用到发布快照`.
+- [x] Write RED permission and source-selection tests for tenant admin/member and unpublished/deleted/cross-tenant cases.
+- [x] Switch runtime and retire old endpoints without compatibility fallback to plaintext keys.
+- [x] Remove production mappings and reads of `model_url/model_api_key/model_id`; physical column deletion is a separate migration after tenant reconfiguration, as required by the approved design. Do not silently delete existing credentials during this rollout.
+- [x] Verify and commit `refactor: 切换智能体正式调用到发布快照`.
+
+执行验证：正式调用权限/快照来源、旧接口 410、ORM 不再读取旧明文列、成员发布字段筛选及管理员分页查询边界均通过测试；完整后端测试、打包、真实启动通过。成员列表批量加载发布快照，避免泄露草稿及全租户 N+1 查询。独立审查通过。
 
 ### Task 9: 前端—原型一致的 Agent 列表与三栏工作台
 
