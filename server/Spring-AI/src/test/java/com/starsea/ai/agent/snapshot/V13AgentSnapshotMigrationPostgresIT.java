@@ -67,9 +67,11 @@ class V13AgentSnapshotMigrationPostgresIT {
 
                     BEGIN
                         UPDATE agent_snapshot SET snapshot_data = '{"tampered":true}' WHERE id = 701;
-                        RAISE EXCEPTION 'immutable payload was updated';
                     EXCEPTION WHEN raise_exception THEN NULL;
                     END;
+                    IF (SELECT snapshot_data ? 'tampered' FROM agent_snapshot WHERE id = 701) THEN
+                        RAISE EXCEPTION 'immutable payload was updated';
+                    END IF;
 
                     BEGIN
                         INSERT INTO agent_snapshot

@@ -48,14 +48,26 @@ public class AgentSnapshotService {
         this.clock = clock;
     }
 
-    public List<AgentSnapshot> list(long agentId) {
+    public SnapshotPage list(long agentId, int requestedPage, int requestedSize) {
         requireAdmin();
         owned(agentId);
-        return snapshots.selectList(new LambdaQueryWrapper<AgentSnapshot>()
+        int page = Math.max(1, requestedPage);
+        int size = Math.max(1, Math.min(100, requestedSize));
+        long total = snapshots.selectCount(new LambdaQueryWrapper<AgentSnapshot>()
+                .eq(AgentSnapshot::getAgentId, agentId).eq(AgentSnapshot::getTenantId, tenantId())
+                .isNull(AgentSnapshot::getDeletedAt));
+        List<AgentSnapshot> rows = snapshots.selectList(new LambdaQueryWrapper<AgentSnapshot>()
+                .select(AgentSnapshot::getId, AgentSnapshot::getVersionNumber, AgentSnapshot::getPublishNote,
+                        AgentSnapshot::getSourceRevision, AgentSnapshot::getRollbackFromSnapshotId,
+                        AgentSnapshot::getCreatedBy, AgentSnapshot::getCreateTime)
                 .eq(AgentSnapshot::getAgentId, agentId)
                 .eq(AgentSnapshot::getTenantId, tenantId())
                 .isNull(AgentSnapshot::getDeletedAt)
-                .orderByDesc(AgentSnapshot::getVersionNumber));
+                .orderByDesc(AgentSnapshot::getVersionNumber)
+                .last("LIMIT " + size + " OFFSET " + ((long) (page - 1) * size)));
+        return new SnapshotPage(rows.stream().map(row -> new SnapshotSummary(row.getId(), row.getVersionNumber(),
+                row.getPublishNote(), row.getSourceRevision(), row.getRollbackFromSnapshotId(),
+                row.getCreatedBy(), row.getCreateTime())).toList(), page, size, total);
     }
 
     public AgentSnapshot get(long agentId, long version) {
@@ -183,4 +195,8 @@ public class AgentSnapshotService {
 
     public record RollbackCommand(String publishNote, Long lockVersion) {
     }
+
+    public record SnapshotSummary(Long id, Long versionNumber, String publishNote, Long sourceRevision,
+                                  Long rollbackFromSnapshotId, Long createdBy, OffsetDateTime createTime) { }
+    public record SnapshotPage(List<SnapshotSummary> items, int page, int pageSize, long total) { }
 }

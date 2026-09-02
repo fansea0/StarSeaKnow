@@ -102,6 +102,23 @@ class AgentSnapshotServiceTest {
     }
 
     @Test
+    void lists_bounded_metadata_without_loading_snapshot_payloads() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "snapshot-test"), AgentSnapshot.class);
+        when(agents.selectOne(any())).thenReturn(agent(101L, 5L, 2L));
+        when(snapshots.selectCount(any())).thenReturn(120L);
+        when(snapshots.selectList(any())).thenReturn(List.of());
+        var result = service.list(101L, 3, 20);
+        assertThat(result.total()).isEqualTo(120L);
+        assertThat(result.page()).isEqualTo(3);
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AgentSnapshot>> query =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
+        verify(snapshots).selectList(query.capture());
+        assertThat(query.getValue().getSqlSelect()).doesNotContain("snapshot_data");
+        assertThat(query.getValue().getSqlSegment()).contains("LIMIT 20 OFFSET 40");
+    }
+
+    @Test
     void rollback_restores_snapshot_as_a_new_draft_and_creates_a_new_version() {
         AgentSnapshot source = new AgentSnapshot();
         source.setId(701L);

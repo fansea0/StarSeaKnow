@@ -147,6 +147,7 @@ public class ModelProviderService {
             throw invalid("自定义厂商至少需要一个可选模型");
         }
 
+        rejectRemovalOfModelsInUse(existing, models);
         existing.setBaseUrl(baseUrl);
         existing.setSelectableModels(models);
         existing.setLastVerifiedAt(OffsetDateTime.now());

@@ -236,6 +236,22 @@ class ModelProviderServiceTest {
         verify(connections, never()).deleteById(30L);
     }
 
+    @Test
+    void updating_connection_cannot_bypass_referenced_model_removal_guard() {
+        TenantModelProvider existing = connection(30L, 9L, 2L, "NONE");
+        ModelSuggestion used = new ModelSuggestion("used", "Used", 8192);
+        ModelSuggestion other = new ModelSuggestion("other", "Other", 8192);
+        existing.setSelectableModels(List.of(used));
+        when(connections.selectOne(any())).thenReturn(existing);
+        when(catalogs.selectById(2L)).thenReturn(catalog(2L, "OLLAMA", "Ollama", "NONE"));
+        when(verifier.verify(any(), any(), any())).thenReturn(new ModelProviderConnectionVerifier.VerifiedConnection(List.of(other)));
+        when(agentModels.selectCount(any())).thenReturn(1L);
+        assertThatThrownBy(() -> service.updateConnection(30L, new ModelProviderApiModels.ConnectionCommand(
+                2L, null, null, "https://example.test/v1", null, List.of(other))))
+                .isInstanceOf(ModelProviderException.class).extracting("code").isEqualTo("MODEL_PROVIDER_MODEL_IN_USE");
+        verify(connections, never()).updateById(any());
+    }
+
     private ModelProviderCatalog catalog(Long id, String code, String name, String authType) {
         ModelProviderCatalog catalog = new ModelProviderCatalog();
         catalog.setId(id);

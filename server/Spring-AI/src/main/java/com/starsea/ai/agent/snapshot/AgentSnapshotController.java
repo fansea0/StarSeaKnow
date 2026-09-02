@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
 @RequestMapping("/agents/{agentId}")
@@ -22,8 +23,10 @@ public class AgentSnapshotController {
     }
 
     @GetMapping("/snapshots")
-    public AjaxResult list(@PathVariable long agentId) {
-        return AjaxResult.success(service.list(agentId));
+    public AjaxResult list(@PathVariable long agentId,
+                           @RequestParam(defaultValue = "1") int page,
+                           @RequestParam(defaultValue = "20") int pageSize) {
+        return AjaxResult.success(service.list(agentId, page, pageSize));
     }
 
     @GetMapping("/snapshots/{version}")
