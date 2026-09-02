@@ -120,8 +120,8 @@ class ChunkCommandServiceTest {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
-                .thenReturn(List.of(previous, target));
+        when(chunkMapper.findScopedByPosition(FILE_ID, TENANT_ID, KNOWLEDGE_ID, 3))
+                .thenReturn(previous);
         when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
                 "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
         when(chunkMapper.update(any(DocumentChunk.class), any())).thenReturn(1);
@@ -149,8 +149,8 @@ class ChunkCommandServiceTest {
         dependent.setOverlapTokenLimit(40);
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
-                .thenReturn(List.of(target, dependent));
+        when(chunkMapper.findNextDependentForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenReturn(dependent);
         when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
                 "Edited source.", 14, sha256("Edited source."), 2)).thenReturn(1);
         when(chunkMapper.update(any(DocumentChunk.class), any())).thenReturn(1);
@@ -160,6 +160,7 @@ class ChunkCommandServiceTest {
 
         var patches = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
         verify(chunkMapper, times(2)).update(patches.capture(), any());
+        verify(chunkMapper, never()).findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID);
         DocumentChunk dependentPatch = patches.getAllValues().get(1);
         assertEquals("Edited source.", dependentPatch.getOverlapContent());
         assertEquals("上文：Edited source.\n\nNext", dependentPatch.getIndexContent());
@@ -178,13 +179,14 @@ class ChunkCommandServiceTest {
         dependent.setIndexContent("上文：Stable.\n\nNext");
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
-                .thenReturn(List.of(target, dependent));
+        when(chunkMapper.findNextDependentForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenReturn(dependent);
 
         service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
                 new EditChunkRequest("Changed sentence. Stable.", 2));
 
         verify(chunkMapper, times(1)).update(any(DocumentChunk.class), any());
+        verify(chunkMapper, never()).findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID);
         verify(vectorGateway).delete(CHUNK_ID);
         verify(vectorGateway, never()).delete(NEXT_ID);
     }
@@ -235,9 +237,7 @@ class ChunkCommandServiceTest {
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
         when(chunkMapper.findNextDependentForUpdate(
-                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5, 31L)).thenReturn(dependent);
-        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
-                .thenReturn(List.of(target, dependent));
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenReturn(dependent);
         when(chunkMapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
                 "Edited", 6, sha256("Edited"), 2)).thenReturn(1);
         when(chunkMapper.invalidateDependent(FILE_ID, TENANT_ID, KNOWLEDGE_ID,
@@ -301,13 +301,18 @@ class ChunkCommandServiceTest {
         rightNeighbor.setOverlapSourceChunkId(31L);
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
-                .thenReturn(List.of(target, rightNeighbor));
+        when(chunkMapper.findNextDependentForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenAnswer(invocation ->
+                        Boolean.TRUE.equals(rightNeighbor.getOverlapEnabled())
+                                ? rightNeighbor : null);
 
         assertDoesNotThrow(() -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
                 new EditChunkRequest("Edited", 2)));
 
         verify(chunkMapper, times(1)).update(any(DocumentChunk.class), any());
+        verify(chunkMapper).findNextDependentForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5);
+        verify(chunkMapper, never()).findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID);
         verify(vectorGateway).delete(CHUNK_ID);
         verify(vectorGateway, never()).delete(NEXT_ID);
     }
@@ -341,9 +346,7 @@ class ChunkCommandServiceTest {
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
         when(chunkMapper.findNextDependentForUpdate(
-                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5, 31L)).thenReturn(dependent);
-        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
-                .thenReturn(List.of(target, dependent));
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenReturn(dependent);
         when(chunkMapper.invalidateDependent(FILE_ID, TENANT_ID, KNOWLEDGE_ID,
                 32L, 31L, 7)).thenReturn(1);
         when(chunkMapper.deleteScoped(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2)).thenReturn(1);
@@ -351,6 +354,7 @@ class ChunkCommandServiceTest {
         service.delete(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, 2);
 
         verify(chunkMapper).deleteScoped(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2);
+        verify(chunkMapper, never()).findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID);
         verify(chunkMapper, never()).deleteById(31L);
         verify(stateService).transition(KNOWLEDGE_ID, FILE_ID,
                 PipelineState.CHUNKED, PipelineState.ADJUSTING, 5);
@@ -367,14 +371,19 @@ class ChunkCommandServiceTest {
         rightNeighbor.setOverlapSourceChunkId(31L);
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
-        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
-                .thenReturn(List.of(target, rightNeighbor));
+        when(chunkMapper.findNextDependentForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5)).thenAnswer(invocation ->
+                        Boolean.TRUE.equals(rightNeighbor.getOverlapEnabled())
+                                ? rightNeighbor : null);
         when(chunkMapper.deleteScoped(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2)).thenReturn(1);
 
         assertDoesNotThrow(() -> service.delete(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, 2));
 
         verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+        verify(chunkMapper).findNextDependentForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5);
+        verify(chunkMapper, never()).findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID);
         verify(vectorGateway).delete(CHUNK_ID);
         verify(vectorGateway, never()).delete(NEXT_ID);
     }
@@ -602,6 +611,10 @@ class ChunkCommandServiceTest {
                         "fileId", FILE_ID, "tenantId", TENANT_ID, "knowledgeId", KNOWLEDGE_ID,
                         "chunkId", 32L, "sourceChunkId", 31L, "lockVersion", 7));
         String dependent = normalizeSql(dependentBinding);
+        String dependentLock = sql(configuration,
+                "com.starsea.ai.mapper.DocumentChunkMapper.findNextDependentForUpdate", Map.of(
+                        "fileId", FILE_ID, "tenantId", TENANT_ID,
+                        "knowledgeId", KNOWLEDGE_ID, "position", 5));
 
         assertTrue(update.contains("tenant_id = ?"));
         assertTrue(update.contains("knowledge_id = ?"));
@@ -630,6 +643,13 @@ class ChunkCommandServiceTest {
         assertTrue(dependent.contains("status <> 1"));
         assertTrue(dependent.contains("lock_version = ?"));
         assertTrue(dependent.contains("index_content = NULL"));
+        assertTrue(dependentLock.contains("tenant_id = ?"));
+        assertTrue(dependentLock.contains("knowledge_id = ?"));
+        assertTrue(dependentLock.contains("file_id = ?"));
+        assertTrue(dependentLock.contains("position = ?"));
+        assertTrue(dependentLock.contains("overlap_enabled = TRUE"));
+        assertTrue(!dependentLock.contains("overlap_source_chunk_id"));
+        assertTrue(dependentLock.endsWith("FOR UPDATE"));
     }
 
     private static DocumentChunk chunk(long id, UUID publicId, int position,
@@ -670,10 +690,8 @@ class ChunkCommandServiceTest {
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID))
                 .thenAnswer(invocation -> database.get(0));
         when(mapper.findNextDependentForUpdate(
-                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5, 31L))
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, 5))
                 .thenAnswer(invocation -> database.get(1));
-        when(mapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
-                .thenAnswer(invocation -> List.copyOf(database));
         when(mapper.updateContent(FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID,
                 "Edited", 6, sha256("Edited"), 2)).thenAnswer(invocation -> {
             DocumentChunk updated = copy(database.get(0));

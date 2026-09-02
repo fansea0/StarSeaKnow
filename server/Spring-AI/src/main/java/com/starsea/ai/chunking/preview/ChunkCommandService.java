@@ -143,10 +143,9 @@ public class ChunkCommandService {
                     "maxTokens", budget.maximum()));
         }
 
-        List<DocumentChunk> lockedChunks = chunkMapper.findByFileForUpdate(
-                fileId, tenantId, knowledgeId);
-        DocumentChunk previous = adjacent(lockedChunks, target, -1);
-        DocumentChunk dependentCandidate = overlapDependent(lockedChunks, target);
+        DocumentChunk previous = findPreviousChunk(fileId, tenantId, knowledgeId, target);
+        DocumentChunk dependentCandidate = lockOverlapDependent(
+                fileId, tenantId, knowledgeId, target);
         DocumentChunk edited = copyForContext(target);
         edited.setContent(request.content());
         edited.setTokenCount(budget.body());
@@ -183,9 +182,7 @@ public class ChunkCommandService {
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, lockVersion);
         FileProcessing processingSnapshot = processing;
-        List<DocumentChunk> lockedChunks = chunkMapper.findByFileForUpdate(
-                fileId, tenantId, knowledgeId);
-        DocumentChunk dependent = overlapDependent(lockedChunks, target);
+        DocumentChunk dependent = lockOverlapDependent(fileId, tenantId, knowledgeId, target);
         requireMutableDependent(dependent);
         if (dependent != null) {
             DocumentChunk recalculated = copyForContext(dependent);
@@ -369,22 +366,27 @@ public class ChunkCommandService {
                 .eq("lock_version", expectedLockVersion);
     }
 
-    private DocumentChunk adjacent(List<DocumentChunk> chunks, DocumentChunk target, int delta) {
+    private DocumentChunk findPreviousChunk(
+            long fileId, long tenantId, long knowledgeId, DocumentChunk target) {
         if (target.getPosition() == null) {
             return null;
         }
-        int position = target.getPosition() + delta;
-        return chunks.stream()
-                .filter(chunk -> Integer.valueOf(position).equals(chunk.getPosition()))
-                .findFirst()
-                .orElse(null);
+        return chunkMapper.findScopedByPosition(
+                fileId, tenantId, knowledgeId, target.getPosition() - 1);
     }
 
-    private DocumentChunk overlapDependent(
-            List<DocumentChunk> chunks, DocumentChunk target) {
-        DocumentChunk rightNeighbor = adjacent(chunks, target, 1);
-        return rightNeighbor != null && Boolean.TRUE.equals(rightNeighbor.getOverlapEnabled())
-                ? rightNeighbor : null;
+    private DocumentChunk lockOverlapDependent(
+            long fileId, long tenantId, long knowledgeId, DocumentChunk target) {
+        if (target.getPosition() == null) {
+            return null;
+        }
+        int expectedPosition = target.getPosition() + 1;
+        DocumentChunk dependent = chunkMapper.findNextDependentForUpdate(
+                fileId, tenantId, knowledgeId, expectedPosition);
+        return dependent != null
+                && Integer.valueOf(expectedPosition).equals(dependent.getPosition())
+                && Boolean.TRUE.equals(dependent.getOverlapEnabled())
+                ? dependent : null;
     }
 
     private DocumentChunk changedOverlapDependent(

@@ -123,6 +123,15 @@
         FOR UPDATE
     </select>
 
+    <select id="findScopedByPosition" resultMap="DocumentChunkResultMap">
+        SELECT *
+        FROM document_chunk
+        WHERE file_id = #{fileId}
+          AND tenant_id = #{tenantId}
+          AND knowledge_id = #{knowledgeId}
+          AND position = #{position}
+    </select>
+
     <select id="findNextDependentForUpdate" resultMap="DocumentChunkResultMap">
         SELECT *
         FROM document_chunk
@@ -130,7 +139,7 @@
           AND tenant_id = #{tenantId}
           AND knowledge_id = #{knowledgeId}
           AND position = #{position}
-          AND overlap_source_chunk_id = #{sourceChunkId}
+          AND overlap_enabled = TRUE
         FOR UPDATE
     </select>
 

@@ -467,11 +467,17 @@ class MarkdownChunkingWorkflowTest {
             when(chunkMapper.findScopedByPublicIdForUpdate(
                     eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID), any(UUID.class)))
                     .thenAnswer(invocation -> byPublicId(invocation.getArgument(3)));
+            when(chunkMapper.findScopedByPosition(
+                    eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID), anyInt()))
+                    .thenAnswer(invocation -> chunks.stream()
+                            .filter(chunk -> Objects.equals(
+                                    chunk.getPosition(), invocation.getArgument(3)))
+                            .findFirst().orElse(null));
             when(chunkMapper.findNextDependentForUpdate(
-                    eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID), anyInt(), anyLong()))
+                    eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID), anyInt()))
                     .thenAnswer(invocation -> chunks.stream()
                             .filter(chunk -> Objects.equals(chunk.getPosition(), invocation.getArgument(3)))
-                            .filter(chunk -> Objects.equals(chunk.getOverlapSourceChunkId(), invocation.getArgument(4)))
+                            .filter(chunk -> Boolean.TRUE.equals(chunk.getOverlapEnabled()))
                             .findFirst().orElse(null));
             when(chunkMapper.updateContent(eq(FILE_ID), eq(TENANT_ID), eq(KNOWLEDGE_ID),
                     any(UUID.class), any(), anyInt(), any(), anyInt()))

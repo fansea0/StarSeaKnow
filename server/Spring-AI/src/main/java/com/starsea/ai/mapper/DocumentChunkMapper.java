@@ -40,11 +40,15 @@ public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
                                                 @Param("knowledgeId") long knowledgeId,
                                                 @Param("chunkPublicId") UUID chunkPublicId);
 
+    DocumentChunk findScopedByPosition(@Param("fileId") long fileId,
+                                       @Param("tenantId") long tenantId,
+                                       @Param("knowledgeId") long knowledgeId,
+                                       @Param("position") int position);
+
     DocumentChunk findNextDependentForUpdate(@Param("fileId") long fileId,
                                              @Param("tenantId") long tenantId,
                                              @Param("knowledgeId") long knowledgeId,
-                                             @Param("position") int position,
-                                             @Param("sourceChunkId") long sourceChunkId);
+                                             @Param("position") int position);
 
     int updateContent(@Param("fileId") long fileId,
                       @Param("tenantId") long tenantId,
