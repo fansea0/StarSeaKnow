@@ -17,6 +17,15 @@ import org.apache.ibatis.annotations.Mapper;
 @CacheNamespace
 public interface AgentMapper extends BaseMapper<Agent> {
 
+    @org.apache.ibatis.annotations.Update("""
+            UPDATE agent SET last_debugged_at = #{at}, last_debugged_by = #{userId}
+            WHERE id = #{id} AND tenant_id = #{tenantId} AND deleted_at IS NULL
+            """)
+    int markDebugged(@org.apache.ibatis.annotations.Param("id") long id,
+                     @org.apache.ibatis.annotations.Param("tenantId") long tenantId,
+                     @org.apache.ibatis.annotations.Param("userId") long userId,
+                     @org.apache.ibatis.annotations.Param("at") java.time.OffsetDateTime at);
+
     default Agent selectForUpdate(long id, long tenantId) {
         return selectOne(new LambdaQueryWrapper<Agent>()
                 .eq(Agent::getId, id)
@@ -25,6 +34,5 @@ public interface AgentMapper extends BaseMapper<Agent> {
                 .last("FOR UPDATE"));
     }
 }
-
 
 

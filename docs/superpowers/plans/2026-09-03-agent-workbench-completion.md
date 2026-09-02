@@ -168,10 +168,12 @@
 - `POST /agents/{id}/debug/stream` accepts `{debugContextId?, message, variables}`.
 - `DELETE /agents/{id}/debug-contexts/{debugContextId}` removes only the caller-owned context.
 
-- [ ] Write RED tests for all fixed cache limits and no persistence.
-- [ ] Implement Caffeine store and execution coordination.
-- [ ] Implement SSE lifecycle and client-cancel cleanup.
-- [ ] Verify and commit `feat: 添加临时调试上下文与流式调试`.
+- [x] Write RED tests for all fixed cache limits and no persistence.
+- [x] Implement Caffeine store and execution coordination.
+- [x] Implement SSE lifecycle and client-cancel cleanup.
+- [x] Verify and commit `feat: 添加临时调试上下文与流式调试`.
+
+执行验证：缓存边界、并发互斥、完整轮次裁剪、取消/失败不写历史、删除事务提交后清理、回滚保留上下文、SSE 客户端断开、预检 JSON 4xx 均有测试；完整后端测试、打包及真实启动通过。最后调试仅更新 Agent 时间/用户元数据，不存储会话内容。独立审查及集成点补查通过。
 
 ### Task 8: 模块 7—正式调用、权限和旧入口退役
 

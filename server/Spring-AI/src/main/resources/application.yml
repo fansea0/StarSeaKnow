@@ -102,3 +102,8 @@ model-provider:
     # Development fallback only. Production must set a different Base64-encoded 32-byte key.
     keys:
       v1: ${MODEL_PROVIDER_ENCRYPTION_KEY_V1:ZGV2LW1vZGVsLXByb3ZpZGVyLWtleS12MS0zMmJ5dGU=}
+
+agent:
+  debug:
+    # Memory only: fixed 30-minute access TTL and at most four contexts per user.
+    max-contexts: ${AGENT_DEBUG_MAX_CONTEXTS:1000}

@@ -43,6 +43,7 @@ class AgentAggregateServiceTest {
     private TenantModelProviderMapper providers;
     private AgentAggregateService service;
     private AgentSnapshotMapper snapshots;
+    private org.springframework.context.ApplicationEventPublisher events;
 
     @BeforeEach
     void setUp() {
@@ -52,8 +53,9 @@ class AgentAggregateServiceTest {
         knowledge = mock(KnowledgeMapper.class);
         providers = mock(TenantModelProviderMapper.class);
         snapshots = mock(AgentSnapshotMapper.class);
+        events = mock(org.springframework.context.ApplicationEventPublisher.class);
         Clock clock = Clock.fixed(Instant.parse("2026-09-03T01:00:00Z"), ZoneOffset.UTC);
-        service = new AgentAggregateService(agents, models, agentKnowledge, knowledge, providers, snapshots, clock);
+        service = new AgentAggregateService(agents, models, agentKnowledge, knowledge, providers, snapshots, events, clock);
         AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 71L, 9L, "tenant_admin", "jti"));
     }
 
@@ -179,6 +181,7 @@ class AgentAggregateServiceTest {
         when(models.selectOne(any())).thenReturn(model);
 
         service.delete(101L);
+        verify(events).publishEvent(new AgentDeletedEvent(9L, 101L));
 
         OffsetDateTime expected = OffsetDateTime.parse("2026-09-03T01:00:00Z");
         assertThat(existing.getDeletedAt()).isEqualTo(expected);

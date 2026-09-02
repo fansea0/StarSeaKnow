@@ -40,6 +40,7 @@ public class AgentAggregateService {
     private final KnowledgeMapper knowledge;
     private final TenantModelProviderMapper providers;
     private final AgentSnapshotMapper snapshots;
+    private final org.springframework.context.ApplicationEventPublisher events;
     private final Clock clock;
 
     @Autowired
@@ -49,8 +50,9 @@ public class AgentAggregateService {
             AgentKnowledgeMapper agentKnowledge,
             KnowledgeMapper knowledge,
             TenantModelProviderMapper providers,
-            AgentSnapshotMapper snapshots) {
-        this(agents, models, agentKnowledge, knowledge, providers, snapshots, Clock.systemDefaultZone());
+            AgentSnapshotMapper snapshots,
+            org.springframework.context.ApplicationEventPublisher events) {
+        this(agents, models, agentKnowledge, knowledge, providers, snapshots, events, Clock.systemDefaultZone());
     }
 
     AgentAggregateService(
@@ -60,6 +62,7 @@ public class AgentAggregateService {
             KnowledgeMapper knowledge,
             TenantModelProviderMapper providers,
             AgentSnapshotMapper snapshots,
+            org.springframework.context.ApplicationEventPublisher events,
             Clock clock) {
         this.agents = agents;
         this.models = models;
@@ -67,6 +70,7 @@ public class AgentAggregateService {
         this.knowledge = knowledge;
         this.providers = providers;
         this.snapshots = snapshots;
+        this.events = events;
         this.clock = clock;
     }
 
@@ -211,6 +215,7 @@ public class AgentAggregateService {
         row.setDeletedAt(deletedAt);
         row.setDeletedBy(deletedBy);
         agents.updateById(row);
+        events.publishEvent(new AgentDeletedEvent(tenantId, agentId));
     }
 
     private ValidatedDraft validate(AgentWorkbenchApiModels.DraftCommand command, long tenantId) {

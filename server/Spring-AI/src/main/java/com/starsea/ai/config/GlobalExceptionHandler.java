@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -57,6 +58,7 @@ public class GlobalExceptionHandler
     public ResponseEntity<AjaxResult> handleRequestParameterBinding(Exception exception)
     {
         return ResponseEntity.badRequest()
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(AjaxResult.error("request parameters must be valid"));
     }
 
@@ -67,11 +69,12 @@ public class GlobalExceptionHandler
         while (cause != null) {
             if (cause instanceof IllegalArgumentException) {
                 return ResponseEntity.unprocessableEntity()
+                        .contentType(MediaType.APPLICATION_JSON)
                         .body(AjaxResult.error(cause.getMessage()));
             }
             cause = cause.getCause();
         }
-        return ResponseEntity.badRequest().body(AjaxResult.error("request body must be valid JSON"));
+        return ResponseEntity.badRequest().contentType(MediaType.APPLICATION_JSON).body(AjaxResult.error("request body must be valid JSON"));
     }
 
     @ExceptionHandler(ChunkingException.class)
@@ -103,7 +106,7 @@ public class GlobalExceptionHandler
     {
         AjaxResult result = AjaxResult.error(exception.getMessage());
         result.put("errorCode", exception.code());
-        return ResponseEntity.status(exception.status()).body(result);
+        return ResponseEntity.status(exception.status()).contentType(MediaType.APPLICATION_JSON).body(result);
     }
 
     @ExceptionHandler(FileProcessingService.OwnershipException.class)
@@ -159,11 +162,12 @@ public class GlobalExceptionHandler
         AjaxResult body = AjaxResult.error(code, ex.getMessage());
         if (http == 401) {
             HttpHeaders h = new HttpHeaders();
+            h.setContentType(MediaType.APPLICATION_JSON);
             h.add("WWW-Authenticate",
                     "Bearer error=\"invalid_token\", error_description=\"" + ex.getMessage() + "\"");
             return new ResponseEntity<>(body, h, HttpStatus.valueOf(http));
         }
-        return new ResponseEntity<>(body, HttpStatus.valueOf(http));
+        return ResponseEntity.status(http).contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
     /**
