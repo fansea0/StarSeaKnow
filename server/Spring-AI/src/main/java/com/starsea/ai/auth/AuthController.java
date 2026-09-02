@@ -32,7 +32,8 @@ public class AuthController {
         return AjaxResult.success(Map.of(
                 "accessToken", r.accessToken(),
                 "expiresAt", r.expiresAt().toEpochMilli(),
-                "user", r.user()
+                "user", r.user(),
+                "mustChangePassword", r.mustChangePassword()
         ));
     }
 
@@ -45,7 +46,9 @@ public class AuthController {
         cookies.setBusiness(resp, r.newRefreshRaw(), false);
         return AjaxResult.success(Map.of(
                 "accessToken", r.accessToken(),
-                "expiresAt", Instant.now().plusSeconds(15 * 60).toEpochMilli()
+                "expiresAt", Instant.now().plusSeconds(15 * 60).toEpochMilli(),
+                "user", r.user(),
+                "mustChangePassword", r.mustChangePassword()
         ));
     }
 
@@ -57,6 +60,15 @@ public class AuthController {
         return AjaxResult.success();
     }
 
+    public record ChangePasswordReq(String currentPassword, String newPassword, String confirmPassword) {}
+
+    @PostMapping("/change-password")
+    @RequireLogin
+    public AjaxResult changePassword(@RequestBody ChangePasswordReq req) {
+        auth.changePassword(AuthContext.current().getUserId(), req.currentPassword(), req.newPassword(), req.confirmPassword());
+        return AjaxResult.success(Map.of("mustChangePassword", false));
+    }
+
     @PostMapping("/register")
     public AjaxResult register(@RequestBody RegisterReq req, HttpServletResponse resp) {
         AuthService.LoginResult r = registration.register(
@@ -66,7 +78,8 @@ public class AuthController {
         return AjaxResult.success(Map.of(
                 "accessToken", r.accessToken(),
                 "expiresAt", r.expiresAt().toEpochMilli(),
-                "user", r.user()
+                "user", r.user(),
+                "mustChangePassword", r.mustChangePassword()
         ));
     }
 
@@ -78,7 +91,8 @@ public class AuthController {
         var t = auth.requireTenant(u.getTenantId());
         return AjaxResult.success(Map.of(
                 "user", AuthService.UserView.from(u),
-                "tenant", Map.of("id", t.getId(), "code", t.getCode(), "name", t.getName())
+                "tenant", Map.of("id", t.getId(), "code", t.getCode(), "name", t.getName()),
+                "mustChangePassword", Boolean.TRUE.equals(u.getMustChangePassword())
         ));
     }
 }

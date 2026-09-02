@@ -4,6 +4,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import com.starsea.ai.mapper.AppUserMapper;
 
 import java.util.List;
 
@@ -15,6 +16,12 @@ import java.util.List;
  */
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
+
+    private final AppUserMapper users;
+
+    public WebMvcConfig(AppUserMapper users) {
+        this.users = users;
+    }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
@@ -36,7 +43,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         // 注:JwtAuthFilter 通过 FilterRegistrationBean 注册(见 PasswordEncoderConfig),
         // 这里只注册 HandlerInterceptor
-        registry.addInterceptor(new com.starsea.ai.auth.TenantContextInterceptor())
+        registry.addInterceptor(new com.starsea.ai.auth.TenantContextInterceptor(users))
                 .addPathPatterns("/**");
     }
 }

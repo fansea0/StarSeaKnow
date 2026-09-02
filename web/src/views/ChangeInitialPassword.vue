@@ -1,7 +1,7 @@
 <template>
   <el-card class="auth-card">
-    <h2>修改初始密码</h2>
-    <p class="subtitle">为保障平台安全，请先修改系统初始化密码。</p>
+    <h2>{{ auth.user?.role === 'platform_admin' ? '修改初始密码' : '重置登录密码' }}</h2>
+    <p class="subtitle">{{ auth.user?.role === 'platform_admin' ? '为保障平台安全，请先修改系统初始化密码。' : '管理员已要求你修改密码，请完成设置后继续使用。' }}</p>
     <el-form :model="form" label-width="100px" @submit.prevent="onSubmit">
       <el-form-item label="当前密码"><el-input v-model="form.currentPassword" type="password" show-password autocomplete="current-password" /></el-form-item>
       <el-form-item label="新密码"><el-input v-model="form.newPassword" type="password" show-password autocomplete="new-password" /></el-form-item>
@@ -13,11 +13,12 @@
 
 <script setup>
 import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const form = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' })
 const loading = ref(false)
@@ -31,7 +32,7 @@ async function onSubmit() {
   try {
     await auth.changeInitialPassword({ ...form })
     ElMessage.success('初始密码已修改')
-    router.push('/system')
+    router.push(route.query.redirect || (auth.user?.role === 'platform_admin' ? '/system' : '/knowledge'))
   } catch (e) {
     ElMessage.error(e.response?.data?.msg || '修改失败，请检查当前密码')
   } finally {

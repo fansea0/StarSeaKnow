@@ -3,15 +3,22 @@ package com.starsea.ai.auth;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.servlet.HandlerInterceptor;
+import com.starsea.ai.mapper.AppUserMapper;
 
 import java.util.Set;
 
 public class TenantContextInterceptor implements HandlerInterceptor {
 
+    private final AppUserMapper users;
+
+    public TenantContextInterceptor(AppUserMapper users) {
+        this.users = users;
+    }
+
     private static final Set<String> EXCLUDED_PREFIXES = Set.of(
             "/auth/login", "/auth/refresh", "/auth/register",
             "/platform/auth/login", "/platform/auth/refresh", "/platform/auth/logout",
-            "/error"
+            "/error", "/auth/change-password"
     );
 
     @Override
@@ -25,6 +32,12 @@ public class TenantContextInterceptor implements HandlerInterceptor {
 
         if (AuthContext.current() == null) {
             throw new AuthException(AuthErrorCode.MISSING_TOKEN, "login required");
+        }
+        var user = AuthContext.current().getKind() == AuthContext.Kind.BUSINESS
+                ? users.selectById(AuthContext.current().getUserId()) : null;
+        if (user != null && Boolean.TRUE.equals(user.getMustChangePassword())
+                && !"/auth/logout".equals(p)) {
+            throw new AuthException(AuthErrorCode.FORBIDDEN_ROLE, "password must be changed first");
         }
         return true;
     }

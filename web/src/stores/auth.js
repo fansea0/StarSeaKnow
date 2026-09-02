@@ -18,7 +18,9 @@ export const useAuthStore = defineStore('auth', {
         const r = await http.post('/auth/refresh')
         this.accessToken = r.data.data.accessToken
         this.expiresAt = r.data.data.expiresAt
-        await this.fetchMe()
+        this.user = r.data.data.user || null
+        this.mustChangePassword = r.data.data.mustChangePassword === true
+        if (!this.mustChangePassword) await this.fetchMe()
       } catch (e) {
         // 没登录是预期情况
       } finally {
@@ -30,7 +32,7 @@ export const useAuthStore = defineStore('auth', {
       this.expiresAt = session.expiresAt
       this.user = session.user
       this.tenant = null
-      this.mustChangePassword = false
+      this.mustChangePassword = session.mustChangePassword === true
       this.ready = true
     },
     async login(username, password) {
@@ -45,14 +47,20 @@ export const useAuthStore = defineStore('auth', {
       const r = await http.post('/platform/auth/login', { username, password })
       this.accessToken = r.data.data.accessToken
       this.expiresAt = r.data.data.expiresAt
+      this.user = r.data.data.user || null
+      this.mustChangePassword = r.data.data.mustChangePassword === true
       this.user = { username, role: 'platform_admin' }
       this.tenant = null
       this.mustChangePassword = r.data.data.mustChangePassword === true
       this.ready = true
     },
     async changeInitialPassword(payload) {
-      const r = await http.post('/platform/auth/change-initial-password', payload)
+      const endpoint = this.user?.role === 'platform_admin'
+        ? '/platform/auth/change-initial-password'
+        : '/auth/change-password'
+      const r = await http.post(endpoint, payload)
       this.mustChangePassword = r.data.data.mustChangePassword === true
+      if (this.user?.role !== 'platform_admin') await this.fetchMe()
     },
     async logout() {
       try { await http.post(this.user?.role === 'platform_admin' ? '/platform/auth/logout' : '/auth/logout') } catch (e) {}

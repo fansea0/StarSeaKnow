@@ -34,9 +34,8 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="pwdDlg" title="重置后的临时密码">
-      <p>请把以下密码转交给成员,要求其首次使用后立即修改(本期后端暂不强制):</p>
-      <el-input v-model="tempPwd" readonly />
+    <el-dialog v-model="pwdDlg" title="密码重置">
+      <p>已要求该成员下次登录时修改密码，当前密码保持不变。</p>
     </el-dialog>
   </div>
 </template>
@@ -49,7 +48,6 @@ import { ElMessage } from 'element-plus'
 const list = ref([])
 const dlg = ref(false)
 const pwdDlg = ref(false)
-const tempPwd = ref('')
 const form = reactive({ username: '', displayName: '', role: 'tenant_member' })
 
 async function reload() {
@@ -60,7 +58,6 @@ async function reload() {
 async function create() {
   try {
     const r = await http.post('/tenant/members', form)
-    tempPwd.value = r.data.data.tempPassword
     pwdDlg.value = true
     dlg.value = false
     await reload()
@@ -69,8 +66,7 @@ async function create() {
 
 async function reset(id) {
   try {
-    const r = await http.post(`/tenant/members/${id}/reset-password`)
-    tempPwd.value = r.data.data.tempPassword
+    await http.post(`/tenant/members/${id}/reset-password`)
     pwdDlg.value = true
   } catch (e) { ElMessage.error(e.response?.data?.msg || '重置失败') }
 }

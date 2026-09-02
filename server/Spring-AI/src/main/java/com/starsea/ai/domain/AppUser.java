@@ -17,6 +17,7 @@ public class AppUser {
     private String displayName;
     private String role;
     private Integer status;
+    private Boolean mustChangePassword;
     private OffsetDateTime lastLoginAt;
     private OffsetDateTime createTime;
     private OffsetDateTime updateTime;

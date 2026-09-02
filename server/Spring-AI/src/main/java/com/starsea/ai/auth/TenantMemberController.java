@@ -92,10 +92,9 @@ public class TenantMemberController {
         AppUser u = users.selectById(id);
         if (u == null || !u.getTenantId().equals(AuthContext.current().getTenantId()))
             throw new AuthException(AuthErrorCode.CROSS_TENANT, "not in your tenant");
-        String pwd = randomPassword();
-        u.setPasswordHash(encoder.hash(pwd));
+        u.setMustChangePassword(true);
         users.updateById(u);
-        return AjaxResult.success(Map.of("tempPassword", pwd));
+        return AjaxResult.success();
     }
 
     private static String randomPassword() {
