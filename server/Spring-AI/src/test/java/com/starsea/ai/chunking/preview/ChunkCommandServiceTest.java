@@ -37,6 +37,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -165,6 +166,30 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void source_edit_does_not_invalidate_enabled_neighbor_when_derived_context_is_unchanged() {
+        DocumentChunk target = chunk(
+                31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Discarded sentence. Stable.");
+        DocumentChunk dependent = chunk(32L, NEXT_ID, 5, ChunkStatus.ACTIVE, 7, "Next");
+        dependent.setOverlapEnabled(true);
+        dependent.setOverlapTokenLimit(12);
+        dependent.setOverlapSourceChunkId(31L);
+        dependent.setOverlapContent("Stable.");
+        dependent.setOverlapTokenCount(12);
+        dependent.setIndexContent("上文：Stable.\n\nNext");
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(List.of(target, dependent));
+
+        service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                new EditChunkRequest("Changed sentence. Stable.", 2));
+
+        verify(chunkMapper, times(1)).update(any(DocumentChunk.class), any());
+        verify(vectorGateway).delete(CHUNK_ID);
+        verify(vectorGateway, never()).delete(NEXT_ID);
+    }
+
+    @Test
     void edit_rejects_blank_content_before_any_mutation() {
         ChunkingException failure = assertThrows(ChunkingException.class,
                 () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
@@ -204,6 +229,8 @@ class ChunkCommandServiceTest {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
         target.setSectionPath(List.of());
         DocumentChunk dependent = chunk(32L, NEXT_ID, 5, ChunkStatus.ACTIVE, 7, "Next");
+        dependent.setOverlapEnabled(true);
+        dependent.setOverlapTokenLimit(40);
         dependent.setOverlapSourceChunkId(31L);
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
@@ -266,6 +293,26 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void edit_ignores_disabled_indexing_right_neighbor() {
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
+        DocumentChunk rightNeighbor = chunk(
+                32L, NEXT_ID, 5, ChunkStatus.INDEXING, 7, "Unrelated");
+        rightNeighbor.setOverlapEnabled(false);
+        rightNeighbor.setOverlapSourceChunkId(31L);
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(List.of(target, rightNeighbor));
+
+        assertDoesNotThrow(() -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                new EditChunkRequest("Edited", 2)));
+
+        verify(chunkMapper, times(1)).update(any(DocumentChunk.class), any());
+        verify(vectorGateway).delete(CHUNK_ID);
+        verify(vectorGateway, never()).delete(NEXT_ID);
+    }
+
+    @Test
     void affected_row_mismatch_is_an_optimistic_lock_conflict_without_vector_cleanup() {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
         when(chunkMapper.findScopedByPublicIdForUpdate(
@@ -288,6 +335,8 @@ class ChunkCommandServiceTest {
     void delete_is_physical_scoped_optimistic_and_invalidates_the_next_overlap_dependent() {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
         DocumentChunk dependent = chunk(32L, NEXT_ID, 5, ChunkStatus.ACTIVE, 7, "Next");
+        dependent.setOverlapEnabled(true);
+        dependent.setOverlapTokenLimit(40);
         dependent.setOverlapSourceChunkId(31L);
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
@@ -307,6 +356,27 @@ class ChunkCommandServiceTest {
                 PipelineState.CHUNKED, PipelineState.ADJUSTING, 5);
         verify(vectorGateway).delete(CHUNK_ID);
         verify(vectorGateway).delete(NEXT_ID);
+    }
+
+    @Test
+    void delete_ignores_disabled_indexing_right_neighbor() {
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
+        DocumentChunk rightNeighbor = chunk(
+                32L, NEXT_ID, 5, ChunkStatus.INDEXING, 7, "Unrelated");
+        rightNeighbor.setOverlapEnabled(false);
+        rightNeighbor.setOverlapSourceChunkId(31L);
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(List.of(target, rightNeighbor));
+        when(chunkMapper.deleteScoped(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2)).thenReturn(1);
+
+        assertDoesNotThrow(() -> service.delete(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, 2));
+
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+        verify(vectorGateway).delete(CHUNK_ID);
+        verify(vectorGateway, never()).delete(NEXT_ID);
     }
 
     @Test
@@ -585,6 +655,8 @@ class ChunkCommandServiceTest {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
         target.setIndexContent("target-index");
         DocumentChunk dependent = chunk(32L, NEXT_ID, 5, ChunkStatus.ACTIVE, 7, "Next");
+        dependent.setOverlapEnabled(true);
+        dependent.setOverlapTokenLimit(40);
         dependent.setOverlapSourceChunkId(31L);
         dependent.setOverlapContent("dependent-overlap");
         dependent.setOverlapTokenCount(2);

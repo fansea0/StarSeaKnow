@@ -146,8 +146,7 @@ public class ChunkCommandService {
         List<DocumentChunk> lockedChunks = chunkMapper.findByFileForUpdate(
                 fileId, tenantId, knowledgeId);
         DocumentChunk previous = adjacent(lockedChunks, target, -1);
-        DocumentChunk dependent = adjacent(lockedChunks, target, 1);
-        requireMutableDependent(dependent);
+        DocumentChunk dependentCandidate = overlapDependent(lockedChunks, target);
         DocumentChunk edited = copyForContext(target);
         edited.setContent(request.content());
         edited.setTokenCount(budget.body());
@@ -156,6 +155,9 @@ public class ChunkCommandService {
         edited.setOverlapTokenLimit(request.overlapTokenLimit());
         EnrichedChunk editedContext = enrich(previous, edited, budget.maximum());
         applyDerivedContext(edited, editedContext);
+        DocumentChunk dependent = changedOverlapDependent(
+                target, edited, dependentCandidate, budget.maximum());
+        requireMutableDependent(dependent);
         edited.setStatus(ChunkStatus.DRAFT.code());
         edited.setIsModified(true);
         edited.setLastError(null);
@@ -165,10 +167,7 @@ public class ChunkCommandService {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
         }
         if (dependent != null) {
-            DocumentChunk recalculated = copyForContext(dependent);
-            EnrichedChunk dependentContext = enrich(edited, recalculated, budget.maximum());
-            applyDerivedContext(recalculated, dependentContext);
-            recalculateDependent(recalculated, dependent.getLockVersion());
+            recalculateDependent(dependent, dependent.getLockVersion());
         }
         int adjustingLockVersion = moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
         scheduleVectorCleanup(tenantId, knowledgeId, fileId, adjustingLockVersion,
@@ -186,7 +185,7 @@ public class ChunkCommandService {
         FileProcessing processingSnapshot = processing;
         List<DocumentChunk> lockedChunks = chunkMapper.findByFileForUpdate(
                 fileId, tenantId, knowledgeId);
-        DocumentChunk dependent = adjacent(lockedChunks, target, 1);
+        DocumentChunk dependent = overlapDependent(lockedChunks, target);
         requireMutableDependent(dependent);
         if (dependent != null) {
             DocumentChunk recalculated = copyForContext(dependent);
@@ -379,6 +378,36 @@ public class ChunkCommandService {
                 .filter(chunk -> Integer.valueOf(position).equals(chunk.getPosition()))
                 .findFirst()
                 .orElse(null);
+    }
+
+    private DocumentChunk overlapDependent(
+            List<DocumentChunk> chunks, DocumentChunk target) {
+        DocumentChunk rightNeighbor = adjacent(chunks, target, 1);
+        return rightNeighbor != null && Boolean.TRUE.equals(rightNeighbor.getOverlapEnabled())
+                ? rightNeighbor : null;
+    }
+
+    private DocumentChunk changedOverlapDependent(
+            DocumentChunk target, DocumentChunk edited, DocumentChunk candidate, int maximum) {
+        if (candidate == null) {
+            return null;
+        }
+        DocumentChunk recalculated = copyForContext(candidate);
+        applyDerivedContext(recalculated, enrich(edited, recalculated, maximum));
+        boolean referencesTarget = Objects.equals(
+                candidate.getOverlapSourceChunkId(), target.getId())
+                || Objects.equals(recalculated.getOverlapSourceChunkId(), target.getId());
+        if (!referencesTarget || sameDerivedContext(candidate, recalculated)) {
+            return null;
+        }
+        return recalculated;
+    }
+
+    private boolean sameDerivedContext(DocumentChunk left, DocumentChunk right) {
+        return Objects.equals(left.getOverlapContent(), right.getOverlapContent())
+                && Objects.equals(left.getOverlapSourceChunkId(), right.getOverlapSourceChunkId())
+                && Objects.equals(left.getOverlapTokenCount(), right.getOverlapTokenCount())
+                && Objects.equals(left.getIndexContent(), right.getIndexContent());
     }
 
     private EnrichedChunk enrich(DocumentChunk previous, DocumentChunk current, int maximum) {
