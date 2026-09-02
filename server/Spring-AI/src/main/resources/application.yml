@@ -95,3 +95,10 @@ external-api:
     positive-cache-maximum-size: 10000
     negative-cache-maximum-size: 20000
     max-knowledge-bases: 50
+
+model-provider:
+  encryption:
+    active-key-version: v1
+    # Development fallback only. Production must set a different Base64-encoded 32-byte key.
+    keys:
+      v1: ${MODEL_PROVIDER_ENCRYPTION_KEY_V1:ZGV2LW1vZGVsLXByb3ZpZGVyLWtleS12MS0zMmJ5dGU=}

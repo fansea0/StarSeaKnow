@@ -12,7 +12,7 @@ import java.util.Set;
 public class TenantLineHandlerImpl implements TenantLineHandler {
 
     private static final Set<String> GLOBAL_TABLES = Set.of(
-            "tenant", "invite", "refresh_token", "platform_admin"
+            "tenant", "invite", "refresh_token", "platform_admin", "model_provider_catalog"
     );
 
     @Override
