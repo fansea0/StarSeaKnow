@@ -104,7 +104,7 @@ class MarkdownChunkingWorkflowTest {
             throws IOException {
         AuthContext.set(new AuthContext(
                 AuthContext.Kind.BUSINESS, 7L, TENANT_ID, "tenant_admin", "jti"));
-        Path uploadedSource = uploadedSampleWithContinuousSection();
+        Path uploadedSource = uploadedWorkflowFixture();
 
         try (ExactCounter exact = exactCounter()) {
             TokenCounter counter = exact.counter();
@@ -245,10 +245,25 @@ class MarkdownChunkingWorkflowTest {
         return new WorkflowServices(preview, commands, vectors);
     }
 
-    private Path uploadedSampleWithContinuousSection() throws IOException {
-        Path original = Path.of("src/main/resources/file/科大百事通.md")
-                .toAbsolutePath().normalize();
-        String continuous = """
+    private Path uploadedWorkflowFixture() throws IOException {
+        String fixture = """
+                # 工作流测试知识库
+
+                ### 招生咨询
+
+                **Q1：测试学校如何申请？**
+                A：申请人需要在报名系统提交基本资料，并在截止日期前确认报名信息。
+
+                **Q2：申请材料有哪些？**
+                A：申请材料包括身份证明、成绩证明和联系方式，所有资料都应清晰有效。
+
+                ---
+
+                ### 其他事项
+
+                系统每天处理报名信息。工作人员会检查资料完整性。审核结果通过站内消息发送。
+
+                如果资料需要补充，申请人应在规定时间内重新提交。逾期记录将进入待处理队列。
 
                 ### 上下文连续性测试
 
@@ -260,9 +275,8 @@ class MarkdownChunkingWorkflowTest {
 
                 如果信息填写错误需要及时更正。更正完成后系统会再次发送通知。所有通知都应完整阅读。
                 """;
-        Path uploaded = tempDir.resolve("科大百事通.md");
-        Files.writeString(uploaded, Files.readString(original) + continuous,
-                StandardCharsets.UTF_8);
+        Path uploaded = tempDir.resolve("workflow-sample.md");
+        Files.writeString(uploaded, fixture, StandardCharsets.UTF_8);
         return uploaded;
     }
 
@@ -285,14 +299,14 @@ class MarkdownChunkingWorkflowTest {
 
     private void assertQ1SourceRange(DocumentChunk q1, Path source) throws IOException {
         List<String> lines = Files.readAllLines(source);
-        int questionLine = findLine(lines, "Q1：湖南科技大学是几本");
-        int answerLine = findLine(lines, "A：湖南科技大学是湖南省属重点本科高校");
+        int questionLine = findLine(lines, "Q1：测试学校如何申请");
+        int answerLine = findLine(lines, "A：申请人需要在报名系统提交基本资料");
         int start = ((Number) q1.getSourceLocator().get("startLine")).intValue();
         int end = ((Number) q1.getSourceLocator().get("endLine")).intValue();
         assertTrue(start <= questionLine && end >= answerLine,
                 "source range must cover the original Q1 question and answer lines");
-        assertTrue(lines.get(questionLine - 1).contains("Q1：湖南科技大学是几本"));
-        assertTrue(lines.get(answerLine - 1).contains("A：湖南科技大学是湖南省属重点本科高校"));
+        assertTrue(lines.get(questionLine - 1).contains("Q1：测试学校如何申请"));
+        assertTrue(lines.get(answerLine - 1).contains("A：申请人需要在报名系统提交基本资料"));
     }
 
     private int findLine(List<String> lines, String marker) {
@@ -365,7 +379,7 @@ class MarkdownChunkingWorkflowTest {
                     DocumentChunk.class);
             file.setId(FILE_ID);
             file.setPublicId(FILE_PUBLIC_ID);
-            file.setFileName("科大百事通.md");
+            file.setFileName("workflow-sample.md");
             file.setType("md");
             file.setPath(source.toString());
             file.setStatus(1);
