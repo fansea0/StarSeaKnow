@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -33,14 +34,16 @@ public class TenantMemberController {
             return AjaxResult.success(java.util.List.of());
         }
         List<AppUser> all = users.selectList(new QueryWrapper<AppUser>().eq("tenant_id", tid));
-        return AjaxResult.success(all.stream().map(u -> Map.of(
-                "id", u.getId(),
-                "username", u.getUsername(),
-                "displayName", u.getDisplayName() == null ? "" : u.getDisplayName(),
-                "role", u.getRole(),
-                "status", u.getStatus(),
-                "lastLoginAt", u.getLastLoginAt()
-        )).toList());
+        return AjaxResult.success(all.stream().map(u -> {
+            Map<String, Object> member = new LinkedHashMap<>();
+            member.put("id", u.getId());
+            member.put("username", u.getUsername());
+            member.put("displayName", u.getDisplayName() == null ? "" : u.getDisplayName());
+            member.put("role", u.getRole());
+            member.put("status", u.getStatus());
+            member.put("lastLoginAt", u.getLastLoginAt());
+            return member;
+        }).toList());
     }
 
     @PostMapping
