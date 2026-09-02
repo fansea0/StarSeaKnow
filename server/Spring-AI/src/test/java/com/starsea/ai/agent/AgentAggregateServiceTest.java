@@ -5,10 +5,13 @@ import com.starsea.ai.domain.Agent;
 import com.starsea.ai.mapper.AgentKnowledgeMapper;
 import com.starsea.ai.mapper.AgentMapper;
 import com.starsea.ai.mapper.AgentModelMapper;
+import com.starsea.ai.mapper.AgentSnapshotMapper;
 import com.starsea.ai.mapper.KnowledgeMapper;
 import com.starsea.ai.mapper.TenantModelProviderMapper;
 import com.starsea.ai.model.provider.ModelSuggestion;
 import com.starsea.ai.model.provider.TenantModelProvider;
+import com.starsea.ai.agent.snapshot.AgentSnapshot;
+import com.starsea.ai.agent.snapshot.AgentSnapshotData;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,6 +42,7 @@ class AgentAggregateServiceTest {
     private KnowledgeMapper knowledge;
     private TenantModelProviderMapper providers;
     private AgentAggregateService service;
+    private AgentSnapshotMapper snapshots;
 
     @BeforeEach
     void setUp() {
@@ -47,8 +51,9 @@ class AgentAggregateServiceTest {
         agentKnowledge = mock(AgentKnowledgeMapper.class);
         knowledge = mock(KnowledgeMapper.class);
         providers = mock(TenantModelProviderMapper.class);
+        snapshots = mock(AgentSnapshotMapper.class);
         Clock clock = Clock.fixed(Instant.parse("2026-09-03T01:00:00Z"), ZoneOffset.UTC);
-        service = new AgentAggregateService(agents, models, agentKnowledge, knowledge, providers, clock);
+        service = new AgentAggregateService(agents, models, agentKnowledge, knowledge, providers, snapshots, clock);
         AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 71L, 9L, "tenant_admin", "jti"));
     }
 
@@ -135,20 +140,31 @@ class AgentAggregateServiceTest {
     }
 
     @Test
-    void members_never_receive_unpublished_or_changed_drafts() {
+    void members_receive_current_published_snapshots_but_never_unpublished_drafts() {
         Agent unpublished = agent(101L, 9L, 0L, 1L, null);
         Agent published = agent(102L, 9L, 3L, 3L, 201L);
         Agent changed = agent(103L, 9L, 3L, 4L, 202L);
         published.setCurrentSnapshotId(801L);
         changed.setCurrentSnapshotId(802L);
         when(agents.selectList(any())).thenReturn(List.of(unpublished, published, changed));
+        AgentSnapshot snapshot = new AgentSnapshot();
+        snapshot.setVersionNumber(3L);
+        snapshot.setSnapshotData(new AgentSnapshotData(
+                "已发布名称", "已发布描述", "已发布开场白", List.of("已发布"), "已发布提示词",
+                List.of(), List.of(), new AgentSnapshotData.ModelConfiguration(
+                        30L, "OPENAI", "OpenAI", "provider/openai", "https://api.openai.com/v1",
+                        "OPENAI_COMPATIBLE", "API_KEY", "gpt-4o-mini", new BigDecimal("0.4"),
+                        new BigDecimal("0.9"), 2048, 30), 5, new BigDecimal("0.2")));
+        when(snapshots.selectOne(any())).thenReturn(snapshot);
         AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 72L, 9L, "tenant_member", "jti"));
 
         AgentWorkbenchApiModels.AgentPage result = service.list(
                 new AgentWorkbenchApiModels.AgentListQuery(1, 20, null, null, null));
 
         assertThat(result.items()).extracting(AgentWorkbenchApiModels.AgentListItem::id)
-                .containsExactly(102L);
+                .containsExactly(102L, 103L);
+        assertThat(result.items()).extracting(AgentWorkbenchApiModels.AgentListItem::name)
+                .containsOnly("已发布名称");
         assertThatThrownBy(() -> service.get(101L))
                 .isInstanceOf(AgentWorkbenchException.class)
                 .extracting("status")

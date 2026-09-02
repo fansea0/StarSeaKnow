@@ -110,7 +110,7 @@
 **Files:**
 - Create: `server/Spring-AI/src/main/resources/db/V13__add_agent_snapshot.sql`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/snapshot/AgentSnapshot.java`
-- Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/snapshot/AgentSnapshotMapper.java`
+- Create: `server/Spring-AI/src/main/java/com/starsea/ai/mapper/AgentSnapshotMapper.java`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/snapshot/AgentSnapshotAssembler.java`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/snapshot/AgentSnapshotService.java`
 - Create: `server/Spring-AI/src/main/java/com/starsea/ai/agent/snapshot/AgentSnapshotController.java`
@@ -120,10 +120,10 @@
 **Interfaces:**
 - `GET /agents/{id}/snapshots`, `GET /agents/{id}/snapshots/{version}`, `POST /agents/{id}/publish`, `POST /agents/{id}/snapshots/{version}/rollback`.
 
-- [ ] Write RED tests for atomic publish, immutable JSON, concurrent serialization and rollback provenance.
-- [ ] Implement V13 and snapshot assembler that stores provider connection ID but no secret material.
-- [ ] Implement APIs and revision-derived state transitions.
-- [ ] Verify and commit `feat: 添加智能体发布快照与回滚`.
+- [x] Write RED tests for atomic publish, immutable JSON, concurrent serialization and rollback provenance.
+- [x] Implement V13 and snapshot assembler that stores provider connection ID but no secret material.
+- [x] Implement APIs and revision-derived state transitions.
+- [x] Verify and commit `feat: 添加智能体发布快照与回滚`.
 
 ### Task 6: 模块 5—统一执行内核和结构化引用
 

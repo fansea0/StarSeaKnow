@@ -7,10 +7,13 @@ import com.starsea.ai.domain.Knowledge;
 import com.starsea.ai.mapper.AgentKnowledgeMapper;
 import com.starsea.ai.mapper.AgentMapper;
 import com.starsea.ai.mapper.AgentModelMapper;
+import com.starsea.ai.mapper.AgentSnapshotMapper;
 import com.starsea.ai.mapper.KnowledgeMapper;
 import com.starsea.ai.mapper.TenantModelProviderMapper;
 import com.starsea.ai.model.provider.ModelSuggestion;
 import com.starsea.ai.model.provider.TenantModelProvider;
+import com.starsea.ai.agent.snapshot.AgentSnapshot;
+import com.starsea.ai.agent.snapshot.AgentSnapshotData;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +39,7 @@ public class AgentAggregateService {
     private final AgentKnowledgeMapper agentKnowledge;
     private final KnowledgeMapper knowledge;
     private final TenantModelProviderMapper providers;
+    private final AgentSnapshotMapper snapshots;
     private final Clock clock;
 
     @Autowired
@@ -44,8 +48,9 @@ public class AgentAggregateService {
             AgentModelMapper models,
             AgentKnowledgeMapper agentKnowledge,
             KnowledgeMapper knowledge,
-            TenantModelProviderMapper providers) {
-        this(agents, models, agentKnowledge, knowledge, providers, Clock.systemDefaultZone());
+            TenantModelProviderMapper providers,
+            AgentSnapshotMapper snapshots) {
+        this(agents, models, agentKnowledge, knowledge, providers, snapshots, Clock.systemDefaultZone());
     }
 
     AgentAggregateService(
@@ -54,12 +59,14 @@ public class AgentAggregateService {
             AgentKnowledgeMapper agentKnowledge,
             KnowledgeMapper knowledge,
             TenantModelProviderMapper providers,
+            AgentSnapshotMapper snapshots,
             Clock clock) {
         this.agents = agents;
         this.models = models;
         this.agentKnowledge = agentKnowledge;
         this.knowledge = knowledge;
         this.providers = providers;
+        this.snapshots = snapshots;
         this.clock = clock;
     }
 
@@ -114,12 +121,16 @@ public class AgentAggregateService {
         Agent row = owned(agentId, tenantId);
         boolean admin = isAdmin();
         if (!admin && !"PUBLISHED".equals(status(row))) {
-            throw notFound();
+            if (row.getCurrentSnapshotId() == null) throw notFound();
         }
         if (!admin) {
+            AgentSnapshot snapshot = currentSnapshot(row);
+            AgentSnapshotData data = snapshot.getSnapshotData();
+            AgentSnapshotData.ModelConfiguration model = data.model();
             return new AgentWorkbenchApiModels.AgentDetailView(
-                    row.getId(), row.getName(), row.getDescription(), row.getPrologue(), null,
-                    row.getTags(), List.of(), List.of(), null, null, null, status(row),
+                    row.getId(), data.name(), data.description(), data.prologue(), null,
+                    data.tags(), List.of(), data.knowledgeIds(), data.retrievalTopK(),
+                    data.retrievalScoreThreshold(), snapshotModelView(model), "PUBLISHED",
                     value(row.getDraftRevision(), 1L), value(row.getPublishedRevision(), 0L),
                     row.getCurrentSnapshotId(), value(row.getLockVersion(), 0L),
                     row.getLastDebuggedAt(), row.getLastDebuggedBy(), row.getUpdateTime(), false);
@@ -141,7 +152,7 @@ public class AgentAggregateService {
         String tag = trimToNull(request.tag());
         boolean admin = isAdmin();
         List<Agent> filtered = rows.stream()
-                .filter(row -> admin || "PUBLISHED".equals(status(row)))
+                .filter(row -> admin || row.getCurrentSnapshotId() != null)
                 .filter(row -> requestedStatus == null || requestedStatus.equals(status(row)))
                 .filter(row -> tag == null || safeList(row.getTags()).contains(tag))
                 .filter(row -> keyword == null || contains(row.getName(), keyword) || contains(row.getDescription(), keyword))
@@ -162,7 +173,7 @@ public class AgentAggregateService {
         List<Agent> rows = agents.selectList(new LambdaQueryWrapper<Agent>()
                 .eq(Agent::getTenantId, tenantId())
                 .isNull(Agent::getDeletedAt));
-        if (!isAdmin()) rows = rows.stream().filter(row -> "PUBLISHED".equals(status(row))).toList();
+        if (!isAdmin()) rows = rows.stream().filter(row -> row.getCurrentSnapshotId() != null).toList();
         OffsetDateTime now = OffsetDateTime.now(clock);
         OffsetDateTime weekStart = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
                 .toLocalDate().atStartOfDay(clock.getZone()).toOffsetDateTime();
@@ -187,6 +198,15 @@ public class AgentAggregateService {
                 model.setDeletedBy(deletedBy);
                 models.updateById(model);
             }
+        }
+        List<AgentSnapshot> agentSnapshots = safeList(snapshots.selectList(new LambdaQueryWrapper<AgentSnapshot>()
+                .eq(AgentSnapshot::getAgentId, agentId)
+                .eq(AgentSnapshot::getTenantId, tenantId)
+                .isNull(AgentSnapshot::getDeletedAt)));
+        for (AgentSnapshot snapshot : agentSnapshots) {
+            snapshot.setDeletedAt(deletedAt);
+            snapshot.setDeletedBy(deletedBy);
+            snapshots.updateById(snapshot);
         }
         row.setDeletedAt(deletedAt);
         row.setDeletedBy(deletedBy);
@@ -379,10 +399,37 @@ public class AgentAggregateService {
 
     private AgentWorkbenchApiModels.AgentListItem toListItem(Agent row) {
         List<Long> ids = safeList(agentKnowledge.selectKnowledgeIds(row.getId(), tenantId()));
+        if (!isAdmin() && row.getCurrentSnapshotId() != null) {
+            AgentSnapshot snapshot = currentSnapshot(row);
+            AgentSnapshotData data = snapshot.getSnapshotData();
+            return new AgentWorkbenchApiModels.AgentListItem(
+                    row.getId(), data.name(), data.description(), data.tags(), "PUBLISHED",
+                    data.knowledgeIds().size(), snapshot.getVersionNumber(), data.model() != null,
+                    row.getLastDebuggedAt(), row.getLastDebuggedBy(), row.getUpdateTime());
+        }
+        AgentSnapshot snapshot = row.getCurrentSnapshotId() == null ? null : currentSnapshot(row);
         return new AgentWorkbenchApiModels.AgentListItem(
                 row.getId(), row.getName(), row.getDescription(), row.getTags(), status(row), ids.size(),
-                row.getCurrentSnapshotId() == null ? null : value(row.getPublishedRevision(), 0L),
+                snapshot == null ? null : snapshot.getVersionNumber(),
                 row.getAgentModelId() != null, row.getLastDebuggedAt(), row.getLastDebuggedBy(), row.getUpdateTime());
+    }
+
+    private AgentSnapshot currentSnapshot(Agent row) {
+        AgentSnapshot snapshot = snapshots.selectOne(new LambdaQueryWrapper<AgentSnapshot>()
+                .eq(AgentSnapshot::getId, row.getCurrentSnapshotId())
+                .eq(AgentSnapshot::getAgentId, row.getId())
+                .eq(AgentSnapshot::getTenantId, tenantId())
+                .isNull(AgentSnapshot::getDeletedAt));
+        if (snapshot == null) throw notFound("AGENT_SNAPSHOT_NOT_FOUND", "智能体发布快照不存在");
+        return snapshot;
+    }
+
+    private AgentWorkbenchApiModels.AgentModelView snapshotModelView(
+            AgentSnapshotData.ModelConfiguration model) {
+        if (model == null) return null;
+        return new AgentWorkbenchApiModels.AgentModelView(
+                null, model.providerConnectionId(), model.modelId(), model.temperature(), model.topP(),
+                model.maxTokens(), model.timeoutSeconds());
     }
 
     public static String status(Agent row) {

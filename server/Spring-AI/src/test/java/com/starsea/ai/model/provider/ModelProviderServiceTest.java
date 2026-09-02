@@ -4,6 +4,7 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.mapper.ModelProviderCatalogMapper;
 import com.starsea.ai.mapper.TenantModelProviderMapper;
 import com.starsea.ai.mapper.AgentModelMapper;
+import com.starsea.ai.mapper.AgentSnapshotMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,7 @@ class ModelProviderServiceTest {
     private ModelProviderSecretCipher cipher;
     private ModelProviderConnectionVerifier verifier;
     private AgentModelMapper agentModels;
+    private AgentSnapshotMapper snapshots;
     private ModelProviderService service;
 
     @BeforeEach
@@ -38,7 +40,8 @@ class ModelProviderServiceTest {
         cipher = mock(ModelProviderSecretCipher.class);
         verifier = mock(ModelProviderConnectionVerifier.class);
         agentModels = mock(AgentModelMapper.class);
-        service = new ModelProviderService(catalogs, connections, cipher, verifier, agentModels);
+        snapshots = mock(AgentSnapshotMapper.class);
+        service = new ModelProviderService(catalogs, connections, cipher, verifier, agentModels, snapshots);
         AuthContext.set(new AuthContext(
                 AuthContext.Kind.BUSINESS, 71L, 9L, "tenant_admin", "test-jti"));
     }

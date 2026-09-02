@@ -5,6 +5,7 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.mapper.ModelProviderCatalogMapper;
 import com.starsea.ai.mapper.TenantModelProviderMapper;
 import com.starsea.ai.mapper.AgentModelMapper;
+import com.starsea.ai.mapper.AgentSnapshotMapper;
 import com.starsea.ai.agent.AgentModel;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,18 +26,21 @@ public class ModelProviderService {
     private final ModelProviderSecretCipher cipher;
     private final ModelProviderConnectionVerifier verifier;
     private final AgentModelMapper agentModels;
+    private final AgentSnapshotMapper snapshots;
 
     public ModelProviderService(
             ModelProviderCatalogMapper catalogs,
             TenantModelProviderMapper connections,
             ModelProviderSecretCipher cipher,
             ModelProviderConnectionVerifier verifier,
-            AgentModelMapper agentModels) {
+            AgentModelMapper agentModels,
+            AgentSnapshotMapper snapshots) {
         this.catalogs = catalogs;
         this.connections = connections;
         this.cipher = cipher;
         this.verifier = verifier;
         this.agentModels = agentModels;
+        this.snapshots = snapshots;
     }
 
     public List<ModelProviderApiModels.ProviderView> listProviders() {
@@ -204,7 +208,8 @@ public class ModelProviderService {
         long used = agentModels.selectCount(new LambdaQueryWrapper<AgentModel>()
                 .eq(AgentModel::getTenantModelProviderId, connectionId)
                 .isNull(AgentModel::getDeletedAt));
-        if (used > 0) {
+        long publishedUsage = snapshots.countActiveProviderUsage(tenantId(), connectionId);
+        if (used > 0 || publishedUsage > 0) {
             throw new ModelProviderException(409, "MODEL_PROVIDER_IN_USE", "厂商连接正在被智能体使用，不能删除");
         }
         connections.deleteById(existing.getId());
@@ -222,7 +227,9 @@ public class ModelProviderService {
                 .eq(AgentModel::getTenantModelProviderId, existing.getId())
                 .in(AgentModel::getModelId, removedIds)
                 .isNull(AgentModel::getDeletedAt));
-        if (used > 0) {
+        long publishedUsage = snapshots.countActiveModelUsage(
+                existing.getTenantId(), existing.getId(), removedIds);
+        if (used > 0 || publishedUsage > 0) {
             throw new ModelProviderException(409, "MODEL_PROVIDER_MODEL_IN_USE", "模型正在被智能体使用，不能移除");
         }
     }
