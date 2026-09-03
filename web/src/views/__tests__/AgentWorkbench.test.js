@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import AgentDetail from '../AgentDetail.vue'
 import { http } from '../../api/http'
 vi.mock('../../api/http', () => ({ apiUrl: p => `/api${p}`, http: { get: vi.fn(), put: vi.fn(), post: vi.fn(), delete: vi.fn() } }))
@@ -18,6 +19,30 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers() })
 describe('Agent workbench', () => {
+  it('keeps save feedback out of document flow across repeated prompt autosaves', async () => {
+    vi.useFakeTimers()
+    const style = document.createElement('style')
+    style.textContent = readFileSync('src/components/agent/workbench.css', 'utf8')
+    document.head.append(style)
+    const wrapper = page(); document.body.append(wrapper.element); await flushPromises()
+    try {
+      const editor = wrapper.get('#config-conversation textarea[maxlength="32000"]')
+      for (const content of ['第一轮提示词', '第二轮提示词']) {
+        await editor.setValue(content)
+        await vi.advanceTimersByTimeAsync(1200); await flushPromises()
+        expect(http.put).toHaveBeenLastCalledWith('/agents/3/draft', expect.objectContaining({ systemPrompt: content }))
+        const feedback = wrapper.get('[role="status"]')
+        expect(feedback.text()).toContain('草稿已保存')
+        expect(getComputedStyle(feedback.element).position).toBe('fixed')
+        expect(wrapper.get('#config-conversation textarea[maxlength="32000"]').element).toBe(editor.element)
+      }
+      http.put.mockRejectedValueOnce({ response: { status: 500, data: { msg: '保存失败' } } })
+      await editor.setValue('待重试提示词')
+      await vi.advanceTimersByTimeAsync(1200); await flushPromises()
+      expect(wrapper.get('[role="status"]').text()).toContain('保存失败')
+      expect(getComputedStyle(wrapper.get('[role="status"]').element).position).toBe('fixed')
+    } finally { wrapper.unmount(); style.remove() }
+  })
   it('submits an unchanged draft on explicit save and shows pending then success feedback', async () => {
     let finishSave
     http.put.mockImplementation(() => new Promise(resolve => { finishSave = resolve }))
