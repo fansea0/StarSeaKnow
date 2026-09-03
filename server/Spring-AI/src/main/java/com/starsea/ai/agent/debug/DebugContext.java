@@ -10,6 +10,9 @@ import java.util.Deque;
 /** Memory only. Deliberately has no persistence mapping and no content-bearing toString. */
 final class DebugContext {
     final Deque<ConversationMessage> messages = new ArrayDeque<>();
+    final Deque<DebugSessionExport.WeightedTurn> exportTurns = new ArrayDeque<>();
+    long exportBytes;
+    boolean exportUnavailable;
     final Instant createdAt;
     Instant lastAccessAt;
     long revision;

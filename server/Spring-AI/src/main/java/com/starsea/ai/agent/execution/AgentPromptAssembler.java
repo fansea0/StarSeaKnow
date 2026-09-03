@@ -43,6 +43,7 @@ public class AgentPromptAssembler {
         messages.add(new ConversationMessage("system", system));
         messages.addAll(request.history());
         List<ExecutionEvent.Citation> citations = new ArrayList<>();
+        List<SourceExcerpt> sources = new ArrayList<>();
         StringBuilder context = new StringBuilder();
         Set<ChunkIdentity> seenChunks = new HashSet<>();
         Set<SourceContent> seenContent = new HashSet<>();
@@ -54,6 +55,7 @@ public class AgentPromptAssembler {
             if (chunk.documentId() != null && !seenContent.add(
                     new SourceContent(chunk.knowledgeId(), chunk.documentId(), chunk.content()))) continue;
             String id = "C" + (citations.size() + 1);
+            sources.add(new SourceExcerpt(id, chunk.title(), chunk.score(), chunk.content()));
             citations.add(new ExecutionEvent.Citation(id, chunk.knowledgeId(), chunk.knowledgeName(), chunk.documentId(),
                     chunk.title(), chunk.chunkId(), chunk.fileType(), chunk.pageNumber(), chunk.chunkIndex(),
                     chunk.sectionPath(), chunk.sourceLocator(), chunk.score(), summarize(chunk.content())));
@@ -75,7 +77,7 @@ public class AgentPromptAssembler {
                     + context + "</retrieved_context>\n\n用户问题：\n" + request.message();
         }
         messages.add(new ConversationMessage("user", user));
-        return new AssembledPrompt(List.copyOf(messages), List.copyOf(citations));
+        return new AssembledPrompt(List.copyOf(messages), List.copyOf(citations), List.copyOf(sources));
     }
 
     private void appendField(StringBuilder context, String name, String value) {
@@ -108,7 +110,11 @@ public class AgentPromptAssembler {
         return compact.length() <= 320 ? compact : compact.substring(0, 320) + "…";
     }
 
-    public record AssembledPrompt(List<ConversationMessage> messages, List<ExecutionEvent.Citation> citations) {
+    public record SourceExcerpt(String id, String documentTitle, double score, String content) {
+        @Override public String toString() { return "SourceExcerpt[content=<redacted>]"; }
+    }
+
+    public record AssembledPrompt(List<ConversationMessage> messages, List<ExecutionEvent.Citation> citations, List<SourceExcerpt> sources) {
         @Override public String toString() { return "AssembledPrompt[content=<redacted>]"; }
     }
 }

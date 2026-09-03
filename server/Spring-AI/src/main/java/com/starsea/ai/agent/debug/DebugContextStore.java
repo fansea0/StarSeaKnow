@@ -22,6 +22,8 @@ import java.util.UUID;
 public class DebugContextStore {
     private final Cache<Key, DebugContext> contexts;
     private final int maxContexts;
+    private final int maxExportBytesPerContext;
+    private static final com.fasterxml.jackson.databind.ObjectMapper EXPORT_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
     private final Clock clock;
 
     @Autowired
@@ -31,6 +33,7 @@ public class DebugContextStore {
 
     DebugContextStore(DebugContextProperties properties, Ticker ticker, Clock clock) {
         this.clock = clock; this.maxContexts = properties.getMaxContexts();
+        this.maxExportBytesPerContext = properties.getMaxExportBytesPerContext();
         contexts = Caffeine.newBuilder().maximumSize(maxContexts).expireAfterAccess(Duration.ofMinutes(30))
                 .ticker(ticker).scheduler(Scheduler.systemScheduler())
                 .<Key, DebugContext>removalListener((key, value, cause) -> { if (value != null) value.invalidate(); }).build();
@@ -68,6 +71,25 @@ public class DebugContextStore {
         }
         // Do not run cancellation callbacks under the store or Caffeine eviction locks.
         removed.invalidate();
+    }
+
+    public synchronized DebugSessionExport export(Owner owner, long agentId, UUID id) {
+        DebugContext context = contexts.getIfPresent(new Key(owner, agentId, id));
+        if (context == null || context.invalid) throw expired();
+        if (context.busy) throw error(409, "DEBUG_CONTEXT_BUSY", "当前上下文正在生成，请等待完成或停止生成");
+        if (context.revision == 0) throw error(409, "DEBUG_EXPORT_EMPTY", "没有可导出的已完成对话");
+        if (context.exportUnavailable || context.exportTurns.isEmpty()) {
+            throw error(409, "DEBUG_EXPORT_UNAVAILABLE", "导出数据缺失或已超出缓存限制，请新建会话后重试");
+        }
+        var configurations = new java.util.LinkedHashMap<DebugSessionExport.ModelSettings, String>();
+        var turns = new java.util.ArrayList<DebugSessionExport.Turn>();
+        for (var weighted : context.exportTurns) {
+            var turn = weighted.value();
+            String modelId = configurations.computeIfAbsent(turn.model(), ignored -> "M" + (configurations.size() + 1));
+            turns.add(new DebugSessionExport.Turn(turn.turn(), modelId, turn.question(), turn.answer(), turn.references()));
+        }
+        var models = configurations.entrySet().stream().map(entry -> DebugSessionExport.Model.from(entry.getValue(), entry.getKey())).toList();
+        return new DebugSessionExport(1, context.revision > turns.size(), models, turns);
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
@@ -108,6 +130,11 @@ public class DebugContextStore {
         public Mono<Void> invalidated() { return context.invalidated.asMono(); }
 
         public void complete(String user, String assistant) {
+            complete(user, assistant, null, null);
+        }
+
+        public void complete(String user, String assistant, DebugSessionExport.ModelSettings model,
+                             List<DebugSessionExport.Reference> references) {
             synchronized (DebugContextStore.this) {
                 if (closed || committed || context.invalid) return;
                 if (user == null || user.isBlank() || assistant == null || user.length() > 16000 || assistant.length() > 16000) {
@@ -121,6 +148,24 @@ public class DebugContextStore {
                     characters -= context.messages.removeFirst().content().length();
                 }
                 context.revision++;
+                if (model == null || references == null) {
+                    context.exportUnavailable = true;
+                } else {
+                    var turn = new DebugSessionExport.StoredTurn(context.revision, model, user, assistant, references);
+                    try {
+                        int bytes = EXPORT_JSON.writeValueAsBytes(turn).length;
+                        context.exportTurns.addLast(new DebugSessionExport.WeightedTurn(turn, bytes));
+                        context.exportBytes += bytes;
+                    } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) {
+                        context.exportUnavailable = true;
+                    }
+                }
+                // Export is a bounded subset of completed history; never trim individual reference bodies.
+                long firstRetainedTurn = context.revision - context.messages.size() / 2 + 1;
+                while (!context.exportTurns.isEmpty() && (context.exportBytes > maxExportBytesPerContext
+                        || context.exportTurns.getFirst().value().turn() < firstRetainedTurn)) {
+                    context.exportBytes -= context.exportTurns.removeFirst().bytes();
+                }
                 committed = true;
             }
         }

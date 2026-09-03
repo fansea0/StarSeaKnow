@@ -1,16 +1,19 @@
 package com.starsea.ai.agent.debug;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.starsea.ai.agent.AgentWorkbenchException;
 import com.starsea.ai.agent.execution.AgentExecutionService;
 import com.starsea.ai.agent.execution.DraftExecutionSourceLoader;
 import com.starsea.ai.agent.execution.ExecutionEvent;
 import com.starsea.ai.agent.execution.ExecutionRequest;
 import com.starsea.ai.auth.AuthContext;
+import com.starsea.ai.domain.Agent;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -33,7 +36,11 @@ public class DebugExecutionCoordinator {
         var source = drafts.load(agentId);
         var lease = store.open(owner, agentId, command.debugContextId());
         try {
-            var stream = execution.execute(source, new ExecutionRequest(command.message(), command.variables(), lease.history()));
+            var references = new java.util.concurrent.atomic.AtomicReference<List<DebugSessionExport.Reference>>();
+            var model = DebugSessionExport.ModelSettings.from(source.configuration().model());
+            var stream = execution.execute(source, new ExecutionRequest(command.message(), command.variables(), lease.history()),
+                    sources -> references.set(sources.stream().map(item -> new DebugSessionExport.Reference(
+                            item.id(), item.documentTitle(), item.score(), item.content())).toList()));
             if (agents.markDebugged(agentId, owner.tenantId(), owner.userId(), java.time.OffsetDateTime.now()) != 1) {
                 throw new AgentWorkbenchException(404, "AGENT_NOT_FOUND", "智能体不存在或无权访问");
             }
@@ -48,7 +55,7 @@ public class DebugExecutionCoordinator {
                     }
                     reply.append(text);
                 }
-                if ("complete".equals(event.type())) lease.complete(command.message(), reply.toString());
+                if ("complete".equals(event.type())) lease.complete(command.message(), reply.toString(), model, references.get());
                 sink.next(event);
             }).takeUntil(event -> "error".equals(event.type()))
                     .onErrorResume(error -> Flux.just(new ExecutionEvent("error", new ExecutionEvent.Failure(
@@ -65,6 +72,17 @@ public class DebugExecutionCoordinator {
     }
 
     public void delete(long agentId, UUID id) { store.delete(owner(), agentId, id); }
+
+    public DebugSessionExport export(long agentId, UUID id) {
+        var owner = owner();
+        // Historical exports need access to the agent, not an executable current draft.
+        Agent agent = agents.selectOne(new LambdaQueryWrapper<Agent>().eq(Agent::getId, agentId)
+                .eq(Agent::getTenantId, owner.tenantId()).isNull(Agent::getDeletedAt));
+        if (agent == null || agent.getDeletedAt() != null || !Objects.equals(agent.getTenantId(), owner.tenantId())
+                || !Objects.equals(agent.getId(), agentId)) throw new AgentWorkbenchException(
+                404, "AGENT_NOT_FOUND", "智能体不存在或无权访问");
+        return store.export(owner, agentId, id);
+    }
 
     private DebugContextStore.Owner owner() {
         AuthContext context = AuthContext.current();

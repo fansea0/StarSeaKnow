@@ -107,3 +107,4 @@ agent:
   debug:
     # Memory only: fixed 30-minute access TTL and at most four contexts per user.
     max-contexts: ${AGENT_DEBUG_MAX_CONTEXTS:1000}
+    max-export-bytes-per-context: ${AGENT_DEBUG_MAX_EXPORT_BYTES_PER_CONTEXT:262144}

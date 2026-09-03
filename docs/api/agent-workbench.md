@@ -34,6 +34,7 @@
 | POST | `/agents` | 创建草稿 |
 | PUT | `/agents/{id}/draft` | 完整草稿替换，携带 `lockVersion` |
 | DELETE | `/agents/{id}` | Agent、独占模型、快照一起软删除并清理缓存 |
+| GET | `/agents/{id}/debug-contexts/{debugContextId}/export` | 下载自己创建的调试会话简约 JSON，无 `mode` 参数 |
 | GET | `/agents/{id}/snapshots?page=1&pageSize=20` | 分页元数据 `{items,page,pageSize,total}`，不加载完整快照 JSON |
 | GET | `/agents/{id}/snapshots/{version}` | 完整只读快照 |
 | POST | `/agents/{id}/publish` | `{lockVersion,publishNote}`，说明必填，最多 512 字符 |
@@ -67,6 +68,36 @@
 - `error`：`{code,message}`，不包含厂商原始错误正文或密钥。
 
 只有完整成功轮次进入 Caffeine。缓存单机默认最多 1,000 个上下文，每用户最多 4 个，30 分钟无操作过期；最多 40 条消息、单条 16,000 字符、历史总计 64,000 字符。数据库只更新最后调试时间/用户，不保存消息或会话 ID。混合检索仅为前端不可用占位，后端仍采用原向量检索流程。
+
+## 调试会话导出（仅简约版）
+
+点击调试会话小标签同一行右侧的「下载」，通过现有认证请求下载当前会话 JSON。仅租户管理员可导出自己创建的上下文，不能通过请求指定其他租户或用户。
+
+成功返回原始 JSON，不套 `AjaxResult`：`Content-Type: application/json`、`Content-Disposition: attachment; filename="agent-{id}-session.json"`、`Cache-Control: no-store`。
+
+```json
+{
+  "schemaVersion": 1,
+  "historyTruncated": false,
+  "model": [{
+    "configId": "M1", "providerName": "DeepSeek", "modelId": "deepseek-chat",
+    "temperature": 0.4, "topP": 1, "maxTokens": 2048, "timeoutSeconds": 60
+  }],
+  "turns": [{
+    "turn": 1, "modelConfigId": "M1", "question": "年假如何申请？",
+    "answer": "需要提前提交审批。[C1]",
+    "references": [{"id": "C1", "documentTitle": "员工手册", "score": 0.89, "content": "员工申请年假，应提前提交审批。"}]
+  }]
+}
+```
+
+- `model` 是每轮执行时捕获的配置去重列表，配置变更不会覆盖历史轮次；`modelConfigId` 在本次导出文件内有效。
+- `references` 是过滤、去重后实际送入模型的全部引用片段，保留完整原文而非前端短摘要。无召回时为 `[]`。不新增 SSE 正文传输，也不重新检索。
+- 只导出成功完成且仍在缓存中的轮次；失败、中止、生成中的内容不进入导出。`turn` 保留原始成功轮次序号；裁剪后不会重排。
+- 导出数据与现有会话共用 Caffeine 生命周期，关闭会话、删除 Agent、30 分钟无访问或重启后不可恢复，不入库。最多保留现有 20 轮／64,000 字符窗口内的导出数据，并另设每上下文默认 256 KiB 的序列化数据预算（实际 JVM 堆占用与此不同）；超限裁剪完整旧轮次，`historyTruncated=true`，不截断单条引用正文。单轮过大可能导致当前无可导出数据。
+- 容量可用 `AGENT_DEBUG_MAX_EXPORT_BYTES_PER_CONTEXT` 设置，范围 1 KiB—8 MiB；调整时应结合 `AGENT_DEBUG_MAX_CONTEXTS` 评估总内存。导出缓存裁剪不改变送给模型的对话历史窗口。
+- 不导出 API Key、密文、连接 URL、登录凭证、系统提示词、运行变量、Token、耗时或 `citedInAnswer`。问答和知识库正文仍可能包含业务敏感内容，请妥善保管下载文件。
+- 错误仍返回 JSON：生成中 `409 DEBUG_CONTEXT_BUSY`；无成功轮次 `409 DEBUG_EXPORT_EMPTY`；缺少历史元数据或全部超限裁剪 `409 DEBUG_EXPORT_UNAVAILABLE`；上下文不存在、过期或不属于当前用户 `410 DEBUG_CONTEXT_EXPIRED`；Agent 已删除或不可访问 `404`；权限不足 `403`，未登录 `401`。
 
 ## RAG 提示词组装
 

@@ -36,6 +36,20 @@ class AgentDebugControllerTest {
     }
     @AfterEach void clear() { AuthContext.clear(); }
 
+    @Test void exports_a_json_attachment_without_an_ajax_wrapper() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(coordinator.export(101, id)).thenReturn(new DebugSessionExport(1, false, java.util.List.of(), java.util.List.of()));
+        mvc.perform(get("/agents/101/debug-contexts/" + id + "/export"))
+                .andExpect(status().isOk()).andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().string("Content-Disposition", org.hamcrest.Matchers.containsString("attachment")))
+                .andExpect(jsonPath("$.schemaVersion").value(1)).andExpect(jsonPath("$.model").isArray())
+                .andExpect(jsonPath("$.turns").isArray()).andExpect(jsonPath("$.data").doesNotExist());
+        AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 71, 9L, "tenant_member", "jti"));
+        mvc.perform(get("/agents/101/debug-contexts/" + id + "/export")).andExpect(status().isForbidden());
+        verify(coordinator, times(1)).export(101, id);
+    }
+
     @Test void serializes_named_sse_events_and_disables_intermediary_buffering() throws Exception {
         UUID id = UUID.randomUUID();
         when(coordinator.stream(eq(101L), any())).thenReturn(Flux.just(

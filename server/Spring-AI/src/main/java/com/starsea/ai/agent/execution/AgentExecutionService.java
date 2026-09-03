@@ -25,6 +25,11 @@ public class AgentExecutionService {
     }
 
     public Flux<ExecutionEvent> execute(ExecutionSource source, ExecutionRequest request) {
+        return execute(source, request, ignored -> { });
+    }
+
+    public Flux<ExecutionEvent> execute(ExecutionSource source, ExecutionRequest request,
+                                       java.util.function.Consumer<List<AgentPromptAssembler.SourceExcerpt>> onSources) {
         // Preflight is deliberately synchronous: auth, variables and configuration errors remain HTTP 4xx.
         AuthContext context = AgentExecutionAccess.require(source);
         prompts.validateVariables(source.configuration(), request.variables());
@@ -36,6 +41,7 @@ public class AgentExecutionService {
             return Mono.fromCallable(() -> retrieve(source, request, context))
                     .subscribeOn(Schedulers.boundedElastic())
                     .map(chunks -> prompts.assemble(source.configuration(), request, chunks))
+                    .doOnNext(prompt -> onSources.accept(prompt.sources()))
                     .flatMapMany(prompt -> Flux.concat(
                             Flux.just(new ExecutionEvent("retrieval", new ExecutionEvent.Retrieval(prompt.citations()))),
                             Flux.defer(() -> client.stream(prompt.messages())).concatMap(chunk -> {

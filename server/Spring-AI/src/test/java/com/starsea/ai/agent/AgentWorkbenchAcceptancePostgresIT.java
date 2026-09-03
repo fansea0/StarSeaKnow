@@ -92,6 +92,11 @@ class AgentWorkbenchAcceptancePostgresIT {
         var second = debug.stream(draft.id(), new DebugExecutionCoordinator.DebugCommand(context, "第二问", Map.of())).collectList().block(Duration.ofSeconds(20));
         assertThat(second).extracting(ExecutionEvent::type).contains("complete");
         assertThat(new ObjectMapper().readTree(modelRequests.get(1)).get("messages").size()).isEqualTo(4);
+        var exported = debug.export(draft.id(), context);
+        assertThat(exported.turns()).hasSize(2);
+        assertThat(exported.model()).hasSize(1);
+        assertThat(exported.turns().get(0).question()).isEqualTo("第一问");
+        assertThat(exported.turns().get(1).modelConfigId()).isEqualTo(exported.model().get(0).configId());
         var version1 = snapshots.publish(draft.id(), new AgentSnapshotService.PublishCommand("首次发布", draft.lockVersion()));
         var changed = agents.updateDraft(draft.id(), command(original, model, "只改草稿", agents.get(draft.id()).lockVersion()));
         AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, adminId, 1L, "tenant_member", "acceptance"));

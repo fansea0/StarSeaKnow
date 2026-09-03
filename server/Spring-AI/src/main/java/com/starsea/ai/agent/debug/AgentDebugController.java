@@ -33,4 +33,14 @@ public class AgentDebugController {
         coordinator.delete(agentId, debugContextId);
         return AjaxResult.success();
     }
+
+    @GetMapping("/debug-contexts/{debugContextId}/export")
+    public ResponseEntity<DebugSessionExport> export(@PathVariable long agentId, @PathVariable UUID debugContextId) {
+        var result = coordinator.export(agentId, debugContextId);
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON)
+                .header("Cache-Control", "no-store")
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Content-Disposition", "attachment; filename=\"agent-" + agentId + "-session.json\"")
+                .body(result);
+    }
 }

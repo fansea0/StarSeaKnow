@@ -6,6 +6,7 @@
         <button type="button" :aria-label="`关闭会话：${session.title}`" @click="closeSession(session)">×</button>
       </div>
       <button class="aw-text-button" :disabled="sessions.length >= 4" @click="newSession">＋ 新会话</button>
+      <button type="button" class="aw-text-button aw-session-download" data-testid="export-session" title="下载当前会话 JSON，含知识库内容，请妥善保管" :disabled="exporting || active.busy || !active.contextId || !active.messages.length" @click="exportSession">{{ exporting ? '下载中…' : '下载' }}</button>
     </div>
     <div class="aw-runtime-variables" v-if="variables.length">
       <details open><summary>运行变量 <small>仅本次会话使用</small></summary>
@@ -38,12 +39,13 @@
 </template>
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { deleteDebugContext, releaseDebugContext, errorMessage, streamAgent } from '../../api/agents'
+import { deleteDebugContext, releaseDebugContext, exportDebugContext, errorMessage, streamAgent } from '../../api/agents'
 import AgentReferences from './AgentReferences.vue'
 import { safeMarkdown } from './safeMarkdown'
 const props = defineProps({ agentId: [Number, String], editable: Boolean, prologue: String, variables: { type: Array, default: () => [] }, beforeSend: Function })
 let sequence = 0
 const sessions = ref([]), activeId = ref(null), streamElement = ref(null)
+const exporting = ref(false)
 const controllers = new Map()
 function newSession() {
   if (sessions.value.length >= 4) return
@@ -55,6 +57,20 @@ const active = computed(() => sessions.value.find(s => s.id === activeId.value) 
 const questions = computed(() => (props.prologue || '').split('\n').filter(l => /^\s*[-*] /.test(l)).map(l => l.replace(/^\s*[-*] /, '').trim()))
 const greeting = computed(() => (props.prologue || '').split('\n').filter(l => !/^\s*[-*] /.test(l)).join('\n'))
 function stop(session) { controllers.get(session.id)?.abort() }
+async function exportSession() {
+  const session = active.value
+  if (!props.editable || exporting.value || session.busy || !session.contextId || !session.messages.length) return
+  exporting.value = true; session.error = ''
+  try {
+    const blob = await exportDebugContext(props.agentId, session.contextId)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url; link.download = `agent-${props.agentId}-session.json`
+    try { document.body.append(link); link.click() }
+    finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000) }
+  } catch (error) { session.error = errorMessage(error) }
+  finally { exporting.value = false }
+}
 async function dispose(session) {
   stop(session)
   if (session.contextId) {

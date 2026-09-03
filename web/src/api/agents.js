@@ -17,6 +17,18 @@ export const getSnapshot = (id, version) => http.get(`/agents/${id}/snapshots/${
 export const publishAgent = (id, lockVersion, publishNote) => http.post(`/agents/${id}/publish`, { lockVersion, publishNote }).then(unwrap)
 export const rollbackAgent = (id, version, lockVersion, publishNote) => http.post(`/agents/${id}/snapshots/${version}/rollback`, { lockVersion, publishNote }).then(unwrap)
 export const deleteDebugContext = (id, context) => http.delete(`/agents/${id}/debug-contexts/${encodeURIComponent(context)}`).then(unwrap)
+export async function exportDebugContext(id, context) {
+  const response = await authenticatedFetch(apiUrl(`/agents/${id}/debug-contexts/${encodeURIComponent(context)}/export`), {
+    method: 'GET', headers: { Accept: 'application/json' },
+  })
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    const error = new Error(data.msg || data.message || `导出失败（${response.status}）`)
+    error.response = { status: response.status, data }
+    throw error
+  }
+  return response.blob()
+}
 export function releaseDebugContext(id, context) {
   const token = useAuthStore().accessToken
   if (!token) return
