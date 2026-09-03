@@ -5,6 +5,8 @@ import com.starsea.ai.service.RagService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
@@ -60,6 +62,30 @@ class AgentExecutionServiceTest {
         assertThat(events).extracting(ExecutionEvent::type).containsExactly("retrieval", "error");
         assertThat(events.toString()).doesNotContain("sk-secret", "upstream body");
         assertThat(((ExecutionEvent.Retrieval) events.get(0).data()).citations()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @EnumSource(ExecutionSource.Mode.class)
+    void draft_and_published_execution_emit_only_citations_actually_sent_to_the_model(ExecutionSource.Mode mode) {
+        var selected = new ExecutionSource(9, 101, 2, mode, source.configuration());
+        var first = AgentPromptAssemblerTest.chunk("第一份证据", .9);
+        var second = AgentPromptAssemblerTest.chunk("另一份证据", .8);
+        AtomicReference<List<ConversationMessage>> sent = new AtomicReference<>();
+        when(factory.create(selected)).thenReturn(messages -> {
+            sent.set(messages);
+            return Flux.just(new ModelChunk("回答", null, "stop"));
+        });
+        var service = new AgentExecutionService(query -> List.of(
+                AgentPromptAssemblerTest.chunk(" ", .99), first, first, second), new AgentPromptAssembler(), factory);
+        var events = service.execute(selected, new ExecutionRequest("问题", Map.of(), List.of()))
+                .collectList().block(Duration.ofSeconds(5));
+        assertThat(events).extracting(ExecutionEvent::type).containsExactly("retrieval", "delta", "usage", "complete");
+        var citations = ((ExecutionEvent.Retrieval) events.get(0).data()).citations();
+        assertThat(citations).extracting(ExecutionEvent.Citation::id).containsExactly("C1", "C2");
+        assertThat(citations).extracting(ExecutionEvent.Citation::chunkId).containsExactly(first.chunkId(), second.chunkId());
+        assertThat(sent.get().get(1).content())
+                .containsSubsequence("[C1]", "第一份证据", "[C2]", "另一份证据", "用户问题：\n问题")
+                .doesNotContain("[C3]");
     }
 
     @Test
