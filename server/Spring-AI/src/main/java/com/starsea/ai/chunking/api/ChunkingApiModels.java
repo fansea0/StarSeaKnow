@@ -2,6 +2,8 @@ package com.starsea.ai.chunking.api;
 
 import com.starsea.ai.chunking.registry.ChunkStrategyDescriptor;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -16,7 +18,8 @@ public final class ChunkingApiModels {
     public record PreviewRequest(String strategyCode, Map<String, Object> strategyConfig,
                                  boolean replaceEditedDrafts, int lockVersion) {
         public PreviewRequest {
-            strategyConfig = strategyConfig == null ? null : Map.copyOf(strategyConfig);
+            strategyConfig = strategyConfig == null ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(strategyConfig));
         }
 
         public PreviewRequest(String strategyCode, com.starsea.ai.chunking.model.ChunkPolicy strategyConfig,

@@ -1,18 +1,19 @@
 package com.starsea.ai.chunking.api;
 
 import com.starsea.ai.auth.AuthContext;
-import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.PipelineState;
+import com.starsea.ai.chunking.markdown.MarkdownChunkPlanningStrategy;
+import com.starsea.ai.chunking.markdown.MarkdownParentChildPlanningStrategy;
 import com.starsea.ai.chunking.preview.ChunkPreviewService;
 import com.starsea.ai.chunking.preview.ChunkCommandService;
 import com.starsea.ai.chunking.preview.ChunkPreviewWorker;
 import com.starsea.ai.chunking.processing.ChunkTaskDispatcher;
 import com.starsea.ai.chunking.processing.FileProcessingService;
-import com.starsea.ai.chunking.registry.ChunkStrategyDescriptor;
 import com.starsea.ai.chunking.registry.ChunkStrategyRegistry;
 import com.starsea.ai.chunking.registry.DocumentStructureParserRegistry;
 import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
 import com.starsea.ai.chunking.spi.DocumentStructureParser;
+import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.config.GlobalExceptionHandler;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.FileProcessing;
@@ -33,7 +34,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -76,24 +76,9 @@ class ChunkingControllerTest {
         chunkMapper = mock(DocumentChunkMapper.class);
         worker = mock(ChunkPreviewWorker.class);
 
-        ChunkPlanningStrategy markdownStrategy = mock(ChunkPlanningStrategy.class);
-        when(markdownStrategy.code()).thenReturn("MARKDOWN_OPTIMIZED");
-        when(markdownStrategy.supportedFileTypes()).thenReturn(Set.of("md", "markdown"));
-        when(markdownStrategy.plannerVersion()).thenReturn("markdown-adaptive-v1");
-        when(markdownStrategy.descriptor()).thenReturn(new ChunkStrategyDescriptor(
-                "MARKDOWN_OPTIMIZED", "FILE_TYPE", Set.of("md", "markdown"),
-                "markdown-adaptive-v1", List.of()));
-        when(markdownStrategy.normalizeConfig(any())).thenAnswer(invocation -> {
-            Map<String, Object> config = invocation.getArgument(0);
-            ChunkPolicy policy = new ChunkPolicy(
-                    ((Number) config.get("minTokens")).intValue(),
-                    ((Number) config.get("targetTokens")).intValue(),
-                    ((Number) config.get("maxTokens")).intValue());
-            return Map.of(
-                    "minTokens", policy.minTokens(),
-                    "targetTokens", policy.targetTokens(),
-                    "maxTokens", policy.maxTokens());
-        });
+        TokenCounter tokenCounter = mock(TokenCounter.class);
+        ChunkPlanningStrategy markdownStrategy = new MarkdownChunkPlanningStrategy(tokenCounter);
+        ChunkPlanningStrategy parentChildStrategy = new MarkdownParentChildPlanningStrategy(tokenCounter);
         DocumentStructureParser markdownParser = mock(DocumentStructureParser.class);
         when(markdownParser.supportedFileTypes()).thenReturn(Set.of("md", "markdown"));
 
@@ -101,7 +86,7 @@ class ChunkingControllerTest {
                 processingMapper,
                 fileMapper,
                 chunkMapper,
-                new ChunkStrategyRegistry(List.of(markdownStrategy)),
+                new ChunkStrategyRegistry(List.of(markdownStrategy, parentChildStrategy)),
                 new DocumentStructureParserRegistry(List.of(markdownParser)),
                 dispatcher,
                 worker);
@@ -123,13 +108,14 @@ class ChunkingControllerTest {
     }
 
     @Test
-    void markdown_capability_exposes_only_the_registered_markdown_strategy() throws Exception {
+    void markdown_capability_exposes_the_registered_markdown_strategies() throws Exception {
         mockMvc.perform(get("/knowledge/{knowledgeId}/files/{fileId}/chunk-strategies",
                         KNOWLEDGE_ID, FILE_ID))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.fileType").value("md"))
-                .andExpect(jsonPath("$.strategies.length()").value(1))
-                .andExpect(jsonPath("$.strategies[0].code").value("MARKDOWN_OPTIMIZED"));
+                .andExpect(jsonPath("$.strategies.length()").value(2))
+                .andExpect(jsonPath("$.strategies[0].code").value("MARKDOWN_OPTIMIZED"))
+                .andExpect(jsonPath("$.strategies[1].code").value("PARENT_CHILD"));
     }
 
     @Test
@@ -178,6 +164,34 @@ class ChunkingControllerTest {
                                  "replaceEditedDrafts":false,"lockVersion":0}
                                 """))
                 .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    void explicit_null_parent_child_config_reaches_strategy_validation_as_422() throws Exception {
+        mockMvc.perform(post("/knowledge/{knowledgeId}/files/{fileId}/chunk-preview",
+                        KNOWLEDGE_ID, FILE_ID)
+                        .contentType("application/json")
+                        .content("""
+                                {"strategyCode":"PARENT_CHILD",
+                                 "strategyConfig":{"childMaxTokens":null},
+                                 "replaceEditedDrafts":false,"lockVersion":0}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.msg").value("childMaxTokens must be an integral number"));
+    }
+
+    @Test
+    void explicit_null_markdown_config_reaches_strategy_validation_as_422() throws Exception {
+        mockMvc.perform(post("/knowledge/{knowledgeId}/files/{fileId}/chunk-preview",
+                        KNOWLEDGE_ID, FILE_ID)
+                        .contentType("application/json")
+                        .content("""
+                                {"strategyCode":"MARKDOWN_OPTIMIZED",
+                                 "strategyConfig":{"maxTokens":null},
+                                 "replaceEditedDrafts":false,"lockVersion":0}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.msg").value("maxTokens must be an integral number"));
     }
 
     @Test
