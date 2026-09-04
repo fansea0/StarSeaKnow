@@ -18,6 +18,7 @@ import com.starsea.ai.chunking.model.ContextMode;
 import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
 import com.starsea.ai.chunking.model.OverlapUnit;
+import com.starsea.ai.chunking.model.StructuredBlock;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.FileTextExtraction;
 import com.starsea.ai.mapper.FileTextExtractionMapper;
@@ -68,7 +69,6 @@ class GeneralChunkingFormatMatrixTest {
                 : "alpha section\nbeta section\ngamma section";
         DocumentFixtureFactory.writer(extension).accept(source, fixtureText);
 
-        GeneralTextInputProvider provider = provider(extension);
         GeneralChunkConfig config = new GeneralChunkConfig(
                 "\n", com.starsea.ai.chunking.model.DelimiterMode.LITERAL,
                 96, false, false, false);
@@ -80,18 +80,32 @@ class GeneralChunkingFormatMatrixTest {
         String hash = sha256(Files.readAllBytes(source));
         GeneralChunkPlanningStrategy planner = new GeneralChunkPlanningStrategy(COUNTER);
 
-        var firstInput = provider.provide(resource, hash, config);
+        var firstInput = provider(extension, "first").provide(resource, hash, config);
         var first = planner.plan(new ChunkPlanningRequest(
                 firstInput.structure(), config, context, 512));
-        var secondInput = provider.provide(resource, hash, config);
+        var secondInput = provider(extension, "second").provide(resource, hash, config);
         var second = planner.plan(new ChunkPlanningRequest(
                 secondInput.structure(), config, context, 512));
 
         assertEquals(first.drafts(), second.drafts());
+        assertEquals(first.drafts().stream().map(ChunkDraft::sourceLocator).toList(),
+                second.drafts().stream().map(ChunkDraft::sourceLocator).toList());
+        assertEquals(first.drafts().stream().map(ChunkDraft::boundaryReason).toList(),
+                second.drafts().stream().map(ChunkDraft::boundaryReason).toList());
         assertEquals(firstInput.delimiterMatched(), secondInput.delimiterMatched());
         assertFalse(first.drafts().isEmpty());
-        assertTrue(first.drafts().stream().map(ChunkDraft::content)
-                .anyMatch(body -> body.contains(fixtureText.split("\\n")[0])));
+        String canonicalCleanedBody = reconstructCleanedBlocks(
+                firstInput.structure().blocks());
+        assertEquals(canonicalCleanedBody,
+                reconstructCleanedBlocks(secondInput.structure().blocks()));
+        assertEquals(canonicalCleanedBody, reconstructCleanedBody(first.drafts()));
+        assertEquals(canonicalCleanedBody, reconstructCleanedBody(second.drafts()));
+        for (String retainedSegment : fixtureText.split("\\n")) {
+            assertEquals(1, countOccurrences(first.drafts(), retainedSegment),
+                    () -> retainedSegment + " must have exactly one owning draft");
+            assertEquals(1, countOccurrences(second.drafts(), retainedSegment),
+                    () -> retainedSegment + " must have exactly one owning draft");
+        }
         first.drafts().forEach(draft -> {
             assertFalse(draft.content().isBlank());
             assertNotNull(draft.sourceLocator());
@@ -103,7 +117,7 @@ class GeneralChunkingFormatMatrixTest {
         assertLocatorGranularity(extension, first.drafts());
     }
 
-    private GeneralTextInputProvider provider(String extension) {
+    private GeneralTextInputProvider provider(String extension, String coldRun) {
         DocumentTextExtractorRegistry registry = new DocumentTextExtractorRegistry(List.of(
                 new PlainTextExtractor(20_000_000, 10_000_000),
                 new PdfTextExtractor(20_000_000, 10_000_000, 30_000),
@@ -120,9 +134,27 @@ class GeneralChunkingFormatMatrixTest {
             return 1;
         });
         ManagedExtractionCache cache = new ManagedExtractionCache(
-                mapper, registry, new ObjectMapper(), tempDir.resolve("cache-" + extension));
+                mapper, registry, new ObjectMapper(),
+                tempDir.resolve("cache-" + extension + "-" + coldRun));
         return new GeneralTextInputProvider(registry, cache, new TextNormalizer(),
                 new GeneralTextCleaner(), COUNTER);
+    }
+
+    private String reconstructCleanedBody(List<ChunkDraft> drafts) {
+        return String.join("\n", drafts.stream().map(ChunkDraft::content).toList());
+    }
+
+    private String reconstructCleanedBlocks(List<StructuredBlock> blocks) {
+        return String.join("\n", blocks.stream()
+                .map(StructuredBlock::plainText)
+                .filter(text -> text != null && !text.isEmpty())
+                .toList());
+    }
+
+    private long countOccurrences(List<ChunkDraft> drafts, String retainedSegment) {
+        return drafts.stream()
+                .filter(draft -> draft.content().contains(retainedSegment))
+                .count();
     }
 
     private void assertLocatorGranularity(String extension, List<ChunkDraft> drafts) {

@@ -3,13 +3,13 @@ package com.starsea.ai.chunking;
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
-import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingApiModels.ConfirmRequest;
 import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
 import com.starsea.ai.chunking.api.ChunkingApiModels.PreviewRequest;
+import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
 import com.starsea.ai.chunking.extraction.DocumentTextExtractorRegistry;
@@ -60,6 +60,7 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -81,7 +82,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -172,13 +175,17 @@ class GeneralChunkingWorkflowTest {
             assertEquals("CHARACTERS", savedSuccessor.getOverlapUnit().name());
             assertNotNull(savedSuccessor.getOverlapReductionReason());
 
+            Map<UUID, ChunkIndexSnapshot> previewSnapshots =
+                    snapshotPreviewChunks(repository.chunks, counter);
             services.vectors().confirm(KNOWLEDGE_ID, FILE_ID,
                     new ConfirmRequest(repository.processing.getLockVersion()));
 
             assertEquals(PipelineState.COMPLETED.code(), repository.processing.getPipelineState());
             assertTrue(repository.chunks.stream()
                     .allMatch(chunk -> chunk.getStatus() == ChunkStatus.ACTIVE.code()));
-            assertTrue(repository.chunks.stream().allMatch(chunk -> counter.count(chunk.getIndexContent()) <= 512));
+            assertEquals(previewSnapshots, snapshotIndexFields(repository.chunks),
+                    "confirmation must not mutate preview index or overlap data");
+            repository.vectorStore.assertDocumentTexts(previewSnapshots);
             RetrievedChunk retrieved = retrieve(repository, editMarker.trim());
             assertEquals(savedFirst.getPublicId(), retrieved.chunkId());
             assertEquals(savedFirst.getIndexContent(), retrieved.content(),
@@ -208,6 +215,71 @@ class GeneralChunkingWorkflowTest {
             assertEquals(reindexed.getPublicId(), afterReindex.chunkId());
             assertEquals(reindexed.getIndexContent(), afterReindex.content());
             repository.assertScopedCasCoverage();
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void production_services_reject_wrong_scope_and_stale_versions_without_side_effects()
+            throws IOException {
+        AuthContext.set(businessContext(TENANT_ID));
+        Path uploadedSource = uploadedGeneralFixture("txt");
+
+        try (ExactCounter exact = exactCounter()) {
+            WorkflowRepository repository = new WorkflowRepository(uploadedSource, "txt");
+            WorkflowServices services = workflowServices(repository, exact.counter(), "txt");
+            services.preview().startPreview(KNOWLEDGE_ID, FILE_ID, generalPreviewRequest());
+            DocumentChunk initialTarget = repository.chunks.get(0);
+            EditChunkRequest validEdit = editRequest(
+                    initialTarget, initialTarget.getContent() + " scoped-edit");
+
+            AuthContext.set(businessContext(TENANT_ID + 1));
+            assertRejectedWithoutMutation(repository, HttpStatus.NOT_FOUND,
+                    () -> services.commands().edit(
+                            KNOWLEDGE_ID, FILE_ID, initialTarget.getPublicId(), validEdit));
+            AuthContext.set(businessContext(TENANT_ID));
+            assertRejectedWithoutMutation(repository, HttpStatus.NOT_FOUND,
+                    () -> services.commands().edit(
+                            KNOWLEDGE_ID + 1, FILE_ID, initialTarget.getPublicId(), validEdit));
+            assertRejectedWithoutMutation(repository, HttpStatus.CONFLICT,
+                    () -> services.commands().edit(
+                            KNOWLEDGE_ID, FILE_ID, initialTarget.getPublicId(),
+                            editRequest(initialTarget, initialTarget.getContent() + " stale-edit",
+                                    initialTarget.getLockVersion() + 1)));
+
+            int confirmVersion = repository.processing.getLockVersion();
+            AuthContext.set(businessContext(TENANT_ID + 1));
+            assertRejectedWithoutMutation(repository, HttpStatus.NOT_FOUND,
+                    () -> services.vectors().confirm(
+                            KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(confirmVersion)));
+            AuthContext.set(businessContext(TENANT_ID));
+            assertRejectedWithoutMutation(repository, HttpStatus.NOT_FOUND,
+                    () -> services.vectors().confirm(
+                            KNOWLEDGE_ID + 1, FILE_ID, new ConfirmRequest(confirmVersion)));
+            assertRejectedWithoutMutation(repository, HttpStatus.CONFLICT,
+                    () -> services.vectors().confirm(
+                            KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(confirmVersion + 1)));
+            repository.rejectNextChunkUpdateCas();
+            assertRejectedWithoutMutation(repository, HttpStatus.CONFLICT,
+                    () -> services.vectors().confirm(
+                            KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(confirmVersion)));
+
+            services.vectors().confirm(
+                    KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(confirmVersion));
+            assertEquals(PipelineState.COMPLETED.code(), repository.processing.getPipelineState());
+            UUID targetPublicId = repository.chunks.get(0).getPublicId();
+
+            AuthContext.set(businessContext(TENANT_ID + 1));
+            assertRejectedWithoutMutation(repository, HttpStatus.NOT_FOUND,
+                    () -> services.vectors().reindex(KNOWLEDGE_ID, FILE_ID, targetPublicId));
+            AuthContext.set(businessContext(TENANT_ID));
+            assertRejectedWithoutMutation(repository, HttpStatus.NOT_FOUND,
+                    () -> services.vectors().reindex(KNOWLEDGE_ID + 1, FILE_ID, targetPublicId));
+            repository.rejectNextProcessingTransitionCas();
+            assertRejectedWithoutMutation(repository, HttpStatus.CONFLICT,
+                    () -> services.vectors().reindex(KNOWLEDGE_ID, FILE_ID, targetPublicId));
+            repository.rejectNextChunkUpdateCas();
+            assertRejectedWithoutMutation(repository, HttpStatus.CONFLICT,
+                    () -> services.vectors().reindex(KNOWLEDGE_ID, FILE_ID, targetPublicId));
         }
     }
 
@@ -299,6 +371,66 @@ class GeneralChunkingWorkflowTest {
                 tokenizer, "BAAI/bge-base-zh-v1.5@7dfbf196"));
     }
 
+    private AuthContext businessContext(long tenantId) {
+        return new AuthContext(
+                AuthContext.Kind.BUSINESS, 7L, tenantId, "tenant_admin", "jti");
+    }
+
+    private PreviewRequest generalPreviewRequest() {
+        return new PreviewRequest(
+                "GENERAL",
+                Map.of("delimiter", "\n", "delimiterMode", "LITERAL",
+                        "maxCharacters", 96, "collapseWhitespace", false,
+                        "removeUrls", false, "removeEmails", false),
+                Map.of("enabled", true, "limit", 16), false, 0);
+    }
+
+    private EditChunkRequest editRequest(DocumentChunk target, String content) {
+        return editRequest(target, content, target.getLockVersion());
+    }
+
+    private EditChunkRequest editRequest(DocumentChunk target, String content, int lockVersion) {
+        return new EditChunkRequest(content, true, 16,
+                com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS, lockVersion);
+    }
+
+    private Map<UUID, ChunkIndexSnapshot> snapshotPreviewChunks(
+            List<DocumentChunk> chunks, TokenCounter counter) {
+        chunks.forEach(chunk -> {
+            assertNotNull(chunk.getIndexContent());
+            assertFalse(chunk.getIndexContent().isBlank());
+            assertTrue(chunk.getIndexContent().codePointCount(
+                            0, chunk.getIndexContent().length()) <= 96,
+                    () -> "preview index_content exceeds 96 code points: " + chunk.getPublicId());
+            assertTrue(counter.count(chunk.getIndexContent()) <= 512,
+                    () -> "preview index_content exceeds 512 exact tokens: " + chunk.getPublicId());
+        });
+        return snapshotIndexFields(chunks);
+    }
+
+    private Map<UUID, ChunkIndexSnapshot> snapshotIndexFields(List<DocumentChunk> chunks) {
+        Map<UUID, ChunkIndexSnapshot> snapshots = new LinkedHashMap<>();
+        chunks.stream().sorted(Comparator.comparing(DocumentChunk::getPosition))
+                .forEach(chunk -> snapshots.put(chunk.getPublicId(), ChunkIndexSnapshot.from(chunk)));
+        return Map.copyOf(snapshots);
+    }
+
+    private void assertRejectedWithoutMutation(
+            WorkflowRepository repository, HttpStatus expected, Runnable action) {
+        RepositoryState before = repository.state();
+        RuntimeException failure = assertThrows(RuntimeException.class, action::run);
+        assertEquals(expected, rejectionStatus(failure), failure::getMessage);
+        assertEquals(before, repository.state(),
+                "rejected service command must not mutate rows, state, or vector writes");
+    }
+
+    private HttpStatus rejectionStatus(RuntimeException failure) {
+        if (failure instanceof ChunkingException chunking) return chunking.status();
+        if (failure instanceof FileProcessingService.OwnershipException) return HttpStatus.NOT_FOUND;
+        if (failure instanceof FileProcessingService.StateConflictException) return HttpStatus.CONFLICT;
+        throw failure;
+    }
+
     private record WorkflowServices(ChunkPreviewService preview,
                                     ChunkCommandService commands,
                                     ChunkVectorService vectors) {
@@ -309,6 +441,34 @@ class GeneralChunkingWorkflowTest {
         public void close() {
             counter.close();
         }
+    }
+
+    private record ChunkIndexSnapshot(
+            String indexContent,
+            Boolean overlapEnabled,
+            Integer overlapLimit,
+            com.starsea.ai.chunking.model.OverlapUnit overlapUnit,
+            String overlapContent,
+            Long overlapSourceChunkId,
+            Integer overlapTokenCount,
+            Integer overlapCharacterCount,
+            String overlapReductionReason) {
+
+        private static ChunkIndexSnapshot from(DocumentChunk chunk) {
+            return new ChunkIndexSnapshot(
+                    chunk.getIndexContent(), chunk.getOverlapEnabled(), chunk.getOverlapLimit(),
+                    chunk.getOverlapUnit(), chunk.getOverlapContent(),
+                    chunk.getOverlapSourceChunkId(), chunk.getOverlapTokenCount(),
+                    chunk.getOverlapCharacterCount(), chunk.getOverlapReductionReason());
+        }
+    }
+
+    private record RepositoryState(
+            String processingRow,
+            List<String> chunkRows,
+            Map<String, String> vectorDocuments,
+            int vectorAddCalls,
+            int vectorDeleteCalls) {
     }
 
     /**
@@ -328,6 +488,8 @@ class GeneralChunkingWorkflowTest {
         private final List<CasAudit> processingCasAudits = new ArrayList<>();
         private final List<CasAudit> chunkCasAudits = new ArrayList<>();
         private long nextChunkId = 1;
+        private boolean rejectNextProcessingTransitionCas;
+        private boolean rejectNextChunkUpdateCas;
 
         private WorkflowRepository(Path source, String fileType) {
             Configuration configuration = new Configuration();
@@ -361,7 +523,13 @@ class GeneralChunkingWorkflowTest {
         private void stubTransactions() {
             when(transactions.execute(any(TransactionCallback.class))).thenAnswer(invocation -> {
                 TransactionCallback<?> callback = invocation.getArgument(0);
-                return callback.doInTransaction(mock(TransactionStatus.class));
+                TransactionRows before = transactionRows();
+                try {
+                    return callback.doInTransaction(mock(TransactionStatus.class));
+                } catch (RuntimeException | Error failure) {
+                    restore(before);
+                    throw failure;
+                }
             });
             doAnswer(invocation -> {
                 @SuppressWarnings("unchecked")
@@ -386,6 +554,10 @@ class GeneralChunkingWorkflowTest {
                         int target = invocation.getArgument(4);
                         int progress = invocation.getArgument(5);
                         int lockVersion = invocation.getArgument(6);
+                        if (rejectNextProcessingTransitionCas) {
+                            rejectNextProcessingTransitionCas = false;
+                            return 0;
+                        }
                         if (!Objects.equals(processing.getPipelineState(), expected)
                                 || !Objects.equals(processing.getLockVersion(), lockVersion)) {
                             return 0;
@@ -508,6 +680,10 @@ class GeneralChunkingWorkflowTest {
             chunkCasAudits.add(new CasAudit(
                     stage, required, target != null));
             if (target == null) return 0;
+            if (rejectNextChunkUpdateCas) {
+                rejectNextChunkUpdateCas = false;
+                return 0;
+            }
             if (patch.getStatus() == ChunkStatus.INDEXING.code()) {
                 target.setStatus(ChunkStatus.INDEXING.code());
                 target.setLastError(null);
@@ -621,44 +797,6 @@ class GeneralChunkingWorkflowTest {
             return converted.toString();
         }
 
-        private void assertSuccessfulCasCoverage() {
-            assertEquals(List.of("PREVIEW_METADATA"),
-                    processingCasAudits.stream().map(CasAudit::stage).toList());
-            assertTrue(processingCasAudits.stream().allMatch(CasAudit::matched));
-            assertTrue(processingCasAudits.get(0).required().keySet().containsAll(Set.of(
-                    "file_id", "tenant_id", "knowledge_id", "pipeline_state", "lock_version")));
-            assertEquals(1, processingCasAudits.get(0).required().get("lock_version"));
-            long indexing = chunkCasAudits.stream()
-                    .filter(audit -> audit.stage().equals("INDEXING")).count();
-            long active = chunkCasAudits.stream()
-                    .filter(audit -> audit.stage().equals("ACTIVE")).count();
-            assertEquals(chunks.size(), indexing);
-            assertEquals(chunks.size(), active);
-            assertTrue(chunkCasAudits.stream().allMatch(CasAudit::matched));
-            chunkCasAudits.forEach(audit -> {
-                assertTrue(audit.required().keySet().containsAll(Set.of(
-                        "id", "public_id", "tenant_id", "knowledge_id", "file_id",
-                        "status", "lock_version")));
-                if (audit.stage().equals("ACTIVE")) {
-                    assertTrue(audit.required().containsKey("content_hash"));
-                }
-            });
-            for (DocumentChunk chunk : chunks) {
-                CasAudit indexingAudit = chunkCasAudits.stream()
-                        .filter(audit -> audit.stage().equals("INDEXING"))
-                        .filter(audit -> Objects.equals(audit.required().get("id"), chunk.getId()))
-                        .findFirst().orElseThrow();
-                CasAudit activeAudit = chunkCasAudits.stream()
-                        .filter(audit -> audit.stage().equals("ACTIVE"))
-                        .filter(audit -> Objects.equals(audit.required().get("id"), chunk.getId()))
-                        .findFirst().orElseThrow();
-                int beforeIndexing = ((Number) indexingAudit.required().get("lock_version")).intValue();
-                int beforeActive = ((Number) activeAudit.required().get("lock_version")).intValue();
-                assertEquals(beforeIndexing + 1, beforeActive);
-                assertEquals(beforeActive + 1, chunk.getLockVersion());
-            }
-        }
-
         private void assertScopedCasCoverage() {
             assertTrue(processingCasAudits.stream().allMatch(CasAudit::matched));
             assertTrue(chunkCasAudits.stream().allMatch(CasAudit::matched));
@@ -666,38 +804,6 @@ class GeneralChunkingWorkflowTest {
                     Set.of("file_id", "tenant_id", "knowledge_id", "pipeline_state", "lock_version"))));
             chunkCasAudits.forEach(audit -> assertTrue(audit.required().keySet().containsAll(
                     Set.of("tenant_id", "knowledge_id", "file_id", "public_id", "lock_version"))));
-        }
-
-        private void assertWrongCasIsRejected(UUID publicId) {
-            DocumentChunk chunk = byPublicId(publicId);
-            int status = chunk.getStatus();
-            int version = chunk.getLockVersion();
-            DocumentChunk patch = new DocumentChunk();
-            patch.setStatus(ChunkStatus.INDEXING.code());
-            UpdateWrapper<DocumentChunk> wrong = new UpdateWrapper<DocumentChunk>()
-                    .eq("id", chunk.getId())
-                    .eq("tenant_id", chunk.getTenantId())
-                    .eq("knowledge_id", chunk.getKnowledgeId())
-                    .eq("file_id", chunk.getFileId())
-                    .eq("public_id", chunk.getPublicId())
-                    .eq("status", chunk.getStatus())
-                    .eq("lock_version", version + 99);
-            assertEquals(0, chunkMapper.update(patch, wrong));
-            assertEquals(status, chunk.getStatus());
-            assertEquals(version, chunk.getLockVersion());
-
-            Map<String, Object> previousContext = processing.getContextPolicy();
-            FileProcessing contextPatch = new FileProcessing();
-            contextPatch.setContextPolicy(Map.of("overlapEnabled", false, "overlapTokens", 40));
-            UpdateWrapper<FileProcessing> stale = new UpdateWrapper<FileProcessing>()
-                    .eq("file_id", processing.getFileId())
-                    .eq("tenant_id", processing.getTenantId())
-                    .eq("knowledge_id", processing.getKnowledgeId())
-                    .eq("pipeline_state", PipelineState.ADJUSTING.code())
-                    .eq("lock_version", processing.getLockVersion() - 1)
-                    .eq("source_hash", processing.getSourceHash());
-            assertEquals(0, processingMapper.update(contextPatch, stale));
-            assertEquals(previousContext, processing.getContextPolicy());
         }
 
         private List<DocumentChunk> orderedChunks() {
@@ -712,32 +818,88 @@ class GeneralChunkingWorkflowTest {
                     .findFirst().orElse(null);
         }
 
-        private DocumentChunk byId(Long id) {
-            assertNotNull(id);
-            return chunks.stream()
-                    .filter(chunk -> chunk.getId().equals(id))
-                    .findFirst().orElseThrow();
+        private RepositoryState state() {
+            return new RepositoryState(
+                    processing.toString(),
+                    orderedChunks().stream().map(DocumentChunk::toString).toList(),
+                    vectorStore.documentTexts(),
+                    vectorStore.addCalls,
+                    vectorStore.deleteCalls);
+        }
+
+        private void rejectNextProcessingTransitionCas() {
+            rejectNextProcessingTransitionCas = true;
+        }
+
+        private void rejectNextChunkUpdateCas() {
+            rejectNextChunkUpdateCas = true;
+        }
+
+        private TransactionRows transactionRows() {
+            return new TransactionRows(
+                    processing.getPipelineState(), processing.getProgress(),
+                    processing.getLockVersion(), processing.getFailedFromState(),
+                    processing.getLastError(),
+                    chunks.stream().collect(java.util.stream.Collectors.toMap(
+                            DocumentChunk::getPublicId,
+                            chunk -> new TransactionChunk(
+                                    chunk.getStatus(), chunk.getLockVersion(), chunk.getLastError()))));
+        }
+
+        private void restore(TransactionRows rows) {
+            processing.setPipelineState(rows.pipelineState());
+            processing.setProgress(rows.progress());
+            processing.setLockVersion(rows.lockVersion());
+            processing.setFailedFromState(rows.failedFromState());
+            processing.setLastError(rows.lastError());
+            chunks.forEach(chunk -> {
+                TransactionChunk previous = rows.chunks().get(chunk.getPublicId());
+                if (previous != null) {
+                    chunk.setStatus(previous.status());
+                    chunk.setLockVersion(previous.lockVersion());
+                    chunk.setLastError(previous.lastError());
+                }
+            });
         }
 
         private record CasAudit(String stage, Map<String, Object> required, boolean matched) {
+        }
+
+        private record TransactionRows(
+                Integer pipelineState,
+                Integer progress,
+                Integer lockVersion,
+                Integer failedFromState,
+                String lastError,
+                Map<UUID, TransactionChunk> chunks) {
+        }
+
+        private record TransactionChunk(Integer status, Integer lockVersion, String lastError) {
         }
     }
 
     private static final class FakeVectorStore implements VectorStore {
         private final Map<String, Document> documents = new LinkedHashMap<>();
+        private final List<Document> sentDocuments = new ArrayList<>();
+        private int addCalls;
+        private int deleteCalls;
 
         @Override
         public void add(List<Document> values) {
+            addCalls++;
+            sentDocuments.addAll(values);
             values.forEach(value -> documents.put(value.getId(), value));
         }
 
         @Override
         public void delete(List<String> ids) {
+            deleteCalls++;
             ids.forEach(documents::remove);
         }
 
         @Override
         public void delete(Filter.Expression filterExpression) {
+            deleteCalls++;
             documents.clear();
         }
 
@@ -751,6 +913,26 @@ class GeneralChunkingWorkflowTest {
                             .score(0.97)
                             .build())
                     .toList();
+        }
+
+        private Map<String, String> documentTexts() {
+            Map<String, String> texts = new LinkedHashMap<>();
+            documents.forEach((id, document) -> texts.put(id, document.getText()));
+            return Map.copyOf(texts);
+        }
+
+        private void assertDocumentTexts(Map<UUID, ChunkIndexSnapshot> expected) {
+            assertEquals(expected.size(), documents.size());
+            assertEquals(expected.size(), sentDocuments.size());
+            Map<String, Document> sentById = sentDocuments.stream().collect(
+                    java.util.stream.Collectors.toMap(Document::getId, value -> value));
+            expected.forEach((publicId, snapshot) -> {
+                Document document = sentById.get(publicId.toString());
+                assertNotNull(document, () -> "missing vector document " + publicId);
+                assertEquals(snapshot.indexContent(), document.getText(),
+                        () -> "vector text differs from preview snapshot for " + publicId);
+                assertEquals(snapshot.indexContent(), documents.get(publicId.toString()).getText());
+            });
         }
     }
 }
