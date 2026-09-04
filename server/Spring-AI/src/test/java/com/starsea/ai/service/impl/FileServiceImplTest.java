@@ -45,6 +45,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -283,12 +284,52 @@ class FileServiceImplTest {
         row.setPath(source.toString());
         when(fileMapper.selectById(20L)).thenReturn(row);
         when(fileMapper.deleteById(20L)).thenReturn(1);
+        ManagedExtractionCache.ManagedFileQuarantine quarantine =
+                mock(ManagedExtractionCache.ManagedFileQuarantine.class);
+        when(extractionCache.quarantineManagedFiles(1L, 20L)).thenReturn(quarantine);
 
         assertTrue(service.deleteFile(20L));
 
-        verify(extractionCache).deleteManagedFiles(1L, 20L);
+        verify(extractionCache).quarantineManagedFiles(1L, 20L);
+        verify(quarantine).commit();
+        verify(quarantine, never()).restore();
         verify(fileMapper).deleteById(20L);
         assertFalse(Files.exists(source));
+    }
+
+    @Test
+    void delete_commit_failure_restores_original_source_and_managed_cache() throws Exception {
+        Path source = uploadDirectory.resolve("1/10/source.txt");
+        Path cacheFile = uploadDirectory.resolve("cache/text.txt");
+        Path quarantinedCache = uploadDirectory.resolve("cache/text.deleting");
+        Files.createDirectories(source.getParent());
+        Files.createDirectories(cacheFile.getParent());
+        Files.writeString(source, "source");
+        Files.writeString(cacheFile, "cached");
+        com.starsea.ai.domain.File row = new com.starsea.ai.domain.File();
+        row.setId(20L);
+        row.setPath(source.toString());
+        when(fileMapper.selectById(20L)).thenReturn(row);
+        when(fileMapper.deleteById(20L)).thenReturn(1);
+        ManagedExtractionCache.ManagedFileQuarantine quarantine =
+                mock(ManagedExtractionCache.ManagedFileQuarantine.class);
+        when(extractionCache.quarantineManagedFiles(1L, 20L)).thenAnswer(invocation -> {
+            Files.move(cacheFile, quarantinedCache);
+            return quarantine;
+        });
+        doAnswer(invocation -> {
+            Files.move(quarantinedCache, cacheFile);
+            return null;
+        }).when(quarantine).restore();
+        transactionManager.failCommit();
+
+        assertThrows(TransactionSystemException.class, () -> service.deleteFile(20L));
+
+        assertEquals("source", Files.readString(source));
+        assertEquals("cached", Files.readString(cacheFile));
+        assertFalse(Files.exists(quarantinedCache));
+        verify(quarantine).restore();
+        verify(quarantine, never()).commit();
     }
 
     @Test

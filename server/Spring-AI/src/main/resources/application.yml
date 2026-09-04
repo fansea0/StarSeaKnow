@@ -66,6 +66,7 @@ chunking:
     timeout: ${EXTRACTION_TIMEOUT:30s}
     max-embedded-depth: ${EXTRACTION_MAX_EMBEDDED_DEPTH:8}
     max-decompressed-bytes: ${EXTRACTION_MAX_DECOMPRESSED_BYTES:209715200}
+    pdf-max-storage-bytes: ${EXTRACTION_PDF_MAX_STORAGE_BYTES:209715200}
   recovery:
     timeout: 10m
     initial-delay: 1m

@@ -24,8 +24,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.Map;
 import java.util.List;
@@ -123,19 +125,71 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
         if (!source.startsWith(uploadRoot)) {
             throw new IllegalStateException("文件路径不在受管上传目录中");
         }
-        extractionCache.deleteManagedFiles(tenantId, fileId);
+        ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine =
+                extractionCache.quarantineManagedFiles(tenantId, fileId);
+        Path sourceQuarantine;
         try {
-            if (!Files.deleteIfExists(source)) {
+            if (!Files.exists(source)) {
                 throw new IllegalStateException("源文件不存在");
             }
+            sourceQuarantine = source.resolveSibling(source.getFileName()
+                    + ".deleting-" + UUID.randomUUID());
+            moveAtomically(source, sourceQuarantine);
         } catch (IOException exception) {
-            throw new IllegalStateException("源文件删除失败", exception);
+            IllegalStateException failure = new IllegalStateException("源文件隔离失败", exception);
+            restoreCache(cacheQuarantine, failure);
+            throw failure;
+        } catch (RuntimeException failure) {
+            restoreCache(cacheQuarantine, failure);
+            throw failure;
         }
-        Integer removed = transactionTemplate.execute(status -> fileMapper.deleteById(fileId));
-        if (!Integer.valueOf(1).equals(removed)) {
-            throw new IllegalStateException("文件记录删除失败");
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                if (fileMapper.deleteById(fileId) != 1) {
+                    throw new IllegalStateException("文件记录删除失败");
+                }
+            });
+        } catch (RuntimeException databaseFailure) {
+            restoreSource(sourceQuarantine, source, databaseFailure);
+            restoreCache(cacheQuarantine, databaseFailure);
+            throw databaseFailure;
         }
+        cacheQuarantine.commit();
+        deleteQuarantinedSource(sourceQuarantine);
         return true;
+    }
+
+    private void moveAtomically(Path source, Path destination) throws IOException {
+        try {
+            Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException exception) {
+            throw new IOException("上传存储不支持原子移动", exception);
+        }
+    }
+
+    private void restoreSource(Path quarantine, Path source, Throwable failure) {
+        try {
+            moveAtomically(quarantine, source);
+        } catch (IOException restoreFailure) {
+            failure.addSuppressed(restoreFailure);
+        }
+    }
+
+    private void restoreCache(ManagedExtractionCache.ManagedFileQuarantine quarantine,
+                              Throwable failure) {
+        try {
+            quarantine.restore();
+        } catch (RuntimeException restoreFailure) {
+            failure.addSuppressed(restoreFailure);
+        }
+    }
+
+    private void deleteQuarantinedSource(Path quarantine) {
+        try {
+            Files.delete(quarantine);
+        } catch (IOException exception) {
+            throw new IllegalStateException("隔离源文件删除失败", exception);
+        }
     }
 
     private void writePhysicalFile(MultipartFile file, Path uploadRoot, Path createdPath) {

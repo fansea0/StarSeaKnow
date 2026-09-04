@@ -127,6 +127,89 @@ class ManagedExtractionCacheTest {
         assertTrue(Files.exists(outside));
     }
 
+    @Test
+    void write_rejects_a_tenant_directory_symlink_escape() throws Exception {
+        Path source = cacheRoot.resolve("source.txt");
+        Files.writeString(source, "source");
+        Path managed = cacheRoot.resolve("managed");
+        Path outside = cacheRoot.resolve("outside");
+        Files.createDirectories(managed);
+        Files.createDirectories(outside);
+        Files.createSymbolicLink(managed.resolve("1"), outside);
+        StatefulMapper mapper = new StatefulMapper();
+        ManagedExtractionCache cache = new ManagedExtractionCache(
+                mapper.proxy(), new DocumentTextExtractorRegistry(List.of(
+                        countingExtractor(new AtomicInteger()))), new ObjectMapper(), managed);
+
+        assertThrows(IllegalStateException.class,
+                () -> cache.getOrExtract(1L, 9L, "e".repeat(64), source, "text/plain"));
+        try (var entries = Files.list(outside)) {
+            assertEquals(0, entries.count());
+        }
+    }
+
+    @Test
+    void cache_hit_rejects_a_managed_text_symlink() throws Exception {
+        Path source = cacheRoot.resolve("source.txt");
+        Files.writeString(source, "source");
+        StatefulMapper mapper = new StatefulMapper();
+        ManagedExtractionCache cache = new ManagedExtractionCache(
+                mapper.proxy(), new DocumentTextExtractorRegistry(List.of(
+                        countingExtractor(new AtomicInteger()))), new ObjectMapper(), cacheRoot.resolve("managed"));
+        String hash = "f".repeat(64);
+        cache.getOrExtract(1L, 9L, hash, source, "text/plain");
+        Path text = Path.of(mapper.row.getManagedTextPath());
+        Path outside = cacheRoot.resolve("outside.txt");
+        Files.copy(text, outside);
+        Files.delete(text);
+        Files.createSymbolicLink(text, outside);
+
+        assertThrows(IllegalStateException.class,
+                () -> cache.getOrExtract(1L, 9L, hash, source, "text/plain"));
+        assertEquals("cached body", Files.readString(outside));
+    }
+
+    @Test
+    void deletion_rejects_a_managed_file_symlink_without_touching_target() throws Exception {
+        Path source = cacheRoot.resolve("source.txt");
+        Files.writeString(source, "source");
+        StatefulMapper mapper = new StatefulMapper();
+        ManagedExtractionCache cache = new ManagedExtractionCache(
+                mapper.proxy(), new DocumentTextExtractorRegistry(List.of(
+                        countingExtractor(new AtomicInteger()))), new ObjectMapper(), cacheRoot.resolve("managed"));
+        cache.getOrExtract(1L, 9L, "1".repeat(64), source, "text/plain");
+        Path text = Path.of(mapper.row.getManagedTextPath());
+        Path outside = cacheRoot.resolve("outside-delete.txt");
+        Files.writeString(outside, "outside");
+        Files.delete(text);
+        Files.createSymbolicLink(text, outside);
+
+        assertThrows(IllegalStateException.class, () -> cache.deleteManagedFiles(1L, 9L));
+        assertEquals("outside", Files.readString(outside));
+    }
+
+    @Test
+    void managed_file_quarantine_can_restore_both_files() throws Exception {
+        Path source = cacheRoot.resolve("source.txt");
+        Files.writeString(source, "source");
+        StatefulMapper mapper = new StatefulMapper();
+        ManagedExtractionCache cache = new ManagedExtractionCache(
+                mapper.proxy(), new DocumentTextExtractorRegistry(List.of(
+                        countingExtractor(new AtomicInteger()))), new ObjectMapper(), cacheRoot.resolve("managed"));
+        cache.getOrExtract(1L, 9L, "2".repeat(64), source, "text/plain");
+        Path text = Path.of(mapper.row.getManagedTextPath());
+        Path sourceMap = Path.of(mapper.row.getSourceMapPath());
+
+        ManagedExtractionCache.ManagedFileQuarantine quarantine =
+                cache.quarantineManagedFiles(1L, 9L);
+        assertFalse(Files.exists(text));
+        assertFalse(Files.exists(sourceMap));
+
+        quarantine.restore();
+        assertTrue(Files.isRegularFile(text));
+        assertTrue(Files.isRegularFile(sourceMap));
+    }
+
     private DocumentTextExtractor countingExtractor(AtomicInteger calls) {
         return new DocumentTextExtractor() {
             @Override public String id() { return "counting"; }

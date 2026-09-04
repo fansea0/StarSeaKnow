@@ -13,11 +13,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -74,8 +76,10 @@ public class ManagedExtractionCache {
         ExtractedText extracted = registry.extract(source, capability);
         Path directory = scopedDirectory(tenantId, fileId);
         String generation = UUID.randomUUID().toString();
-        Path textPath = checked(directory.resolve("text-" + generation + ".txt"), directory);
-        Path mapPath = checked(directory.resolve("source-map-" + generation + ".json"), directory);
+        Path textPath = checkedManagedPath(
+                directory.resolve("text-" + generation + ".txt"), directory);
+        Path mapPath = checkedManagedPath(
+                directory.resolve("source-map-" + generation + ".json"), directory);
         writePairAtomically(directory, textPath, mapPath, extracted, sourceHash);
 
         FileTextExtraction replacement = metadata(tenantId, fileId, sourceHash, extracted,
@@ -96,9 +100,27 @@ public class ManagedExtractionCache {
     }
 
     public synchronized void deleteManagedFiles(long tenantId, long fileId) {
+        quarantineManagedFiles(tenantId, fileId).commit();
+    }
+
+    public synchronized ManagedFileQuarantine quarantineManagedFiles(long tenantId, long fileId) {
+        requirePositive(tenantId, "tenantId");
+        requirePositive(fileId, "fileId");
         FileTextExtraction existing = mapper.findScoped(tenantId, fileId);
-        if (existing != null) {
-            deleteExistingPair(existing, tenantId, fileId);
+        if (existing == null) {
+            return new Quarantine(List.of(), tenantId, fileId);
+        }
+        Path directory = scopedDirectory(tenantId, fileId, false);
+        Path textPath = checkedManagedPath(Path.of(existing.getManagedTextPath()), directory);
+        Path mapPath = checkedManagedPath(Path.of(existing.getSourceMapPath()), directory);
+        List<QuarantinedFile> moved = new ArrayList<>();
+        try {
+            quarantineIfPresent(textPath, moved);
+            quarantineIfPresent(mapPath, moved);
+            return new Quarantine(List.copyOf(moved), tenantId, fileId);
+        } catch (RuntimeException failure) {
+            restoreMoved(moved, failure);
+            throw failure;
         }
     }
 
@@ -112,10 +134,11 @@ public class ManagedExtractionCache {
                 || !capability.detectedMediaType().equals(row.getMediaType())) {
             return null;
         }
-        Path directory = scopedDirectory(tenantId, fileId);
-        Path textPath = checked(Path.of(row.getManagedTextPath()), directory);
-        Path mapPath = checked(Path.of(row.getSourceMapPath()), directory);
-        if (!Files.isRegularFile(textPath) || !Files.isRegularFile(mapPath)) {
+        Path directory = scopedDirectory(tenantId, fileId, false);
+        Path textPath = checkedManagedPath(Path.of(row.getManagedTextPath()), directory);
+        Path mapPath = checkedManagedPath(Path.of(row.getSourceMapPath()), directory);
+        if (!Files.isRegularFile(textPath, LinkOption.NOFOLLOW_LINKS)
+                || !Files.isRegularFile(mapPath, LinkOption.NOFOLLOW_LINKS)) {
             return null;
         }
         try {
@@ -153,7 +176,6 @@ public class ManagedExtractionCache {
         boolean textCommitted = false;
         boolean mapCommitted = false;
         try {
-            Files.createDirectories(directory);
             textTemp = Files.createTempFile(directory, ".text-", ".tmp");
             mapTemp = Files.createTempFile(directory, ".source-map-", ".tmp");
             Files.writeString(textTemp, extracted.text(), StandardCharsets.UTF_8);
@@ -193,9 +215,9 @@ public class ManagedExtractionCache {
     }
 
     private void deleteExistingPair(FileTextExtraction row, long tenantId, long fileId) {
-        Path directory = scopedDirectory(tenantId, fileId);
-        Path textPath = checked(Path.of(row.getManagedTextPath()), directory);
-        Path mapPath = checked(Path.of(row.getSourceMapPath()), directory);
+        Path directory = scopedDirectory(tenantId, fileId, false);
+        Path textPath = checkedManagedPath(Path.of(row.getManagedTextPath()), directory);
+        Path mapPath = checkedManagedPath(Path.of(row.getSourceMapPath()), directory);
         try {
             Files.deleteIfExists(textPath);
             Files.deleteIfExists(mapPath);
@@ -205,9 +227,9 @@ public class ManagedExtractionCache {
     }
 
     private void validateManagedPaths(FileTextExtraction row, long tenantId, long fileId) {
-        Path directory = scopedDirectory(tenantId, fileId);
-        checked(Path.of(row.getManagedTextPath()), directory);
-        checked(Path.of(row.getSourceMapPath()), directory);
+        Path directory = scopedDirectory(tenantId, fileId, false);
+        checkedManagedPath(Path.of(row.getManagedTextPath()), directory);
+        checkedManagedPath(Path.of(row.getSourceMapPath()), directory);
     }
 
     private void deleteNewPair(Path textPath, Path mapPath, long tenantId, long fileId,
@@ -232,16 +254,165 @@ public class ManagedExtractionCache {
     }
 
     private Path scopedDirectory(long tenantId, long fileId) {
-        return checked(root.resolve(Long.toString(tenantId)).resolve(Long.toString(fileId)), root);
+        return scopedDirectory(tenantId, fileId, true);
     }
 
-    private Path checked(Path candidate, Path requiredParent) {
+    private Path scopedDirectory(long tenantId, long fileId, boolean create) {
+        Path realRoot = secureRoot();
+        Path tenantDirectory = secureDirectory(root.resolve(Long.toString(tenantId)), realRoot, create);
+        return secureDirectory(tenantDirectory.resolve(Long.toString(fileId)), realRoot, create);
+    }
+
+    private Path secureRoot() {
+        try {
+            if (Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
+                requireSafeDirectory(root);
+            } else {
+                Files.createDirectories(root);
+                requireSafeDirectory(root);
+            }
+            return root.toRealPath();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Managed extraction root cannot be secured", exception);
+        }
+    }
+
+    private Path secureDirectory(Path directory, Path realRoot, boolean create) {
+        try {
+            if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) {
+                if (!create) {
+                    return directory.toAbsolutePath().normalize();
+                }
+                Files.createDirectory(directory);
+            }
+            requireSafeDirectory(directory);
+            Path realDirectory = directory.toRealPath();
+            if (!realDirectory.startsWith(realRoot)) {
+                throw new IllegalStateException("Managed extraction directory escapes its root");
+            }
+            return directory.toAbsolutePath().normalize();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Managed extraction directory cannot be secured", exception);
+        }
+    }
+
+    private void requireSafeDirectory(Path directory) {
+        if (Files.isSymbolicLink(directory)
+                || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalStateException("Managed extraction directory is not a safe directory");
+        }
+    }
+
+    private Path checkedManagedPath(Path candidate, Path requiredParent) {
         Path normalized = candidate.toAbsolutePath().normalize();
         Path parent = requiredParent.toAbsolutePath().normalize();
         if (!normalized.startsWith(parent)) {
             throw new IllegalStateException("Managed extraction path escapes its tenant/file directory");
         }
+        Path realRoot = secureRoot();
+        Path securedParent = secureDirectory(parent, realRoot, false);
+        if (!Files.exists(securedParent, LinkOption.NOFOLLOW_LINKS)) {
+            return normalized;
+        }
+        if (Files.isSymbolicLink(normalized)) {
+            throw new IllegalStateException("Managed extraction file cannot be a symbolic link");
+        }
+        if (Files.exists(normalized, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Path realFile = normalized.toRealPath();
+                Path realParent = securedParent.toRealPath();
+                if (!realFile.startsWith(realRoot) || !realFile.startsWith(realParent)) {
+                    throw new IllegalStateException("Managed extraction file escapes its root");
+                }
+            } catch (IOException exception) {
+                throw new IllegalStateException("Managed extraction file cannot be secured", exception);
+            }
+        }
         return normalized;
+    }
+
+    private void quarantineIfPresent(Path original, List<QuarantinedFile> moved) {
+        if (!Files.exists(original, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        Path quarantined = original.resolveSibling(original.getFileName()
+                + ".deleting-" + UUID.randomUUID());
+        try {
+            moveAtomically(original, quarantined);
+            moved.add(new QuarantinedFile(original, quarantined));
+        } catch (IOException exception) {
+            throw new IllegalStateException("Managed extraction files could not be quarantined", exception);
+        }
+    }
+
+    private void restoreMoved(List<QuarantinedFile> moved, Throwable failure) {
+        for (int index = moved.size() - 1; index >= 0; index--) {
+            QuarantinedFile file = moved.get(index);
+            try {
+                moveAtomically(file.quarantined(), file.original());
+            } catch (IOException restoreFailure) {
+                failure.addSuppressed(restoreFailure);
+            }
+        }
+    }
+
+    public interface ManagedFileQuarantine {
+        void commit();
+        void restore();
+    }
+
+    private final class Quarantine implements ManagedFileQuarantine {
+        private final List<QuarantinedFile> files;
+        private final long tenantId;
+        private final long fileId;
+        private boolean completed;
+
+        private Quarantine(List<QuarantinedFile> files, long tenantId, long fileId) {
+            this.files = files;
+            this.tenantId = tenantId;
+            this.fileId = fileId;
+        }
+
+        @Override
+        public synchronized void commit() {
+            if (completed) return;
+            RuntimeException failure = null;
+            for (QuarantinedFile file : files) {
+                try {
+                    Files.deleteIfExists(file.quarantined());
+                } catch (IOException exception) {
+                    if (failure == null) {
+                        failure = new IllegalStateException(
+                                "Managed extraction quarantine could not be removed", exception);
+                    } else {
+                        failure.addSuppressed(exception);
+                    }
+                }
+            }
+            if (failure != null) {
+                log.error("Unable to finalize extraction cache deletion for tenant {} file {}",
+                        tenantId, fileId, failure);
+                throw failure;
+            }
+            completed = true;
+        }
+
+        @Override
+        public synchronized void restore() {
+            if (completed) return;
+            RuntimeException failure = new IllegalStateException(
+                    "Managed extraction quarantine could not be restored");
+            restoreMoved(new ArrayList<>(files), failure);
+            if (failure.getSuppressed().length > 0) {
+                log.error("Unable to restore extraction cache deletion for tenant {} file {}",
+                        tenantId, fileId, failure);
+                throw failure;
+            }
+            completed = true;
+        }
+    }
+
+    private record QuarantinedFile(Path original, Path quarantined) {
     }
 
     private FileTextExtraction metadata(long tenantId, long fileId, String sourceHash,

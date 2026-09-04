@@ -5,6 +5,11 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.poi.openxml4j.opc.OPCPackage;
+import org.apache.poi.poifs.crypt.EncryptionInfo;
+import org.apache.poi.poifs.crypt.EncryptionMode;
+import org.apache.poi.poifs.crypt.Encryptor;
+import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 import org.apache.poi.hslf.usermodel.HSLFSlide;
 import org.apache.poi.hslf.usermodel.HSLFSlideShow;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
@@ -21,11 +26,14 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.OutputStream;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Base64;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -152,15 +160,93 @@ class DocumentTextExtractorContractTest {
 
     @Test
     void compressed_expansion_limit_is_applied_before_tika_parsing() {
-        Path epub = tempDir.resolve("large.epub");
-        writeEpub(epub, "expanded text");
+        Path archive = tempDir.resolve("large.zip");
+        writeZip(archive, Map.of("expanded.txt", "expanded text"));
         TikaDocumentTextExtractor limited = new TikaDocumentTextExtractor(
                 100_000, 10_000, 5_000, 3, 10);
-        ExtractionCapability capability = limited.probe(epub, "application/epub+zip");
+        ExtractionCapability capability = directTikaCapability(limited, "application/zip");
 
-        assertEquals(DocumentTextExtractor.FailureReason.DECOMPRESSION_LIMIT,
+        assertEquals(DocumentTextExtractor.FailureReason.LIMIT_EXCEEDED,
                 assertThrows(DocumentTextExtractor.ExtractionException.class,
-                        () -> limited.extract(epub, capability)).reason());
+                        () -> limited.extract(archive, capability)).reason());
+    }
+
+    @ParameterizedTest(name = "encrypted {0} reports ENCRYPTED")
+    @MethodSource("encryptedOfficeFormats")
+    void password_protected_ooxml_is_routed_to_tika_and_reports_encrypted(
+            String extension, BiConsumer<Path, String> writer) {
+        Path source = tempDir.resolve("protected." + extension);
+        encryptOoxml(source, writer, "protected-text");
+
+        ExtractionCapability capability = registry.probe(source, null);
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> registry.extract(source, capability));
+
+        assertTrue(capability.available(), capability.toString());
+        assertEquals("application/x-tika-ooxml-protected", capability.detectedMediaType());
+        assertEquals("tika", capability.extractorId());
+        assertEquals(DocumentTextExtractor.FailureReason.ENCRYPTED, failure.reason());
+    }
+
+    @Test
+    void pdf_checks_deadline_after_the_final_page_before_returning_text() {
+        Path source = tempDir.resolve("deadline.pdf");
+        writePdf(source, "final-page");
+        PdfTextExtractor extractor = new PdfTextExtractor(100_000, 10_000, 10, 100_000) {
+            private final AtomicInteger calls = new AtomicInteger();
+
+            @Override
+            protected long nanoTime() {
+                return calls.getAndIncrement() < 2 ? 0 : 11_000_000;
+            }
+        };
+        ExtractionCapability capability = extractor.probe(source, "application/pdf");
+
+        assertEquals(DocumentTextExtractor.FailureReason.TIMEOUT,
+                assertThrows(DocumentTextExtractor.ExtractionException.class,
+                        () -> extractor.extract(source, capability)).reason());
+    }
+
+    @Test
+    void pdf_temp_storage_limit_returns_typed_limit_failure() {
+        Path source = tempDir.resolve("storage.pdf");
+        writePdf(source, "storage-limit");
+        PdfTextExtractor extractor = new PdfTextExtractor(100_000, 10_000, 5_000, 1);
+        ExtractionCapability capability = extractor.probe(source, "application/pdf");
+
+        assertEquals(DocumentTextExtractor.FailureReason.LIMIT_EXCEEDED,
+                assertThrows(DocumentTextExtractor.ExtractionException.class,
+                        () -> extractor.extract(source, capability)).reason());
+    }
+
+    @Test
+    void tika_rejects_nested_content_instead_of_returning_partial_text_at_depth_limit() {
+        Path source = tempDir.resolve("nested.zip");
+        writeZipBytes(source, Map.of("nested.zip", zipBytes(Map.of(
+                "nested.txt", "nested text"))));
+        TikaDocumentTextExtractor extractor = new TikaDocumentTextExtractor(
+                100_000, 10_000, 5_000, 0, 100_000);
+        ExtractionCapability capability = directTikaCapability(extractor, "application/zip");
+
+        assertEquals(DocumentTextExtractor.FailureReason.LIMIT_EXCEEDED,
+                assertThrows(DocumentTextExtractor.ExtractionException.class,
+                        () -> extractor.extract(source, capability)).reason());
+    }
+
+    @Test
+    void tika_counts_expanded_bytes_across_multiple_embedded_streams() {
+        Path source = tempDir.resolve("multiple.zip");
+        writeZip(source, Map.of(
+                "first.txt", "a".repeat(70),
+                "second.txt", "b".repeat(70)));
+        TikaDocumentTextExtractor extractor = new TikaDocumentTextExtractor(
+                100_000, 10_000, 5_000, 4, 100);
+        ExtractionCapability capability = directTikaCapability(extractor, "application/zip");
+
+        assertEquals(DocumentTextExtractor.FailureReason.LIMIT_EXCEEDED,
+                assertThrows(DocumentTextExtractor.ExtractionException.class,
+                        () -> extractor.extract(source, capability)).reason());
     }
 
     private static Stream<Arguments> formats() {
@@ -181,6 +267,19 @@ class DocumentTextExtractorContractTest {
                 Arguments.of("pptx", (BiConsumer<Path, String>) DocumentTextExtractorContractTest::writePptx, "tika"),
                 Arguments.of("rtf", (BiConsumer<Path, String>) DocumentTextExtractorContractTest::writeRtf, "tika"),
                 Arguments.of("epub", (BiConsumer<Path, String>) DocumentTextExtractorContractTest::writeEpub, "tika"));
+    }
+
+    private static Stream<Arguments> encryptedOfficeFormats() {
+        return Stream.of(
+                Arguments.of("docx", (BiConsumer<Path, String>) DocumentTextExtractorContractTest::writeDocx),
+                Arguments.of("xlsx", (BiConsumer<Path, String>) DocumentTextExtractorContractTest::writeXlsx),
+                Arguments.of("pptx", (BiConsumer<Path, String>) DocumentTextExtractorContractTest::writePptx));
+    }
+
+    private static ExtractionCapability directTikaCapability(
+            TikaDocumentTextExtractor extractor, String mediaType) {
+        return new ExtractionCapability(true, mediaType, extractor.id(), extractor.version(),
+                extractor.priority(), null);
     }
 
     private static BiConsumer<Path, String> textWriter() {
@@ -259,17 +358,92 @@ class DocumentTextExtractorContractTest {
     }
 
     private static void writeEpub(Path path, String text) {
+        writeEpubPages(path, List.of(text));
+    }
+
+    private static void writeEpubPages(Path path, List<String> pages) {
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(path))) {
             put(zip, "mimetype", "application/epub+zip");
             put(zip, "META-INF/container.xml", "<?xml version=\"1.0\"?><container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\"><rootfiles><rootfile full-path=\"content.opf\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>");
-            put(zip, "content.opf", "<?xml version=\"1.0\"?><package version=\"2.0\" xmlns=\"http://www.idpf.org/2007/opf\" unique-identifier=\"id\"><metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>fixture</dc:title><dc:identifier id=\"id\">fixture</dc:identifier></metadata><manifest><item id=\"page\" href=\"page.xhtml\" media-type=\"application/xhtml+xml\"/></manifest><spine><itemref idref=\"page\"/></spine></package>");
-            put(zip, "page.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>" + text + "</body></html>");
+            StringBuilder manifest = new StringBuilder();
+            StringBuilder spine = new StringBuilder();
+            for (int index = 0; index < pages.size(); index++) {
+                manifest.append("<item id=\"page").append(index).append("\" href=\"page")
+                        .append(index).append(".xhtml\" media-type=\"application/xhtml+xml\"/>");
+                spine.append("<itemref idref=\"page").append(index).append("\"/>");
+            }
+            put(zip, "content.opf", "<?xml version=\"1.0\"?><package version=\"2.0\" xmlns=\"http://www.idpf.org/2007/opf\" unique-identifier=\"id\"><metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>fixture</dc:title><dc:identifier id=\"id\">fixture</dc:identifier></metadata><manifest>" + manifest + "</manifest><spine>" + spine + "</spine></package>");
+            for (int index = 0; index < pages.size(); index++) {
+                put(zip, "page" + index + ".xhtml",
+                        "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>"
+                                + pages.get(index) + "</body></html>");
+            }
         } catch (Exception exception) { throw new IllegalStateException(exception); }
     }
 
     private static void put(ZipOutputStream zip, String name, String text) throws Exception {
+        put(zip, name, text.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void put(ZipOutputStream zip, String name, byte[] content) throws Exception {
         zip.putNextEntry(new ZipEntry(name));
-        zip.write(text.getBytes(StandardCharsets.UTF_8));
+        zip.write(content);
         zip.closeEntry();
     }
+
+    private static byte[] zipBytes(Map<String, String> entries) {
+        try (ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+             ZipOutputStream zip = new ZipOutputStream(bytes)) {
+            for (Map.Entry<String, String> entry : entries.entrySet()) {
+                put(zip, entry.getKey(), entry.getValue());
+            }
+            zip.finish();
+            return bytes.toByteArray();
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+
+    private static void writeZip(Path path, Map<String, String> entries) {
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(path))) {
+            for (Map.Entry<String, String> entry : entries.entrySet()) {
+                put(zip, entry.getKey(), entry.getValue());
+            }
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+
+    private static void writeZipBytes(Path path, Map<String, byte[]> entries) {
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(path))) {
+            for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+                put(zip, entry.getKey(), entry.getValue());
+            }
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+    private static void encryptOoxml(Path target, BiConsumer<Path, String> writer, String text) {
+        try {
+            Path plain = Files.createTempFile(target.getParent(), "plain-", ".ooxml");
+            writer.accept(plain, text);
+            try (OPCPackage packageFile = OPCPackage.open(plain.toFile());
+                 POIFSFileSystem filesystem = new POIFSFileSystem()) {
+                EncryptionInfo encryptionInfo = new EncryptionInfo(EncryptionMode.agile);
+                Encryptor encryptor = encryptionInfo.getEncryptor();
+                encryptor.confirmPassword("password");
+                try (OutputStream encrypted = encryptor.getDataStream(filesystem)) {
+                    packageFile.save(encrypted);
+                }
+                try (OutputStream output = Files.newOutputStream(target)) {
+                    filesystem.writeFilesystem(output);
+                }
+            } finally {
+                Files.deleteIfExists(plain);
+            }
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+
 }

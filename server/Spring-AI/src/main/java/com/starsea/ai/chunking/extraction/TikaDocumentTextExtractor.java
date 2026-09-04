@@ -9,11 +9,13 @@ import org.apache.tika.exception.WriteLimitReachedException;
 import org.apache.tika.extractor.EmbeddedDocumentExtractor;
 import org.apache.tika.extractor.ParsingEmbeddedDocumentExtractor;
 import org.apache.tika.io.TikaInputStream;
+import org.apache.tika.io.TemporaryResources;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.metadata.TikaCoreProperties;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
+import org.apache.commons.io.input.CloseShieldInputStream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -41,7 +43,8 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "application/vnd.ms-powerpoint",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/x-tika-ooxml-protected");
     private final long maxSourceBytes;
     private final int maxOutputCharacters;
     private final long timeoutMillis;
@@ -86,17 +89,22 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
     public ExtractedText extract(Path path, ExtractionCapability capability) {
         requireSourceLimit(path);
         long deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
-        validateArchiveExpansion(path, deadline);
+        ExtractionBudget budget = new ExtractionBudget();
+        if (isOoxml(capability.detectedMediaType())) {
+            validateArchiveExpansion(path, deadline, budget);
+        }
         Metadata metadata = new Metadata();
         metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, path.getFileName().toString());
         metadata.set(TikaCoreProperties.CONTENT_TYPE_HINT, capability.detectedMediaType());
         ParseContext context = new ParseContext();
         long remainingMillis = Math.max(1L, (deadline - System.nanoTime()) / 1_000_000L);
         context.set(TikaTaskTimeout.class, new TikaTaskTimeout(remainingMillis));
-        context.set(EmbeddedDocumentExtractor.class, new DepthLimitedEmbeddedExtractor(context));
+        context.set(EmbeddedDocumentExtractor.class,
+                new DepthLimitedEmbeddedExtractor(context, budget));
         BodyContentHandler handler = new BodyContentHandler(maxOutputCharacters);
         try (TikaInputStream input = TikaInputStream.get(path)) {
             new AutoDetectParser(tikaConfig).parse(input, handler, metadata, context);
+            budget.requireWithinLimit();
             if (System.nanoTime() > deadline) {
                 throw new ExtractionException(FailureReason.TIMEOUT,
                         "Document extraction exceeded the time limit");
@@ -112,7 +120,7 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
         } catch (ExtractionException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw mapFailure(exception);
+            throw mapFailure(exception, budget);
         }
     }
 
@@ -121,7 +129,11 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
         return title == null || title.isBlank() ? Map.of() : Map.of("title", title);
     }
 
-    private ExtractionException mapFailure(Exception exception) {
+    private ExtractionException mapFailure(Exception exception, ExtractionBudget budget) {
+        if (budget.limitExceeded) {
+            return new ExtractionException(FailureReason.LIMIT_EXCEEDED,
+                    "Expanded or nested document data exceeds the extraction limit", exception);
+        }
         if (WriteLimitReachedException.isWriteLimitReached(exception)) {
             return new ExtractionException(FailureReason.OUTPUT_TOO_LARGE,
                     "Extracted text exceeds the output limit", exception);
@@ -141,8 +153,11 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
                         "The document is damaged or cannot be parsed", exception);
             }
             if (current instanceof DecompressionLimitException) {
-                return new ExtractionException(FailureReason.DECOMPRESSION_LIMIT,
+                return new ExtractionException(FailureReason.LIMIT_EXCEEDED,
                         "Expanded document data exceeds the extraction limit", exception);
+            }
+            if (current instanceof ExtractionException extractionException) {
+                return extractionException;
             }
             current = current.getCause();
         }
@@ -162,7 +177,12 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
         }
     }
 
-    private void validateArchiveExpansion(Path path, long deadline) {
+    private boolean isOoxml(String mediaType) {
+        return mediaType != null && mediaType.startsWith(
+                "application/vnd.openxmlformats-officedocument.");
+    }
+
+    private void validateArchiveExpansion(Path path, long deadline, ExtractionBudget budget) {
         try (InputStream raw = Files.newInputStream(path)) {
             byte[] signature = raw.readNBytes(4);
             if (signature.length < 4 || signature[0] != 'P' || signature[1] != 'K') {
@@ -172,18 +192,13 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
             throw new ExtractionException(FailureReason.CORRUPT,
                     "The document source cannot be read", exception);
         }
-        long expanded = 0;
         byte[] buffer = new byte[8192];
         try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(path))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
                 int read;
                 while ((read = zip.read(buffer)) >= 0) {
-                    expanded += read;
-                    if (expanded > maxDecompressedBytes) {
-                        throw new ExtractionException(FailureReason.DECOMPRESSION_LIMIT,
-                                "Expanded document data exceeds the extraction limit");
-                    }
+                    budget.consume(read);
                     if (System.nanoTime() > deadline) {
                         throw new ExtractionException(FailureReason.TIMEOUT,
                                 "Document extraction exceeded the time limit");
@@ -201,27 +216,40 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
 
     private final class DepthLimitedEmbeddedExtractor implements EmbeddedDocumentExtractor {
         private final ParsingEmbeddedDocumentExtractor delegate;
+        private final ExtractionBudget budget;
         private int depth;
 
-        private DepthLimitedEmbeddedExtractor(ParseContext context) {
+        private DepthLimitedEmbeddedExtractor(ParseContext context, ExtractionBudget budget) {
             this.delegate = new ParsingEmbeddedDocumentExtractor(context);
+            this.budget = budget;
         }
 
         @Override
         public boolean shouldParseEmbedded(Metadata metadata) {
-            return depth < maxEmbeddedDepth && delegate.shouldParseEmbedded(metadata);
+            boolean requested = delegate.shouldParseEmbedded(metadata);
+            if (requested && depth >= maxEmbeddedDepth) {
+                budget.limitExceeded = true;
+                throw new ExtractionException(FailureReason.LIMIT_EXCEEDED,
+                        "Embedded document nesting exceeds the extraction limit");
+            }
+            return requested;
         }
 
         @Override
         public void parseEmbedded(InputStream stream, ContentHandler handler, Metadata metadata,
                                   boolean outputHtml) throws SAXException, IOException {
             if (depth >= maxEmbeddedDepth) {
-                return;
+                budget.limitExceeded = true;
+                throw new ExtractionException(FailureReason.LIMIT_EXCEEDED,
+                        "Embedded document nesting exceeds the extraction limit");
             }
             depth++;
-            try {
-                delegate.parseEmbedded(new DecompressionLimitedInputStream(stream),
-                        handler, metadata, outputHtml);
+            try (TemporaryResources resources = new TemporaryResources();
+                 TikaInputStream bounded = TikaInputStream.get(
+                         new DecompressionLimitedInputStream(CloseShieldInputStream.wrap(stream), budget),
+                         resources, metadata)) {
+                bounded.getPath();
+                delegate.parseEmbedded(bounded, handler, metadata, outputHtml);
             } finally {
                 depth--;
             }
@@ -229,10 +257,11 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
     }
 
     private final class DecompressionLimitedInputStream extends FilterInputStream {
-        private long count;
+        private final ExtractionBudget budget;
 
-        private DecompressionLimitedInputStream(InputStream input) {
+        private DecompressionLimitedInputStream(InputStream input, ExtractionBudget budget) {
             super(input);
+            this.budget = budget;
         }
 
         @Override
@@ -250,9 +279,26 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
         }
 
         private void increment(int amount) throws DecompressionLimitException {
-            count += amount;
-            if (count > maxDecompressedBytes) {
+            budget.consume(amount);
+        }
+    }
+
+    private final class ExtractionBudget {
+        private long expandedBytes;
+        private boolean limitExceeded;
+
+        private void consume(long amount) throws DecompressionLimitException {
+            if (amount > maxDecompressedBytes - expandedBytes) {
+                limitExceeded = true;
                 throw new DecompressionLimitException();
+            }
+            expandedBytes += amount;
+        }
+
+        private void requireWithinLimit() {
+            if (limitExceeded) {
+                throw new ExtractionException(FailureReason.LIMIT_EXCEEDED,
+                        "Expanded or nested document data exceeds the extraction limit");
             }
         }
     }

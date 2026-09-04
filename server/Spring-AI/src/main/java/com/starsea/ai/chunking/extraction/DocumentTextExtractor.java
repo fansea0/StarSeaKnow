@@ -63,6 +63,7 @@ public interface DocumentTextExtractor {
     enum FailureReason {
         SOURCE_TOO_LARGE,
         DECOMPRESSION_LIMIT,
+        LIMIT_EXCEEDED,
         OUTPUT_TOO_LARGE,
         TIMEOUT,
         ENCRYPTED,
