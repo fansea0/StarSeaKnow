@@ -126,6 +126,8 @@ public final class ChunkStrategyRegistry {
     private ContextConfig context(Map<String, Object> raw, ContextConfig defaults,
                                   OverlapUnit unit, ContextMode mode, boolean normalizeZero) {
         Map<String, Object> values = raw == null ? Map.of() : raw;
+        rejectBooleanAliasConflict(values, "enabled", "overlapEnabled", defaults.enabled());
+        rejectIntegerAliasConflict(values, "limit", "overlapTokens", defaults.limit());
         boolean enabled = booleanValue(values,
                 values.containsKey("enabled") ? "enabled" : "overlapEnabled", defaults.enabled());
         int limit = intValue(values,
@@ -134,6 +136,23 @@ public final class ChunkStrategyRegistry {
             enabled = false;
         }
         return new ContextConfig(enabled, limit, unit, mode);
+    }
+
+    private void rejectBooleanAliasConflict(Map<String, Object> values, String field,
+                                            String legacyField, boolean fallback) {
+        if (values.containsKey(field) && values.containsKey(legacyField)
+                && booleanValue(values, field, fallback)
+                != booleanValue(values, legacyField, fallback)) {
+            throw invalid(field, field + " conflicts with legacy " + legacyField);
+        }
+    }
+
+    private void rejectIntegerAliasConflict(Map<String, Object> values, String field,
+                                            String legacyField, int fallback) {
+        if (values.containsKey(field) && values.containsKey(legacyField)
+                && intValue(values, field, fallback) != intValue(values, legacyField, fallback)) {
+            throw invalid(field, field + " conflicts with legacy " + legacyField);
+        }
     }
 
     private boolean booleanValue(Map<String, Object> values, String key, boolean fallback) {

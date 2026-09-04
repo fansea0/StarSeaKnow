@@ -178,6 +178,33 @@ class ChunkingControllerTest {
     }
 
     @Test
+    void zero_byte_source_is_rejected_before_preview_dispatch() throws Exception {
+        Path empty = tempDir.resolve("empty.md");
+        Files.createFile(empty);
+        when(fileMapper.selectById(FILE_ID)).thenReturn(file(empty, "md"));
+
+        performValidPreview()
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.msg").value("The source document is empty"));
+
+        verify(dispatcher, org.mockito.Mockito.never()).dispatch(
+                anyLong(), anyLong(), any(), any(), anyInt(), any(Runnable.class));
+    }
+
+    @Test
+    void non_regular_source_is_rejected_with_the_existing_read_error() throws Exception {
+        Path directory = Files.createDirectory(tempDir.resolve("source-dir"));
+        when(fileMapper.selectById(FILE_ID)).thenReturn(file(directory, "md"));
+
+        performValidPreview()
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.msg").value("The source document cannot be read"));
+
+        verify(dispatcher, org.mockito.Mockito.never()).dispatch(
+                anyLong(), anyLong(), any(), any(), anyInt(), any(Runnable.class));
+    }
+
+    @Test
     void forged_frontend_only_strategy_is_unprocessable() throws Exception {
         mockMvc.perform(post("/knowledge/{knowledgeId}/files/{fileId}/chunk-preview",
                         KNOWLEDGE_ID, FILE_ID)

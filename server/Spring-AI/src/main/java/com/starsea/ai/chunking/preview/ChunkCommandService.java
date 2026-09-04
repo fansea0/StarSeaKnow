@@ -159,6 +159,9 @@ public class ChunkCommandService {
         }
         long tenantId = requireTenantId();
         FileProcessing processing = lockMutableProcessing(knowledgeId, fileId, tenantId);
+        if ("GENERAL".equalsIgnoreCase(processing.getStrategyCode())) {
+            throw ChunkingException.generalContextUnavailable();
+        }
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, request.lockVersion());
         int overlapLimit = requireOverlapLimit(request, target);

@@ -177,6 +177,46 @@ class ChunkVectorServiceTest {
     }
 
     @Test
+    void general_confirmation_is_rejected_before_state_change_or_vector_dispatch() throws Exception {
+        Fixture fixture = fixture(PipelineState.CHUNKED, 3, sourceHash(),
+                List.of(chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "general body")));
+        fixture.processing.setStrategyCode("GENERAL");
+
+        ChunkingException exception = assertThrows(ChunkingException.class,
+                () -> fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3)));
+
+        assertEquals(422, exception.status().value());
+        assertEquals("GENERAL 分块的字符上下文处理尚未启用", exception.getMessage());
+        assertEquals("GENERAL_CONTEXT_UNAVAILABLE", exception.details().get("errorCode"));
+        assertEquals(0, fixture.transactionManager.begins());
+        assertNull(fixture.dispatched.get());
+        verify(fixture.stateService, never()).transition(
+                anyLong(), anyLong(), any(), any(), anyInt());
+        verify(fixture.chunkMapper, never()).update(any(), any(Wrapper.class));
+        verify(fixture.worker, never()).vectorizeBatch(any());
+    }
+
+    @Test
+    void general_single_reindex_is_rejected_before_state_change_or_vector_dispatch() throws Exception {
+        Fixture fixture = fixture(PipelineState.ADJUSTING, 3, sourceHash(),
+                List.of(chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "general body")));
+        fixture.processing.setStrategyCode("GENERAL");
+
+        ChunkingException exception = assertThrows(ChunkingException.class,
+                () -> fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID));
+
+        assertEquals(422, exception.status().value());
+        assertEquals("GENERAL 分块的字符上下文处理尚未启用", exception.getMessage());
+        assertEquals("GENERAL_CONTEXT_UNAVAILABLE", exception.details().get("errorCode"));
+        assertEquals(0, fixture.transactionManager.begins());
+        assertNull(fixture.dispatched.get());
+        verify(fixture.stateService, never()).transition(
+                anyLong(), anyLong(), any(), any(), anyInt());
+        verify(fixture.chunkMapper, never()).update(any(), any(Wrapper.class));
+        verify(fixture.worker, never()).vectorizeSingle(any());
+    }
+
+    @Test
     void confirmation_commits_indexing_without_mutating_legacy_context_policy() throws Exception {
         DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "first edited body");
         DocumentChunk second = chunk(2L, SECOND_PUBLIC_ID, ChunkStatus.ACTIVE, 4, "second body");

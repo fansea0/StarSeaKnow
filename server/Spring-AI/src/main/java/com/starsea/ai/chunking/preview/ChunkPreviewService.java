@@ -186,11 +186,14 @@ public class ChunkPreviewService {
 
     private void requireUsableSource(File file) {
         try {
-            byte[] bytes = Files.readAllBytes(Path.of(file.getPath()));
-            if (bytes.length == 0) {
+            Path source = Path.of(file.getPath());
+            if (!Files.isRegularFile(source) || !Files.isReadable(source)) {
+                throw ChunkingException.unprocessable("The source document cannot be read");
+            }
+            if (Files.size(source) == 0) {
                 throw ChunkingException.unprocessable("The source document is empty");
             }
-        } catch (IOException | InvalidPathException | NullPointerException exception) {
+        } catch (IOException | InvalidPathException | NullPointerException | SecurityException exception) {
             throw ChunkingException.unprocessable("The source document cannot be read");
         }
     }

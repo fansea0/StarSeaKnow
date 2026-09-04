@@ -138,6 +138,9 @@ public class ChunkVectorService {
             throw ChunkingException.notFound(
                     "File was not found in the current tenant and knowledge base");
         }
+        if ("GENERAL".equalsIgnoreCase(processing.getStrategyCode())) {
+            throw ChunkingException.generalContextUnavailable();
+        }
         File file = requireFile(fileId);
         final Path path;
         final String hash;

@@ -10,6 +10,7 @@ import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.OverlapUnit;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
+import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.FileProcessing;
@@ -44,6 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -169,6 +171,38 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void general_edit_is_rejected_before_chunk_write_or_context_enrichment() {
+        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
+        ChunkCommandService guardedService = new ChunkCommandService(
+                chunkMapper, processingMapper, stateService, new CharacterTokenCounter(),
+                new ChunkIndexContentBuilder(), vectorGateway, enricher);
+        FileProcessing general = processing(PipelineState.CHUNKED, 5, Map.of(
+                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 500,
+                "collapseWhitespace", true, "removeUrls", false, "removeEmails", false));
+        general.setStrategyCode("GENERAL");
+        general.setContextPolicy(Map.of("enabled", true, "limit", 40,
+                "unit", "CHARACTERS", "mode", "CHARACTER_TAIL"));
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(general);
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
+        target.setOverlapUnit(OverlapUnit.CHARACTERS);
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> guardedService.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                        new EditChunkRequest("Edited", true, 40,
+                                OverlapUnit.CHARACTERS, 2)));
+
+        assertEquals(422, failure.status().value());
+        assertEquals("GENERAL 分块的字符上下文处理尚未启用", failure.getMessage());
+        assertEquals("GENERAL_CONTEXT_UNAVAILABLE", failure.details().get("errorCode"));
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+        verify(enricher, never()).enrich(any(), anyInt());
+        verify(stateService, never()).transition(anyLong(), anyLong(), any(), any(), anyInt());
+    }
+
+    @Test
     void source_edit_recalculates_enabled_next_chunk_even_without_an_existing_source_id() {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
         DocumentChunk dependent = chunk(32L, NEXT_ID, 5, ChunkStatus.ACTIVE, 7, "Next");
@@ -250,7 +284,7 @@ class ChunkCommandServiceTest {
     }
 
     @Test
-    void general_edit_uses_persisted_execution_token_limit_without_a_max_tokens_field() {
+    void general_edit_guard_precedes_runtime_token_budget_validation() {
         DocumentChunk chunk = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Body");
         chunk.setSectionPath(List.of("Long"));
         FileProcessing general = processing(PipelineState.ADJUSTING, 5, Map.of(
@@ -268,7 +302,7 @@ class ChunkCommandServiceTest {
                 () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
                         new EditChunkRequest("abcdef", 2)));
 
-        assertEquals(12, failure.details().get("maxTokens"));
+        assertEquals("GENERAL_CONTEXT_UNAVAILABLE", failure.details().get("errorCode"));
         verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
     }
 

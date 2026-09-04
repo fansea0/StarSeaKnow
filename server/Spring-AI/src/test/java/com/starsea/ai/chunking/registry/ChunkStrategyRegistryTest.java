@@ -109,6 +109,39 @@ class ChunkStrategyRegistryTest {
     }
 
     @Test
+    void rejects_conflicting_enabled_context_aliases_with_a_stable_field_error() {
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> registryWith(new GeneralStrategy()).validatePreviewConfig(
+                        "GENERAL", "txt", Map.of(),
+                        Map.of("enabled", true, "overlapEnabled", false, "limit", 40)));
+
+        assertEquals("INVALID_STRATEGY_CONFIG", failure.details().get("code"));
+        assertTrue(((Map<?, ?>) failure.details().get("fieldErrors")).containsKey("enabled"));
+    }
+
+    @Test
+    void rejects_conflicting_limit_context_aliases_with_a_stable_field_error() {
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> registryWith(new GeneralStrategy()).validatePreviewConfig(
+                        "GENERAL", "txt", Map.of(),
+                        Map.of("enabled", true, "limit", 40, "overlapTokens", 41)));
+
+        assertEquals("INVALID_STRATEGY_CONFIG", failure.details().get("code"));
+        assertTrue(((Map<?, ?>) failure.details().get("fieldErrors")).containsKey("limit"));
+    }
+
+    @Test
+    void accepts_equal_legacy_context_aliases_and_keeps_strategy_owned_unit_and_mode() {
+        ValidatedPreviewConfig validated = registryWith(new GeneralStrategy()).validatePreviewConfig(
+                "GENERAL", "txt", Map.of(),
+                Map.of("enabled", true, "overlapEnabled", true,
+                        "limit", 40, "overlapTokens", 40));
+
+        assertEquals(new ContextConfig(true, 40, OverlapUnit.CHARACTERS,
+                ContextMode.CHARACTER_TAIL), validated.contextConfig());
+    }
+
+    @Test
     void rejects_general_overlap_that_leaves_no_body_budget_before_dispatch() {
         ChunkingException failure = assertThrows(ChunkingException.class,
                 () -> registryWith(new GeneralStrategy()).validatePreviewConfig(
