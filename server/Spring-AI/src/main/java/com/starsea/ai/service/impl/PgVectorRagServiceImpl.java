@@ -3,7 +3,9 @@ package com.starsea.ai.service.impl;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.auth.AuthErrorCode;
 import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.mapper.DocumentChunkMapper;
@@ -106,12 +108,19 @@ public class PgVectorRagServiceImpl implements RagService {
         }
 
         Set<UUID> emitted = new LinkedHashSet<>();
-        return candidates.stream()
-                .filter(candidate -> emitted.add(candidate.publicId()))
-                .map(candidate -> toRetrievedChunk(candidate, activeChunks.get(candidate.publicId())))
-                .filter(Objects::nonNull)
-                .limit(query.topK())
-                .toList();
+        List<RetrievedChunk> results = new ArrayList<>();
+        for (ScoredCandidate candidate : candidates) {
+            DocumentChunk chunk = activeChunks.get(candidate.publicId());
+            UUID contextIdentity = contextIdentity(chunk);
+            if (contextIdentity == null || !emitted.add(contextIdentity)) {
+                continue;
+            }
+            results.add(toRetrievedChunk(candidate, chunk));
+            if (results.size() == query.topK()) {
+                break;
+            }
+        }
+        return List.copyOf(results);
     }
 
     private static String tenantFilterExpression(Long tenantId) {
@@ -127,14 +136,27 @@ public class PgVectorRagServiceImpl implements RagService {
     }
 
     private static RetrievedChunk toRetrievedChunk(ScoredCandidate candidate, DocumentChunk chunk) {
-        if (chunk == null) {
-            return null;
+        if (isChild(chunk)) {
+            return new RetrievedChunk(
+                    ChunkIndexContentBuilder.preview(chunk.getParentSectionPath(), chunk.getParentContent()),
+                    candidate.score(), chunk.getSourceFileName(), chunk.getSourceDocumentPublicId(),
+                    candidate.publicId(), chunk.getSourceFileType(),
+                    mapInteger(chunk.getParentSourceLocator(), "pageNumber", "page_number"),
+                    chunk.getParentPosition(), chunk.getParentSectionPath(), chunk.getParentSourceLocator(),
+                    chunk.getSourceKnowledgePublicId(), chunk.getSourceKnowledgeName());
         }
         return new RetrievedChunk(chunk.getIndexContent(), candidate.score(), chunk.getSourceFileName(),
-                chunk.getSourceDocumentPublicId(), chunk.getPublicId(), chunk.getSourceFileType(),
+                chunk.getSourceDocumentPublicId(), candidate.publicId(), chunk.getSourceFileType(),
                 mapInteger(chunk.getSourceLocator(), "pageNumber", "page_number"), chunk.getPosition(),
                 chunk.getSectionPath(), chunk.getSourceLocator(),
                 chunk.getSourceKnowledgePublicId(), chunk.getSourceKnowledgeName());
+    }
+
+    private static UUID contextIdentity(DocumentChunk chunk) {
+        if (chunk == null) {
+            return null;
+        }
+        return isChild(chunk) ? chunk.getParentPublicId() : chunk.getPublicId();
     }
 
     private static List<Document> safeDocuments(List<Document> documents) {
@@ -161,7 +183,25 @@ public class PgVectorRagServiceImpl implements RagService {
                 && !chunk.getIndexContent().isBlank()
                 && chunk.getSourceDocumentPublicId() != null
                 && chunk.getSourceFileName() != null
-                && chunk.getSourceFileType() != null;
+                && chunk.getSourceFileType() != null
+                && hasValidHierarchyContext(chunk);
+    }
+
+    private static boolean hasValidHierarchyContext(DocumentChunk chunk) {
+        if (Integer.valueOf(ChunkType.SINGLE.code()).equals(chunk.getChunkType())) {
+            return true;
+        }
+        return isChild(chunk)
+                && chunk.getParentChunkId() != null
+                && chunk.getParentPublicId() != null
+                && chunk.getParentContent() != null
+                && !chunk.getParentContent().isBlank()
+                && chunk.getParentPosition() != null
+                && Integer.valueOf(ChunkStatus.ACTIVE.code()).equals(chunk.getParentStatus());
+    }
+
+    private static boolean isChild(DocumentChunk chunk) {
+        return chunk != null && Integer.valueOf(ChunkType.CHILD.code()).equals(chunk.getChunkType());
     }
 
     private static int overfetchTopK(int topK) {
