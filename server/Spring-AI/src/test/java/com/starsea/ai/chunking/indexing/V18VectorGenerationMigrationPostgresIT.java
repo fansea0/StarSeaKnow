@@ -58,6 +58,11 @@ class V18VectorGenerationMigrationPostgresIT {
                 WHERE table_schema = current_schema()
                   AND table_name = 'chunk_vector_cleanup'
                   AND column_name = 'next_attempt_at';
+                SELECT COUNT(*) FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND tablename = 'chunk_vector_cleanup'
+                  AND indexname = 'idx_chunk_vector_cleanup_scope'
+                  AND indexdef LIKE '%%(tenant_id, knowledge_id, vector_id)';
                 SELECT vector_id, tenant_id, knowledge_id, file_id, chunk_public_id
                 FROM chunk_vector_cleanup ORDER BY vector_id;
                 SELECT rejected($q$INSERT INTO document_chunk
@@ -104,7 +109,7 @@ class V18VectorGenerationMigrationPostgresIT {
                 "22222222-2222-2222-2222-222222222222||"
                         + "22222222-2222-2222-2222-222222222222|12",
                 "33333333-3333-3333-3333-333333333333|||",
-                "YES", "NO",
+                "YES", "NO", "1",
                 activePublicId + "|1|10|20|" + activePublicId,
                 "22222222-2222-2222-2222-222222222222|1|10|21|"
                         + "22222222-2222-2222-2222-222222222222",

@@ -104,6 +104,8 @@
         SELECT q.*
         FROM chunk_vector_cleanup q
         WHERE q.writer_owner = #{writerOwner}
+          AND q.state = 0
+          AND q.claim_owner IS NULL
           AND q.vector_id IN
           <foreach collection="vectorIds" item="vectorId"
                    open="(" separator="," close=")">

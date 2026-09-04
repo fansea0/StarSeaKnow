@@ -153,8 +153,8 @@ public class ChunkVectorWorker {
             vectorLifecycle.withWriterFence(job.obligations(), () -> {
                 writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
                 validateSourceBytes(job.file(), job.sourceHash(), job.processing());
-                transactions.executeWithoutResult(status -> completeBatch(job, prepared));
             });
+            transactions.executeWithoutResult(status -> completeBatch(job, prepared));
             vectorLifecycle.drain();
         } catch (RuntimeException failure) {
             if (!vectorMutationStarted.get()
@@ -180,8 +180,8 @@ public class ChunkVectorWorker {
             vectorLifecycle.withWriterFence(job.obligations(), () -> {
                 writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
                 validateSourceBytes(job.file(), job.sourceHash(), job.processing());
-                transactions.executeWithoutResult(status -> completeSingle(job, prepared));
             });
+            transactions.executeWithoutResult(status -> completeSingle(job, prepared));
             vectorLifecycle.drain();
         } catch (RuntimeException failure) {
             if (!vectorMutationStarted.get()

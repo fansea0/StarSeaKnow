@@ -67,6 +67,9 @@ ALTER TABLE chunk_vector_cleanup
 CREATE INDEX idx_chunk_vector_cleanup_pending
     ON chunk_vector_cleanup(state, next_attempt_at, id);
 
+CREATE INDEX idx_chunk_vector_cleanup_scope
+    ON chunk_vector_cleanup(tenant_id, knowledge_id, vector_id);
+
 INSERT INTO chunk_vector_cleanup
     (vector_id, tenant_id, knowledge_id, file_id, chunk_public_id)
 SELECT vector_id, tenant_id, knowledge_id, file_id, public_id

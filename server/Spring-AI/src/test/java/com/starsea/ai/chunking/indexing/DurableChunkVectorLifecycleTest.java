@@ -281,6 +281,8 @@ class DurableChunkVectorLifecycleTest {
         String lock = sql(mapperConfiguration(), "lockWriters", Map.of(
                 "writerOwner", INSTANCE_ID, "vectorIds", Set.of(VECTOR_ID)));
         assertTrue(lock.contains("writer_owner = ?"), lock);
+        assertTrue(lock.contains("state = 0"), lock);
+        assertTrue(lock.contains("claim_owner is null"), lock);
         assertTrue(lock.contains("order by q.vector_id"), lock);
         assertTrue(lock.endsWith("for update"), lock);
     }

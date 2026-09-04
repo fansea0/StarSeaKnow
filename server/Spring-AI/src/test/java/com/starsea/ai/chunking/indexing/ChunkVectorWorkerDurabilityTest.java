@@ -33,6 +33,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -197,6 +198,8 @@ class ChunkVectorWorkerDurabilityTest {
                         invocation.getArgument(3), invocation.getArgument(4)));
         AtomicInteger transaction = new AtomicInteger();
         doAnswer(invocation -> {
+            assertFalse(lifecycle.insideFence,
+                    "activation transaction must run after the vector I/O fence is released");
             java.util.function.Consumer<TransactionStatus> action = invocation.getArgument(0);
             action.accept(mock(TransactionStatus.class));
             if (uncertainCommit && transaction.getAndIncrement() == 0) {
@@ -317,6 +320,7 @@ class ChunkVectorWorkerDurabilityTest {
         private final DocumentChunk chunk;
         private final InMemoryGateway gateway;
         private final Set<CleanupObligation> queued = new LinkedHashSet<>();
+        private boolean insideFence;
 
         private ActiveAwareLifecycle(DocumentChunk chunk, InMemoryGateway gateway) {
             this.chunk = chunk;
@@ -340,6 +344,16 @@ class ChunkVectorWorkerDurabilityTest {
 
         @Override
         public void resetAbandonedClaims() {
+        }
+
+        @Override
+        public void withWriterFence(Collection<CleanupObligation> obligations, Runnable action) {
+            insideFence = true;
+            try {
+                action.run();
+            } finally {
+                insideFence = false;
+            }
         }
 
         @Override
