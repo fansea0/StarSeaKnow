@@ -3,6 +3,9 @@ package com.starsea.ai.chunking.markdown;
 import com.starsea.ai.chunking.model.BlockType;
 import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPolicy;
+import com.starsea.ai.chunking.model.ChunkPlanningRequest;
+import com.starsea.ai.chunking.model.ChunkPlanningResult;
+import com.starsea.ai.chunking.model.ContextConfig;
 import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.SemanticUnit;
@@ -49,6 +52,19 @@ class MarkdownChunkPlanningStrategyTest {
                 block("h2", BlockType.HEADING, "## 空章节", "空章节", 2, List.of("文档", "空章节"))));
 
         assertTrue(strategy.plan(structure, new ChunkPolicy(5, 20, 40)).isEmpty());
+    }
+
+    @Test
+    void typed_planning_contract_preserves_markdown_drafts_and_zeroes_new_counters() {
+        ParsedStructure structure = structure(List.of(
+                block("p1", BlockType.PARAGRAPH, "正文", "正文", null, List.of())));
+
+        ChunkPlanningResult result = strategy.plan(new ChunkPlanningRequest(
+                structure, new ChunkPolicy(1, 30, 40), ContextConfig.markdownDefaults(), 40));
+
+        assertEquals(strategy.plan(structure, new ChunkPolicy(1, 30, 40)), result.drafts());
+        assertEquals(0, result.forcedSplitCount());
+        assertEquals(0, result.tokenLimitedSplitCount());
     }
 
     @Test

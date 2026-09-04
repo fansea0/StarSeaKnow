@@ -1,7 +1,7 @@
 package com.starsea.ai.chunking.model;
 
 /** Immutable token budget used to plan source-content boundaries. */
-public record ChunkPolicy(int minTokens, int targetTokens, int maxTokens) {
+public record ChunkPolicy(int minTokens, int targetTokens, int maxTokens) implements ChunkStrategyConfig {
 
     public static final int MAX_ALLOWED_TOKENS = 512;
 

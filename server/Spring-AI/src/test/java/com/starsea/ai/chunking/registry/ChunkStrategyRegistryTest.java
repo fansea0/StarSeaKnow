@@ -1,19 +1,30 @@
 package com.starsea.ai.chunking.registry;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPolicy;
+import com.starsea.ai.chunking.model.ChunkStrategyConfig;
+import com.starsea.ai.chunking.model.ContextConfig;
+import com.starsea.ai.chunking.model.ContextMode;
 import com.starsea.ai.chunking.model.ContextPolicy;
+import com.starsea.ai.chunking.model.DelimiterMode;
 import com.starsea.ai.chunking.model.FileResource;
+import com.starsea.ai.chunking.model.GeneralChunkConfig;
+import com.starsea.ai.chunking.model.OverlapUnit;
 import com.starsea.ai.chunking.model.ParsedStructure;
+import com.starsea.ai.chunking.model.ValidatedPreviewConfig;
 import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
 import com.starsea.ai.chunking.spi.DocumentStructureParser;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChunkStrategyRegistryTest {
 
@@ -63,6 +74,75 @@ class ChunkStrategyRegistryTest {
                 new TestParser(Set.of(".MD")))));
     }
 
+    @Test
+    void validates_general_raw_config_and_derives_character_context_on_the_server() {
+        ChunkStrategyRegistry registry = registryWith(new GeneralStrategy());
+
+        ValidatedPreviewConfig validated = registry.validatePreviewConfig(
+                "general", "pdf",
+                Map.of("delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 500,
+                        "collapseWhitespace", true, "removeUrls", false, "removeEmails", false),
+                Map.of("enabled", true, "limit", 40));
+
+        GeneralChunkConfig config = (GeneralChunkConfig) validated.strategyConfig();
+        assertEquals(DelimiterMode.LITERAL, config.delimiterMode());
+        assertEquals(500, config.maxCharacters());
+        assertEquals(new ContextConfig(true, 40, OverlapUnit.CHARACTERS, ContextMode.CHARACTER_TAIL),
+                validated.contextConfig());
+        assertEquals(ChunkPolicy.MAX_ALLOWED_TOKENS, validated.maxIndexTokens());
+    }
+
+    @Test
+    void global_strategy_matches_file_types_without_an_extension_allowlist() {
+        ChunkStrategyRegistry registry = registryWith(new GeneralStrategy());
+
+        assertEquals("GENERAL", registry.require("general", "docx").code());
+    }
+
+    @Test
+    void normalizes_zero_general_overlap_to_disabled() {
+        ValidatedPreviewConfig validated = registryWith(new GeneralStrategy()).validatePreviewConfig(
+                "GENERAL", "txt", Map.of(), Map.of("enabled", true, "limit", 0));
+
+        assertEquals(new ContextConfig(false, 0, OverlapUnit.CHARACTERS, ContextMode.CHARACTER_TAIL),
+                validated.contextConfig());
+    }
+
+    @Test
+    void rejects_general_overlap_that_leaves_no_body_budget_before_dispatch() {
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> registryWith(new GeneralStrategy()).validatePreviewConfig(
+                        "GENERAL", "txt",
+                        Map.of("delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 64,
+                                "collapseWhitespace", true, "removeUrls", false, "removeEmails", false),
+                        Map.of("enabled", true, "limit", 59)));
+
+        assertEquals("INVALID_STRATEGY_CONFIG", failure.details().get("code"));
+        assertTrue(((Map<?, ?>) failure.details().get("fieldErrors")).containsKey("limit"));
+    }
+
+    @Test
+    void descriptor_exposes_context_defaults_separately_from_strategy_fields() {
+        ChunkStrategyDescriptor descriptor = new GeneralStrategy().descriptor();
+
+        assertEquals(new ContextConfig(true, 40, OverlapUnit.CHARACTERS, ContextMode.CHARACTER_TAIL),
+                descriptor.defaultContextConfig());
+    }
+
+    @Test
+    void markdown_user_budget_does_not_replace_the_server_token_hard_limit() {
+        ValidatedPreviewConfig validated = registryWith(new MarkdownStrategy()).validatePreviewConfig(
+                "MARKDOWN_OPTIMIZED", "md",
+                Map.of("minTokens", 20, "targetTokens", 80, "maxTokens", 120), Map.of());
+
+        assertEquals(new ChunkPolicy(20, 80, 120), validated.strategyConfig());
+        assertEquals(ChunkPolicy.MAX_ALLOWED_TOKENS, validated.maxIndexTokens());
+    }
+
+    private ChunkStrategyRegistry registryWith(ChunkPlanningStrategy strategy) {
+        return new ChunkStrategyRegistry(List.of(strategy), new ObjectMapper());
+    }
+
     private static final class MarkdownStrategy implements ChunkPlanningStrategy {
 
         private final String code;
@@ -95,6 +175,35 @@ class ChunkStrategyRegistryTest {
         @Override
         public ChunkStrategyDescriptor descriptor() {
             return new ChunkStrategyDescriptor(code(), supportedFileTypes(), plannerVersion());
+        }
+
+        @Override
+        public List<ChunkDraft> plan(ParsedStructure structure, ChunkPolicy policy) {
+            return List.of();
+        }
+    }
+
+    private static final class GeneralStrategy implements ChunkPlanningStrategy {
+
+        @Override
+        public String code() {
+            return "GENERAL";
+        }
+
+        @Override
+        public Set<String> supportedFileTypes() {
+            return Set.of();
+        }
+
+        @Override
+        public String plannerVersion() {
+            return "general-v1";
+        }
+
+        @Override
+        public ChunkStrategyDescriptor descriptor() {
+            return new ChunkStrategyDescriptor(code(), "GLOBAL", supportedFileTypes(), plannerVersion(), List.of(),
+                    ContextConfig.generalDefaults());
         }
 
         @Override

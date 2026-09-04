@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.starsea.ai.auth.UuidTypeHandler;
+import com.starsea.ai.chunking.model.OverlapUnit;
 import com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler;
 import lombok.Data;
 import org.apache.ibatis.type.JdbcType;
@@ -31,10 +32,13 @@ public class DocumentChunk implements Serializable {
     private Integer position;
     private String content;
     private Boolean overlapEnabled;
-    private Integer overlapTokenLimit;
+    private Integer overlapLimit;
+    private OverlapUnit overlapUnit;
     private String overlapContent;
     private Long overlapSourceChunkId;
     private Integer overlapTokenCount;
+    private Integer overlapCharacterCount;
+    private String overlapReductionReason;
     private String indexContent;
 
     @TableField(value = "section_path", typeHandler = PostgresJsonbTypeHandler.class)
@@ -72,6 +76,18 @@ public class DocumentChunk implements Serializable {
 
     @TableField(exist = false)
     private String sourceKnowledgeName;
+
+    /** Temporary source-compatibility bridge for token-only runtime callers. */
+    @Deprecated(forRemoval = false)
+    public Integer getOverlapTokenLimit() {
+        return overlapLimit;
+    }
+
+    /** Temporary source-compatibility bridge for token-only runtime callers. */
+    @Deprecated(forRemoval = false)
+    public void setOverlapTokenLimit(Integer overlapTokenLimit) {
+        this.overlapLimit = overlapTokenLimit;
+    }
 
     @TableField(exist = false)
     private static final long serialVersionUID = 1L;

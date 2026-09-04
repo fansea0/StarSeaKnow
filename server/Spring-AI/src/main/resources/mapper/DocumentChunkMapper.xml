@@ -13,10 +13,13 @@
         <result property="position" column="position" jdbcType="INTEGER"/>
         <result property="content" column="content" jdbcType="LONGVARCHAR"/>
         <result property="overlapEnabled" column="overlap_enabled" jdbcType="BOOLEAN"/>
-        <result property="overlapTokenLimit" column="overlap_token_limit" jdbcType="INTEGER"/>
+        <result property="overlapLimit" column="overlap_limit" jdbcType="INTEGER"/>
+        <result property="overlapUnit" column="overlap_unit" jdbcType="VARCHAR"/>
         <result property="overlapContent" column="overlap_content" jdbcType="LONGVARCHAR"/>
         <result property="overlapSourceChunkId" column="overlap_source_chunk_id" jdbcType="BIGINT"/>
         <result property="overlapTokenCount" column="overlap_token_count" jdbcType="INTEGER"/>
+        <result property="overlapCharacterCount" column="overlap_character_count" jdbcType="INTEGER"/>
+        <result property="overlapReductionReason" column="overlap_reduction_reason" jdbcType="VARCHAR"/>
         <result property="indexContent" column="index_content" jdbcType="LONGVARCHAR"/>
         <result property="sectionPath" column="section_path" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
         <result property="sourceLocator" column="source_locator" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
@@ -42,6 +45,8 @@
             overlap_content = NULL,
             overlap_source_chunk_id = NULL,
             overlap_token_count = 0,
+            overlap_character_count = 0,
+            overlap_reduction_reason = NULL,
             index_content = NULL,
             last_error = 'Vectorization interrupted by application restart',
             lock_version = lock_version + 1

@@ -12,4 +12,10 @@ public record ContextPolicy(boolean enabled, int overlapTokens) {
     public static ContextPolicy defaults() {
         return new ContextPolicy(false, 40);
     }
+
+    /** Maps the legacy Markdown facade to the server-owned unit and mode. */
+    public ContextConfig toContextConfig() {
+        return new ContextConfig(enabled && overlapTokens > 0, overlapTokens,
+                OverlapUnit.TOKENS, ContextMode.COMPLETE_SENTENCE);
+    }
 }

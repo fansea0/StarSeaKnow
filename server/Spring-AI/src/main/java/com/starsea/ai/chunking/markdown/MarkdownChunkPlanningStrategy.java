@@ -3,6 +3,8 @@ package com.starsea.ai.chunking.markdown;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.BoundaryReason;
 import com.starsea.ai.chunking.model.ChunkDraft;
+import com.starsea.ai.chunking.model.ChunkPlanningRequest;
+import com.starsea.ai.chunking.model.ChunkPlanningResult;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.SemanticUnit;
@@ -75,7 +77,14 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
     }
 
     @Override
-    public List<ChunkDraft> plan(ParsedStructure structure, ChunkPolicy policy) {
+    public ChunkPlanningResult plan(ChunkPlanningRequest request) {
+        if (!(request.strategyConfig() instanceof ChunkPolicy policy)) {
+            throw new IllegalArgumentException("Markdown planner requires ChunkPolicy");
+        }
+        return new ChunkPlanningResult(planDrafts(request.structure(), policy), 0, 0);
+    }
+
+    private List<ChunkDraft> planDrafts(ParsedStructure structure, ChunkPolicy policy) {
         Objects.requireNonNull(structure, "structure");
         Objects.requireNonNull(policy, "policy");
         List<ChunkDraft> planned = new ArrayList<>();

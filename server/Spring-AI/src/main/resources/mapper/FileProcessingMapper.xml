@@ -16,6 +16,8 @@
         <result property="plannerVersion" column="planner_version" jdbcType="VARCHAR"/>
         <result property="policySnapshot" column="policy_snapshot" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
         <result property="contextPolicy" column="context_policy" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
+        <result property="executionMetadata" column="execution_metadata" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
+        <result property="previewSummary" column="preview_summary" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
         <result property="lastError" column="last_error" jdbcType="LONGVARCHAR"/>
         <result property="lockVersion" column="lock_version" jdbcType="INTEGER"/>
         <result property="createTime" column="create_time" jdbcType="TIMESTAMP"/>

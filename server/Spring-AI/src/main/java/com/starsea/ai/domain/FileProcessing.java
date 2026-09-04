@@ -33,6 +33,12 @@ public class FileProcessing implements Serializable {
     @TableField(value = "context_policy", typeHandler = PostgresJsonbTypeHandler.class)
     private Map<String, Object> contextPolicy;
 
+    @TableField(value = "execution_metadata", typeHandler = PostgresJsonbTypeHandler.class)
+    private Map<String, Object> executionMetadata;
+
+    @TableField(value = "preview_summary", typeHandler = PostgresJsonbTypeHandler.class)
+    private Map<String, Object> previewSummary;
+
     private String lastError;
     private Integer lockVersion;
     private OffsetDateTime createTime;
