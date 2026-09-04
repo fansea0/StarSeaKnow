@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.inner.TenantLineInnerIntercept
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkDraft;
+import com.starsea.ai.chunking.model.ChunkPlan;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.FileResource;
@@ -98,6 +99,15 @@ class ChunkPreviewWorkerTest {
         when(planner.code()).thenReturn("MARKDOWN_OPTIMIZED");
         when(planner.supportedFileTypes()).thenReturn(Set.of("md"));
         when(planner.plannerVersion()).thenReturn("markdown-adaptive-v1");
+        when(planner.planConfigured(any(ParsedStructure.class), any())).thenAnswer(invocation -> {
+            ParsedStructure structure = invocation.getArgument(0);
+            Map<String, Object> config = invocation.getArgument(1);
+            ChunkPolicy policy = new ChunkPolicy(
+                    ((Number) config.get("minTokens")).intValue(),
+                    ((Number) config.get("targetTokens")).intValue(),
+                    ((Number) config.get("maxTokens")).intValue());
+            return ChunkPlan.flat(planner.plan(structure, policy), policy.maxTokens());
+        });
         when(fileMapper.selectById(20L)).thenReturn(file(source));
         when(processingMapper.selectById(20L)).thenReturn(processing());
         TokenCounter tokenCounter = mock(TokenCounter.class);

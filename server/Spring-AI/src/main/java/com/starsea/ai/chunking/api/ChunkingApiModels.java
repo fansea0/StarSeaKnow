@@ -1,6 +1,5 @@
 package com.starsea.ai.chunking.api;
 
-import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.registry.ChunkStrategyDescriptor;
 
 import java.util.List;
@@ -14,8 +13,19 @@ public final class ChunkingApiModels {
     private ChunkingApiModels() {
     }
 
-    public record PreviewRequest(String strategyCode, ChunkPolicy strategyConfig,
+    public record PreviewRequest(String strategyCode, Map<String, Object> strategyConfig,
                                  boolean replaceEditedDrafts, int lockVersion) {
+        public PreviewRequest {
+            strategyConfig = strategyConfig == null ? null : Map.copyOf(strategyConfig);
+        }
+
+        public PreviewRequest(String strategyCode, com.starsea.ai.chunking.model.ChunkPolicy strategyConfig,
+                              boolean replaceEditedDrafts, int lockVersion) {
+            this(strategyCode, strategyConfig == null ? null : Map.of(
+                    "minTokens", strategyConfig.minTokens(),
+                    "targetTokens", strategyConfig.targetTokens(),
+                    "maxTokens", strategyConfig.maxTokens()), replaceEditedDrafts, lockVersion);
+        }
     }
 
     public record EditChunkRequest(String content, Boolean overlapEnabled,

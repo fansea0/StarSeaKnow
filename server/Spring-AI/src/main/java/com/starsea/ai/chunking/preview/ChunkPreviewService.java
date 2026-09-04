@@ -11,6 +11,7 @@ import com.starsea.ai.chunking.processing.ChunkTaskDispatcher;
 import com.starsea.ai.chunking.registry.ChunkStrategyNotFoundException;
 import com.starsea.ai.chunking.registry.ChunkStrategyRegistry;
 import com.starsea.ai.chunking.registry.DocumentStructureParserRegistry;
+import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.FileProcessing;
@@ -25,12 +26,11 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 
 @Service
 public class ChunkPreviewService {
-
-    private static final String MARKDOWN_STRATEGY = "MARKDOWN_OPTIMIZED";
 
     private final FileProcessingMapper processingMapper;
     private final FileMapper fileMapper;
@@ -58,13 +58,7 @@ public class ChunkPreviewService {
 
     public StrategyResponse strategies(long knowledgeId, long fileId) {
         ScopedFile scoped = requireScopedFile(knowledgeId, fileId);
-        List<com.starsea.ai.chunking.registry.ChunkStrategyDescriptor> strategies;
-        try {
-            strategies = List.of(strategyRegistry.require(MARKDOWN_STRATEGY, scoped.fileType()).descriptor());
-        } catch (ChunkStrategyNotFoundException exception) {
-            strategies = List.of();
-        }
-        return new StrategyResponse(scoped.fileType(), strategies);
+        return new StrategyResponse(scoped.fileType(), strategyRegistry.descriptors(scoped.fileType()));
     }
 
     public ProcessingResponse processing(long knowledgeId, long fileId) {
@@ -86,7 +80,13 @@ public class ChunkPreviewService {
             throw ChunkingException.unprocessable("A chunk strategy and token budget are required");
         }
         ScopedFile scoped = requireScopedFile(knowledgeId, fileId);
-        requireRegisteredStrategy(request.strategyCode(), scoped.fileType());
+        ChunkPlanningStrategy strategy = requireRegisteredStrategy(request.strategyCode(), scoped.fileType());
+        Map<String, Object> normalizedConfig;
+        try {
+            normalizedConfig = strategy.normalizeConfig(request.strategyConfig());
+        } catch (IllegalArgumentException | NullPointerException exception) {
+            throw ChunkingException.unprocessable(exception.getMessage());
+        }
         requireRegisteredParser(scoped.fileType());
         requireUsableSource(scoped.file());
         List<ChunkPreviewWorker.ExistingChunkSnapshot> existingChunks =
@@ -102,7 +102,7 @@ public class ChunkPreviewService {
                 knowledgeId,
                 fileId,
                 request.strategyCode().trim().toUpperCase(Locale.ROOT),
-                request.strategyConfig(),
+                normalizedConfig,
                 request.replaceEditedDrafts(),
                 request.lockVersion() + 1,
                 existingChunks);
@@ -110,9 +110,9 @@ public class ChunkPreviewService {
                 request.lockVersion(), () -> worker.generate(job));
     }
 
-    private void requireRegisteredStrategy(String code, String fileType) {
+    private ChunkPlanningStrategy requireRegisteredStrategy(String code, String fileType) {
         try {
-            strategyRegistry.require(code, fileType);
+            return strategyRegistry.require(code, fileType);
         } catch (ChunkStrategyNotFoundException | NullPointerException exception) {
             throw ChunkingException.unprocessable("The requested chunk strategy is not available for this file");
         }

@@ -26,6 +26,17 @@ class HuggingFaceTokenCounterTest {
     }
 
     @Test
+    void configured_token_counter_does_not_truncate_parent_sized_content() {
+        ChunkingConfiguration configuration = new ChunkingConfiguration();
+
+        try (HuggingFaceTokenCounter counter = (HuggingFaceTokenCounter) configuration.bgeTokenCounter(
+                "tokenizer/bge-base-zh-v1.5-tokenizer.json",
+                "7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839")) {
+            assertTrue(counter.count("知".repeat(600)) > 512);
+        }
+    }
+
+    @Test
     void rejects_a_missing_or_modified_tokenizer_resource() {
         ChunkingConfiguration configuration = new ChunkingConfiguration();
 

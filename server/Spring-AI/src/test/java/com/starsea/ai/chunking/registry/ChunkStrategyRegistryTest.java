@@ -5,7 +5,9 @@ import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ContextPolicy;
 import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.ParsedStructure;
+import com.starsea.ai.chunking.markdown.MarkdownParentChildPlanningStrategy;
 import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
+import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.chunking.spi.DocumentStructureParser;
 import org.junit.jupiter.api.Test;
 
@@ -54,6 +56,26 @@ class ChunkStrategyRegistryTest {
                 new MarkdownStrategy("MARKDOWN_OPTIMIZED", Set.of("md", "markdown"))));
 
         assertEquals("MARKDOWN_OPTIMIZED", registry.require("MARKDOWN_OPTIMIZED", "markdown").code());
+    }
+
+    @Test
+    void descriptors_return_every_matching_strategy_in_registration_order() {
+        TokenCounter counter = new TokenCounter() {
+            @Override
+            public int count(String text) {
+                return text == null ? 0 : text.length();
+            }
+
+            @Override
+            public String id() {
+                return "test";
+            }
+        };
+        ChunkStrategyRegistry registry = new ChunkStrategyRegistry(List.of(
+                new MarkdownStrategy(), new MarkdownParentChildPlanningStrategy(counter)));
+
+        assertEquals(List.of("MARKDOWN_OPTIMIZED", "PARENT_CHILD"),
+                registry.descriptors("md").stream().map(ChunkStrategyDescriptor::code).toList());
     }
 
     @Test

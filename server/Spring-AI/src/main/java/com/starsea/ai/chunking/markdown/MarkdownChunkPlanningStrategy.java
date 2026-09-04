@@ -3,6 +3,7 @@ package com.starsea.ai.chunking.markdown;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.BoundaryReason;
 import com.starsea.ai.chunking.model.ChunkDraft;
+import com.starsea.ai.chunking.model.ChunkPlan;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.SemanticUnit;
@@ -112,6 +113,41 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
             }
         }
         return List.copyOf(merged);
+    }
+
+    @Override
+    public Map<String, Object> normalizeConfig(Map<String, Object> config) {
+        Map<String, Object> source = config == null ? Map.of() : config;
+        ChunkPolicy defaults = ChunkPolicy.defaults();
+        ChunkPolicy policy = new ChunkPolicy(
+                integral(source.getOrDefault("minTokens", defaults.minTokens()), "minTokens"),
+                integral(source.getOrDefault("targetTokens", defaults.targetTokens()), "targetTokens"),
+                integral(source.getOrDefault("maxTokens", defaults.maxTokens()), "maxTokens"));
+        return Map.of(
+                "minTokens", policy.minTokens(),
+                "targetTokens", policy.targetTokens(),
+                "maxTokens", policy.maxTokens());
+    }
+
+    @Override
+    public ChunkPlan planConfigured(ParsedStructure structure, Map<String, Object> config) {
+        Map<String, Object> normalized = normalizeConfig(config);
+        ChunkPolicy policy = new ChunkPolicy(
+                (int) normalized.get("minTokens"),
+                (int) normalized.get("targetTokens"),
+                (int) normalized.get("maxTokens"));
+        return ChunkPlan.flat(plan(structure, policy), policy.maxTokens());
+    }
+
+    private int integral(Object value, String field) {
+        if (!(value instanceof Number number)) {
+            throw new IllegalArgumentException(field + " must be an integral number");
+        }
+        try {
+            return new java.math.BigDecimal(number.toString()).intValueExact();
+        } catch (NumberFormatException | ArithmeticException exception) {
+            throw new IllegalArgumentException(field + " must be an integral number", exception);
+        }
     }
 
     public static String previewIndexText(List<String> path, String content) {

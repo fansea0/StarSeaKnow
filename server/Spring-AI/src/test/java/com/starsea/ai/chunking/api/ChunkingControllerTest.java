@@ -33,6 +33,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -82,6 +83,17 @@ class ChunkingControllerTest {
         when(markdownStrategy.descriptor()).thenReturn(new ChunkStrategyDescriptor(
                 "MARKDOWN_OPTIMIZED", "FILE_TYPE", Set.of("md", "markdown"),
                 "markdown-adaptive-v1", List.of()));
+        when(markdownStrategy.normalizeConfig(any())).thenAnswer(invocation -> {
+            Map<String, Object> config = invocation.getArgument(0);
+            ChunkPolicy policy = new ChunkPolicy(
+                    ((Number) config.get("minTokens")).intValue(),
+                    ((Number) config.get("targetTokens")).intValue(),
+                    ((Number) config.get("maxTokens")).intValue());
+            return Map.of(
+                    "minTokens", policy.minTokens(),
+                    "targetTokens", policy.targetTokens(),
+                    "maxTokens", policy.maxTokens());
+        });
         DocumentStructureParser markdownParser = mock(DocumentStructureParser.class);
         when(markdownParser.supportedFileTypes()).thenReturn(Set.of("md", "markdown"));
 

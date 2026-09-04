@@ -32,6 +32,17 @@ public final class ChunkStrategyRegistry {
                 .orElseThrow(() -> new ChunkStrategyNotFoundException(code, fileType));
     }
 
+    /** Returns every descriptor that supports the requested file type, in registration order. */
+    public List<ChunkStrategyDescriptor> descriptors(String fileType) {
+        String normalizedFileType = normalizeFileType(fileType);
+        return strategies.stream()
+                .filter(strategy -> strategy.supportedFileTypes().stream()
+                        .map(ChunkStrategyRegistry::normalizeFileType)
+                        .anyMatch(normalizedFileType::equals))
+                .map(ChunkPlanningStrategy::descriptor)
+                .toList();
+    }
+
     static String normalizeFileType(String fileType) {
         String normalized = Objects.requireNonNull(fileType, "fileType").trim().toLowerCase(Locale.ROOT);
         return normalized.startsWith(".") ? normalized.substring(1) : normalized;

@@ -3,7 +3,10 @@ package com.starsea.ai.chunking.preview;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.ChunkDraft;
+import com.starsea.ai.chunking.model.ChunkPlan;
 import com.starsea.ai.chunking.model.ChunkPolicy;
+import com.starsea.ai.chunking.model.ChunkType;
+import com.starsea.ai.chunking.model.PlannedChunk;
 import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.PipelineState;
@@ -86,9 +89,10 @@ public class ChunkPreviewWorker {
                     source.file().getType(),
                     snapshotPath);
             ParsedStructure structure = parser.parse(resource);
-            List<ChunkDraft> drafts = validateDrafts(planner.plan(structure, job.policy()), job.policy());
+            ChunkPlan plan = planner.planConfigured(structure, job.strategyConfig());
+            List<ChunkDraft> drafts = validateDrafts(plan);
             persistence.replace(job, sourceHash, planner.plannerVersion(),
-                    policySnapshot(job.policy()), drafts);
+                    policySnapshot(job.strategyConfig()), drafts);
         } catch (Exception exception) {
             markFailed(job, exception);
         } finally {
@@ -143,35 +147,40 @@ public class ChunkPreviewWorker {
         return new ScopedSource(processing, file, Path.of(file.getPath()));
     }
 
-    private List<ChunkDraft> validateDrafts(List<ChunkDraft> drafts, ChunkPolicy policy) {
-        if (drafts == null || drafts.isEmpty()) {
+    private List<ChunkDraft> validateDrafts(ChunkPlan plan) {
+        if (plan == null || plan.chunks().isEmpty()) {
             throw new IllegalArgumentException("The source document produced no chunks");
         }
-        List<ChunkDraft> normalized = new java.util.ArrayList<>(drafts.size());
-        for (ChunkDraft draft : drafts) {
+        boolean hasVectorizableChunk = false;
+        List<ChunkDraft> normalized = new java.util.ArrayList<>(plan.chunks().size());
+        for (PlannedChunk planned : plan.chunks()) {
+            ChunkDraft draft = planned.draft();
             if (draft == null || draft.content() == null || draft.content().isBlank()) {
                 throw new IllegalArgumentException("The planner produced an invalid chunk");
             }
             int bodyTokens = tokenCounter.count(draft.content());
             int totalTokens = tokenCounter.count(
                     ChunkIndexContentBuilder.preview(draft.sectionPath(), draft.content()));
-            if (bodyTokens < 0 || totalTokens < 0
-                    || totalTokens > policy.maxTokens()
-                    || totalTokens > ChunkPolicy.MAX_ALLOWED_TOKENS) {
+            if (bodyTokens < 0 || totalTokens < 0) {
+                throw new IllegalArgumentException("The planner produced an invalid chunk");
+            }
+            if (planned.type() != ChunkType.PARENT && (totalTokens > plan.indexMaxTokens()
+                    || totalTokens > ChunkPolicy.MAX_ALLOWED_TOKENS)) {
                 throw new IllegalArgumentException(
                         "The planner produced a chunk that exceeds the token budget");
             }
+            hasVectorizableChunk |= planned.type() == ChunkType.SINGLE || planned.type() == ChunkType.CHILD;
             normalized.add(new ChunkDraft(draft.sectionPath(), draft.content(),
                     draft.sourceLocator(), bodyTokens, draft.boundaryReason()));
+        }
+        if (!hasVectorizableChunk) {
+            throw new IllegalArgumentException("The source document produced no vectorizable chunks");
         }
         return List.copyOf(normalized);
     }
 
-    private Map<String, Object> policySnapshot(ChunkPolicy policy) {
-        Map<String, Object> snapshot = new LinkedHashMap<>();
-        snapshot.put("minTokens", policy.minTokens());
-        snapshot.put("targetTokens", policy.targetTokens());
-        snapshot.put("maxTokens", policy.maxTokens());
+    private Map<String, Object> policySnapshot(Map<String, Object> strategyConfig) {
+        Map<String, Object> snapshot = new LinkedHashMap<>(strategyConfig);
         snapshot.put("tokenizer", tokenCounter.id());
         return Map.copyOf(snapshot);
     }
@@ -202,13 +211,29 @@ public class ChunkPreviewWorker {
         }
     }
 
-    public record Job(long knowledgeId, long fileId, String strategyCode, ChunkPolicy policy,
+    public record Job(long knowledgeId, long fileId, String strategyCode, Map<String, Object> strategyConfig,
                       boolean replaceEditedDrafts, int lockVersion,
                       List<ExistingChunkSnapshot> existingChunks) {
         public Job {
             Objects.requireNonNull(strategyCode, "strategyCode");
-            Objects.requireNonNull(policy, "policy");
+            strategyConfig = Map.copyOf(Objects.requireNonNull(strategyConfig, "strategyConfig"));
             existingChunks = existingChunks == null ? List.of() : List.copyOf(existingChunks);
+        }
+
+        public Job(long knowledgeId, long fileId, String strategyCode, ChunkPolicy policy,
+                   boolean replaceEditedDrafts, int lockVersion,
+                   List<ExistingChunkSnapshot> existingChunks) {
+            this(knowledgeId, fileId, strategyCode, Map.of(
+                    "minTokens", policy.minTokens(),
+                    "targetTokens", policy.targetTokens(),
+                    "maxTokens", policy.maxTokens()), replaceEditedDrafts, lockVersion, existingChunks);
+        }
+
+        public ChunkPolicy policy() {
+            return new ChunkPolicy(
+                    ((Number) strategyConfig.get("minTokens")).intValue(),
+                    ((Number) strategyConfig.get("targetTokens")).intValue(),
+                    ((Number) strategyConfig.get("maxTokens")).intValue());
         }
     }
 
