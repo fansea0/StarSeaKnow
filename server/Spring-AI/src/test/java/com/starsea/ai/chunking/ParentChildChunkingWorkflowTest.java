@@ -90,7 +90,7 @@ class ParentChildChunkingWorkflowTest {
         WorkflowServices services = workflowServices(repository);
         Map<String, Object> config = Map.of(
                 "parentMode", "PARAGRAPH",
-                "parentMaxTokens", 1024,
+                "parentMaxTokens", 768,
                 "childMaxTokens", 256,
                 "childOverlapTokens", 32);
 
@@ -103,6 +103,7 @@ class ParentChildChunkingWorkflowTest {
         assertEquals(PipelineState.CHUNKED.code(), repository.processing.getPipelineState());
         assertEquals("PARENT_CHILD", repository.processing.getStrategyCode());
         assertEquals("PARAGRAPH", repository.processing.getPolicySnapshot().get("parentMode"));
+        assertEquals(768, repository.processing.getPolicySnapshot().get("parentMaxTokens"));
         assertEquals(256, repository.processing.getPolicySnapshot().get("childMaxTokens"));
         assertEquals(32, repository.processing.getPolicySnapshot().get("childOverlapTokens"));
         assertEquals("workflow-word-counter", repository.processing.getPolicySnapshot().get("tokenizer"));
@@ -125,6 +126,7 @@ class ParentChildChunkingWorkflowTest {
         parents.forEach(parent -> {
             List<DocumentChunk> siblings = children.stream()
                     .filter(child -> parent.getId().equals(child.getParentChunkId())).toList();
+            assertFalse(siblings.isEmpty(), "every persisted parent must own at least one CHILD");
             assertEquals(IntStream.range(0, siblings.size()).boxed().toList(), siblings.stream()
                     .map(DocumentChunk::getSiblingPosition).toList());
         });
@@ -132,11 +134,17 @@ class ParentChildChunkingWorkflowTest {
         assertTrue(children.stream().allMatch(chunk -> chunk.getOverlapEnabled()
                 && chunk.getOverlapTokenLimit() == 32));
         assertTrue(listed.stream().anyMatch(response -> response.chunkType().equals(ChunkType.PARENT.name())));
-        assertTrue(listed.stream().filter(response -> response.chunkType().equals(ChunkType.CHILD.name()))
-                .allMatch(response ->
-                response.chunkType().equals(ChunkType.CHILD.name())
-                        && parentsById.get(repository.byPublicId(response.publicId()).getParentChunkId())
-                        .getPublicId().equals(response.parentPublicId())));
+        Map<UUID, ChunkResponse> listedChildrenById = listed.stream()
+                .filter(response -> response.chunkType().equals(ChunkType.CHILD.name()))
+                .collect(java.util.stream.Collectors.toMap(ChunkResponse::publicId, response -> response));
+        assertEquals(children.size(), listedChildrenById.size());
+        children.forEach(child -> {
+            ChunkResponse response = listedChildrenById.get(child.getPublicId());
+            assertNotNull(response, "the API list must retain every persisted CHILD");
+            assertEquals(child.getPublicId(), response.publicId());
+            assertEquals(parentsById.get(child.getParentChunkId()).getPublicId(), response.parentPublicId());
+            assertEquals(child.getSiblingPosition(), response.siblingPosition());
+        });
 
         int previewLock = repository.processing.getLockVersion();
         services.vectors().confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(previewLock));
