@@ -35,7 +35,7 @@ public final class GeneralTextCleaner {
             if (config.removeUrls()) text = replace(text, URL, true, stats);
             if (config.removeEmails()) text = replace(text, EMAIL, false, stats);
             if (config.collapseWhitespace()) text = collapseWhitespace(text, stats);
-            if (text.value().isBlank()) {
+            if (text.value().isEmpty() || config.collapseWhitespace() && text.value().isBlank()) {
                 stats.empty++;
                 continue;
             }

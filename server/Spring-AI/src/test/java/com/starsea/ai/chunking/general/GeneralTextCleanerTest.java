@@ -45,6 +45,33 @@ class GeneralTextCleanerTest {
     }
 
     @Test
+    void disabled_optional_cleaning_preserves_space_tab_and_line_feed_only_segments() {
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
+                false, false, false);
+        NormalizedText normalized = new TextNormalizer().normalize(" |||\t|||\n");
+
+        CleaningResult result = new GeneralTextCleaner().clean(
+                new GeneralBoundaryScanner(config).scan(normalized), config, normalized);
+
+        assertEquals(List.of(" ", "\t", "\n"),
+                result.segments().stream().map(CleanedSegment::text).toList());
+        assertEquals(0, result.stats().emptySegmentsRemoved());
+    }
+
+    @Test
+    void enabled_whitespace_collapse_removes_segments_with_no_indexable_body() {
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
+                true, false, false);
+        NormalizedText normalized = new TextNormalizer().normalize(" |||\t|||\n");
+
+        CleaningResult result = new GeneralTextCleaner().clean(
+                new GeneralBoundaryScanner(config).scan(normalized), config, normalized);
+
+        assertEquals(List.of(), result.segments());
+        assertEquals(3, result.stats().emptySegmentsRemoved());
+    }
+
+    @Test
     void deletes_empty_cleaned_segments_and_transfers_their_delimiter_to_previous_content() {
         GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
                 true, false, false);

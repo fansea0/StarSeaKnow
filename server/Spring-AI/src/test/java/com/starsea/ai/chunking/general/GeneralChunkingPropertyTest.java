@@ -134,7 +134,7 @@ class GeneralChunkingPropertyTest {
             if (removeUrls) cleaned = cleaned.replace(URL, " ");
             if (removeEmails) cleaned = cleaned.replace(EMAIL, " ");
             if (collapseWhitespace) cleaned = referenceCollapseWhitespace(cleaned);
-            if (!cleaned.isBlank()) result.add(cleaned);
+            if (!cleaned.isEmpty() && (!collapseWhitespace || !cleaned.isBlank())) result.add(cleaned);
         }
         return result;
     }
