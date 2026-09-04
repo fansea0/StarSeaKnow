@@ -30,6 +30,11 @@ const snapshot = ref(null),
 const datasetId = ref(''),
   datasetName = ref(''),
   loadedDataset = ref(null),
+  corpusSelection = ref({
+    scope: props.initialChunkId ? 'SELECTED' : 'ALL',
+    chunkIds: props.initialChunkId ? [props.initialChunkId] : [],
+    chunks: [],
+  }),
   busy = ref(false),
   preparingSnapshot = ref(false),
   preparedChunkId = ref(''),
@@ -69,10 +74,14 @@ const sourceChanged = computed(() =>
 const stale = computed(() => !!run.value && (savedInput.value !== fingerprint.value || sourceChanged.value))
 const questionFingerprint = computed(() => JSON.stringify([snapshot.value?.id, question.value]))
 const interactionBusy = computed(() => busy.value || preparingSnapshot.value)
+const canPrepareSnapshot = computed(
+  () => !datasetId.value && corpusSelection.value.chunks.length > 0,
+)
 const startDisabledReason = computed(() => {
   if (preparingSnapshot.value) return '正在冻结当前分块，完成后即可开始对比。'
   if (busy.value) return '正在处理，请稍候。'
-  if (!snapshot.value) return '请先在上方冻结语料快照。'
+  if (!snapshot.value && datasetId.value) return '所选问题集快照尚未加载，请重试。'
+  if (!snapshot.value && !canPrepareSnapshot.value) return '请先选择至少一个候选分块。'
   if (!modelIds.value.length) return '请至少选择一个向量模型。'
   if (isActiveRun(run.value)) return '当前对比仍在运行，请等待完成或先取消。'
   return ''
@@ -80,10 +89,14 @@ const startDisabledReason = computed(() => {
 watch(
   () => snapshot.value?.id,
   (id, previous) => {
-    if (id !== previous)
+    if (previous && id !== previous)
       question.value = { ...question.value, reviewed: false, labels: {}, hardNegativeIds: [] }
   },
 )
+function updateCorpusSelection(value) {
+  corpusSelection.value = value
+  if (value.chunks.length && error.value.startsWith('无法准备当前分块：')) error.value = ''
+}
 async function prepareInitialChunk(id) {
   if (!id || preparedChunkId.value === id) return
   preparedChunkId.value = id
@@ -119,25 +132,32 @@ async function chooseDataset() {
 }
 async function start() {
   error.value = validateQuestions([question.value])
-  if (error.value || !snapshot.value || !modelIds.value.length) return
+  if (error.value || (!snapshot.value && !canPrepareSnapshot.value) || !modelIds.value.length) return
   if (modelIds.value.some((id) => !props.models.some((model) => model.id === id))) {
     error.value = '所选模型已删除，请重新选择模型。'
     return
   }
   busy.value = true
-  const input = fingerprint.value
-  const command = {
-    snapshotId: snapshot.value.id,
-    questions: [clone(question.value)],
-    modelIds: [...modelIds.value],
-    baselineModelId: baseline.value,
-    phase: 'QUICK',
-    topK: 5,
-    thresholds: {},
-    requirements: {},
-    retrievalMode: 'EXACT',
-  }
+  const submittedQuestion = clone(question.value)
   try {
+    if (!snapshot.value) {
+      snapshot.value = await api.createSnapshot(props.knowledgeId, {
+        scope: corpusSelection.value.scope,
+        chunkIds: corpusSelection.value.chunkIds,
+      })
+    }
+    const input = fingerprint.value
+    const command = {
+      snapshotId: snapshot.value.id,
+      questions: [submittedQuestion],
+      modelIds: [...modelIds.value],
+      baselineModelId: baseline.value,
+      phase: 'QUICK',
+      topK: 5,
+      thresholds: {},
+      requirements: {},
+      retrievalMode: 'EXACT',
+    }
     const result = await api.createRun(props.knowledgeId, command)
     savedInput.value = input
     setRun(result)
@@ -202,6 +222,7 @@ async function saveQuestion() {
         :chunks="chunks"
         :initial-chunk-id="initialChunkId"
         :disabled="interactionBusy"
+        @selection-change="updateCorpusSelection"
       />
       <p v-else class="ev-notice">{{ snapshotDescription(snapshot) }}</p>
       <p v-if="sourceChanged" class="ev-notice ev-warning">
@@ -215,7 +236,7 @@ async function saveQuestion() {
       />
       <QuestionEditor
         v-model="question"
-        :chunks="snapshot?.chunks || []"
+        :chunks="snapshot?.chunks || corpusSelection.chunks"
         :disabled="interactionBusy"
         compact
       />

@@ -39,7 +39,7 @@ const dataset = {
   frozen: false,
 }
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   api.createSnapshot.mockResolvedValue(snapshot)
   api.getSnapshot.mockResolvedValue(snapshot)
   api.listDatasets.mockResolvedValue([dataset])
@@ -108,7 +108,70 @@ it('automatically freezes the current chunk when opened from the chunk compariso
   expect(wrapper.text()).toContain('候选集内对比 · 1 份文档 · 1 块')
   wrapper.unmount()
 })
-it('explains why comparison is unavailable when the current chunk cannot be prepared', async () => {
+it('shows a newly selected document immediately and rebuilds its snapshot when comparison starts', async () => {
+  const secondChunk = {
+    id: 'c2',
+    content: '另一段正文',
+    indexContent: '标题\n另一段正文',
+    fileId: 'f',
+    fileName: '手册.md',
+  }
+  const selectedChunkSnapshot = { ...snapshot, scope: 'SELECTED' }
+  const selectedDocumentSnapshot = {
+    ...snapshot,
+    id: 's2',
+    scope: 'SELECTED',
+    chunks: [chunks[0], secondChunk],
+  }
+  api.createSnapshot
+    .mockResolvedValueOnce(selectedChunkSnapshot)
+    .mockResolvedValueOnce(selectedDocumentSnapshot)
+  api.createRun.mockResolvedValue({
+    id: 'r',
+    phase: 'QUICK',
+    status: 'COMPLETED',
+    questions: [],
+    models: [{ id: 'current' }],
+    modelResults: [],
+    progress: { completed: 1, total: 1 },
+  })
+  const wrapper = mount(QuickComparison, {
+    props: {
+      knowledgeId: '11',
+      chunks: [...chunks, secondChunk],
+      models: [{ id: 'current', revision: 1 }],
+      datasets: [],
+      initialChunkId: 'c',
+    },
+  })
+  await flushPromises()
+
+  const selectFile = wrapper.findAll('button').find((button) => button.text().includes('手册.md · 全选'))
+  await selectFile.trigger('click')
+  await flushPromises()
+
+  expect(wrapper.text()).toContain('0 / 2 块已标注')
+  expect(wrapper.get('[data-testid="start-quick"]').attributes('disabled')).toBeUndefined()
+  await wrapper.get('[data-testid="question-query"]').setValue('如何连接耳机？')
+  await wrapper.get('[data-testid="label-c"]').setValue('2')
+  await wrapper.get('[data-testid="question-reviewed"]').setValue(true)
+  await wrapper.get('[data-testid="start-quick"]').trigger('click')
+  await flushPromises()
+
+  expect(api.createSnapshot).toHaveBeenNthCalledWith(2, '11', {
+    scope: 'SELECTED',
+    chunkIds: ['c', 'c2'],
+  })
+  expect(api.createRun).toHaveBeenCalledWith(
+    '11',
+    expect.objectContaining({
+      snapshotId: 's2',
+      questions: [expect.objectContaining({ query: '如何连接耳机？', reviewed: true, labels: { c: 2 } })],
+    }),
+  )
+  wrapper.unmount()
+})
+it('explains an automatic snapshot failure while keeping the selected chunk available for retry', async () => {
   api.createSnapshot.mockRejectedValue(new Error('当前分块尚未保存'))
   const wrapper = mount(QuickComparison, {
     props: {
@@ -123,8 +186,8 @@ it('explains why comparison is unavailable when the current chunk cannot be prep
   await flushPromises()
 
   expect(wrapper.get('[role="alert"]').text()).toContain('无法准备当前分块：当前分块尚未保存')
-  expect(wrapper.get('[data-testid="start-disabled-reason"]').text()).toBe('请先在上方冻结语料快照。')
-  expect(wrapper.get('[data-testid="start-quick"]').attributes('disabled')).toBeDefined()
+  expect(wrapper.text()).toContain('0 / 1 块已标注')
+  expect(wrapper.get('[data-testid="start-quick"]').attributes('disabled')).toBeUndefined()
   wrapper.unmount()
 })
 it('edits labels with revision checks and adds an unreviewed variant in the same intent group', async () => {

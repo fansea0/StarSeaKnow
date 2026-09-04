@@ -9,7 +9,7 @@ const props = defineProps({
   initialChunkId: String,
   disabled: Boolean,
 })
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'selection-change'])
 const scope = ref(props.initialChunkId ? 'SELECTED' : 'ALL'),
   selected = ref(props.initialChunkId ? [props.initialChunkId] : []),
   search = ref(''),
@@ -20,10 +20,19 @@ const filtered = computed(() =>
     `${c.id} ${c.fileName} ${c.content}`.toLowerCase().includes(search.value.toLowerCase()),
   ),
 )
+const candidateChunks = computed(() =>
+  scope.value === 'ALL' ? props.chunks : props.chunks.filter((chunk) => selected.value.includes(chunk.id)),
+)
+const selection = computed(() => ({
+  scope: scope.value,
+  chunkIds: scope.value === 'SELECTED' ? [...selected.value] : [],
+  chunks: candidateChunks.value,
+}))
 const files = computed(() => [
   ...new Map(props.chunks.map((c) => [c.fileId, { id: c.fileId, name: c.fileName }])).values(),
 ])
 watch([scope, selected], () => emit('update:modelValue', null), { deep: true })
+watch(selection, (value) => emit('selection-change', value), { immediate: true, flush: 'post' })
 function chooseFile(id) {
   const ids = props.chunks.filter((c) => c.fileId === id).map((c) => c.id)
   const allSelected = ids.every((id) => selected.value.includes(id))
