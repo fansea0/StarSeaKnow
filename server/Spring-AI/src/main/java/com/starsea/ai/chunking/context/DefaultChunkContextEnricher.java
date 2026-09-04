@@ -2,6 +2,7 @@ package com.starsea.ai.chunking.context;
 
 import com.starsea.ai.chunking.model.ContextPolicy;
 import com.starsea.ai.chunking.model.EnrichedChunk;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicy;
 import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
@@ -28,6 +29,13 @@ public final class DefaultChunkContextEnricher implements ChunkContextEnricher {
     @Autowired
     public DefaultChunkContextEnricher(TokenCounter tokenCounter) {
         this(tokenCounter, new ChunkIndexContentBuilder(), new SentenceBoundaryDetector());
+    }
+
+    @Override
+    public List<EnrichedChunk> enrich(List<DocumentChunk> chunks, ChunkRuntimePolicy policy) {
+        Objects.requireNonNull(policy, "policy");
+        return enrich(chunks, new ContextPolicy(policy.contextConfig().enabled(),
+                policy.contextConfig().limit()), policy.maxIndexTokens());
     }
 
     DefaultChunkContextEnricher(TokenCounter tokenCounter, ChunkIndexContentBuilder contentBuilder,

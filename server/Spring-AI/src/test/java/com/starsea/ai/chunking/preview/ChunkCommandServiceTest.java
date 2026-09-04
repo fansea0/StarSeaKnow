@@ -5,6 +5,7 @@ import com.starsea.ai.chunking.api.ChunkingApiModels;
 import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
+import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.OverlapUnit;
@@ -171,9 +172,10 @@ class ChunkCommandServiceTest {
     }
 
     @Test
-    void general_edit_is_rejected_before_chunk_write_or_context_enrichment() {
-        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
-        ChunkCommandService guardedService = new ChunkCommandService(
+    void general_edit_atomically_recomputes_character_tail_fields() {
+        ChunkContextEnricher enricher =
+                new StrategyAwareChunkContextEnricher(new CharacterTokenCounter());
+        ChunkCommandService generalService = new ChunkCommandService(
                 chunkMapper, processingMapper, stateService, new CharacterTokenCounter(),
                 new ChunkIndexContentBuilder(), vectorGateway, enricher);
         FileProcessing general = processing(PipelineState.CHUNKED, 5, Map.of(
@@ -185,21 +187,29 @@ class ChunkCommandServiceTest {
         when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(general);
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
+        target.setOverlapEnabled(true);
+        target.setOverlapLimit(4);
         target.setOverlapUnit(OverlapUnit.CHARACTERS);
+        DocumentChunk previous = chunk(30L, UUID.randomUUID(), 3,
+                ChunkStatus.ACTIVE, 1, "prefix😀TAIL");
+        previous.setOverlapUnit(OverlapUnit.CHARACTERS);
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+        when(chunkMapper.findScopedByPosition(FILE_ID, TENANT_ID, KNOWLEDGE_ID, 3))
+                .thenReturn(previous);
 
-        ChunkingException failure = assertThrows(ChunkingException.class,
-                () -> guardedService.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
-                        new EditChunkRequest("Edited", true, 40,
-                                OverlapUnit.CHARACTERS, 2)));
+        var response = generalService.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                new EditChunkRequest("Edited", true, 4,
+                        OverlapUnit.CHARACTERS, 2));
 
-        assertEquals(422, failure.status().value());
-        assertEquals("GENERAL 分块的字符上下文处理尚未启用", failure.getMessage());
-        assertEquals("GENERAL_CONTEXT_UNAVAILABLE", failure.details().get("errorCode"));
-        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
-        verify(enricher, never()).enrich(any(), anyInt());
-        verify(stateService, never()).transition(anyLong(), anyLong(), any(), any(), anyInt());
+        assertEquals("TAIL", response.overlapContent());
+        assertEquals(4, response.overlapCharacterCount());
+        assertEquals("CONFIGURED_LIMIT", response.overlapReductionReason());
+        var patch = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
+        verify(chunkMapper).update(patch.capture(), any());
+        assertEquals(OverlapUnit.CHARACTERS, patch.getValue().getOverlapUnit());
+        assertEquals(4, patch.getValue().getOverlapCharacterCount());
+        assertEquals("上文：TAIL\n\nEdited", patch.getValue().getIndexContent());
     }
 
     @Test
@@ -226,7 +236,7 @@ class ChunkCommandServiceTest {
     }
 
     @Test
-    void source_edit_does_not_invalidate_enabled_neighbor_when_derived_context_is_unchanged() {
+    void source_edit_backfills_new_derived_fields_on_an_otherwise_stable_neighbor() {
         DocumentChunk target = chunk(
                 31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Discarded sentence. Stable.");
         DocumentChunk dependent = chunk(32L, NEXT_ID, 5, ChunkStatus.ACTIVE, 7, "Next");
@@ -244,10 +254,10 @@ class ChunkCommandServiceTest {
         service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
                 new EditChunkRequest("Changed sentence. Stable.", 2));
 
-        verify(chunkMapper, times(1)).update(any(DocumentChunk.class), any());
+        verify(chunkMapper, times(2)).update(any(DocumentChunk.class), any());
         verify(chunkMapper, never()).findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID);
         verify(vectorGateway).delete(CHUNK_ID);
-        verify(vectorGateway, never()).delete(NEXT_ID);
+        verify(vectorGateway).delete(NEXT_ID);
     }
 
     @Test
@@ -284,26 +294,80 @@ class ChunkCommandServiceTest {
     }
 
     @Test
-    void general_edit_guard_precedes_runtime_token_budget_validation() {
+    void general_edit_reports_character_and_token_limits_before_any_write() {
         DocumentChunk chunk = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Body");
-        chunk.setSectionPath(List.of("Long"));
         FileProcessing general = processing(PipelineState.ADJUSTING, 5, Map.of(
-                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 500,
+                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 64,
                 "collapseWhitespace", true, "removeUrls", false, "removeEmails", false));
         general.setStrategyCode("GENERAL");
         general.setContextPolicy(Map.of("enabled", true, "limit", 40));
-        general.setExecutionMetadata(Map.of("tokenHardLimit", 12, "tokenizerId", "test-tokenizer"));
+        general.setExecutionMetadata(Map.of("tokenHardLimit", 512, "tokenizerId", "test-tokenizer"));
         when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
                 .thenReturn(general);
         when(chunkMapper.findScopedByPublicIdForUpdate(
                 FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(chunk);
+        chunk.setOverlapEnabled(true);
+        chunk.setOverlapLimit(4);
+        chunk.setOverlapUnit(OverlapUnit.CHARACTERS);
 
         ChunkingException failure = assertThrows(ChunkingException.class,
                 () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
-                        new EditChunkRequest("abcdef", 2)));
+                        new EditChunkRequest("x".repeat(65), true, 4,
+                                OverlapUnit.CHARACTERS, 2)));
 
-        assertEquals("GENERAL_CONTEXT_UNAVAILABLE", failure.details().get("errorCode"));
+        assertEquals(65, failure.details().get("actualCharacterCount"));
+        assertEquals(65, failure.details().get("actualTokenCount"));
+        assertEquals(64, failure.details().get("maxCharacters"));
+        assertEquals(512, failure.details().get("maxIndexTokens"));
         verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+    }
+
+    @Test
+    void general_edit_rejects_a_token_only_overflow_without_side_effects() {
+        TokenCounter expensiveCounter = new TokenCounter() {
+            @Override
+            public int count(String text) {
+                return text == null ? 0 : text.codePointCount(0, text.length()) * 10;
+            }
+
+            @Override
+            public String id() {
+                return "expensive-test-counter";
+            }
+        };
+        ChunkCommandService generalService = new ChunkCommandService(
+                chunkMapper, processingMapper, stateService, expensiveCounter,
+                new ChunkIndexContentBuilder(), vectorGateway,
+                new StrategyAwareChunkContextEnricher(expensiveCounter));
+        FileProcessing general = processing(PipelineState.ADJUSTING, 5, Map.of(
+                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 64,
+                "collapseWhitespace", true, "removeUrls", false, "removeEmails", false));
+        general.setStrategyCode("GENERAL");
+        general.setContextPolicy(Map.of("enabled", true, "limit", 4,
+                "unit", "CHARACTERS", "mode", "CHARACTER_TAIL"));
+        general.setExecutionMetadata(Map.of("tokenHardLimit", 512,
+                "tokenizerId", "expensive-test-counter"));
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(general);
+        DocumentChunk chunk = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Body");
+        chunk.setOverlapEnabled(true);
+        chunk.setOverlapLimit(4);
+        chunk.setOverlapUnit(OverlapUnit.CHARACTERS);
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(chunk);
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> generalService.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                        new EditChunkRequest("x".repeat(60), true, 4,
+                                OverlapUnit.CHARACTERS, 2)));
+
+        assertEquals(60, failure.details().get("actualCharacterCount"));
+        assertEquals(600, failure.details().get("actualTokenCount"));
+        assertEquals(64, failure.details().get("maxCharacters"));
+        assertEquals(512, failure.details().get("maxIndexTokens"));
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+        verify(stateService, never()).transition(anyLong(), anyLong(), any(), any(), anyInt());
+        verify(vectorGateway, never()).delete(any());
     }
 
     @Test

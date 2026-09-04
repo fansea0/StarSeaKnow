@@ -68,6 +68,25 @@ class ChunkPipelineRecoveryTest {
     }
 
     @Test
+    void recovery_clears_every_derived_overlap_and_index_field_together() throws IOException {
+        try (InputStream stream = getClass().getClassLoader()
+                .getResourceAsStream("mapper/DocumentChunkMapper.xml")) {
+            assertNotNull(stream, "document chunk mapper must be packaged");
+            String mapper = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            String restore = mapper.substring(mapper.indexOf("<update id=\"restoreIndexingByFile\">"),
+                    mapper.indexOf("</update>", mapper.indexOf("<update id=\"restoreIndexingByFile\">")))
+                    .replaceAll("\\s+", " ").toLowerCase();
+
+            assertEquals(true, restore.contains("overlap_content = null"));
+            assertEquals(true, restore.contains("overlap_source_chunk_id = null"));
+            assertEquals(true, restore.contains("overlap_token_count = 0"));
+            assertEquals(true, restore.contains("overlap_character_count = 0"));
+            assertEquals(true, restore.contains("overlap_reduction_reason = null"));
+            assertEquals(true, restore.contains("index_content = null"));
+        }
+    }
+
+    @Test
     void marks_timed_out_chunking_failed_with_its_origin() throws Exception {
         FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
         DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);

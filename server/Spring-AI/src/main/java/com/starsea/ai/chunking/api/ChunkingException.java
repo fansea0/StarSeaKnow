@@ -7,10 +7,6 @@ import java.util.Map;
 public final class ChunkingException extends RuntimeException {
 
     public static final String SOURCE_CHANGED_ERROR_CODE = "SOURCE_CHANGED";
-    public static final String GENERAL_CONTEXT_UNAVAILABLE_ERROR_CODE =
-            "GENERAL_CONTEXT_UNAVAILABLE";
-    public static final String GENERAL_CONTEXT_UNAVAILABLE_MESSAGE =
-            "GENERAL 分块的字符上下文处理尚未启用";
 
     private final HttpStatus status;
     private final Map<String, Object> details;
@@ -54,8 +50,4 @@ public final class ChunkingException extends RuntimeException {
                 Map.of("errorCode", SOURCE_CHANGED_ERROR_CODE));
     }
 
-    public static ChunkingException generalContextUnavailable() {
-        return unprocessable(GENERAL_CONTEXT_UNAVAILABLE_MESSAGE,
-                Map.of("errorCode", GENERAL_CONTEXT_UNAVAILABLE_ERROR_CODE));
-    }
 }

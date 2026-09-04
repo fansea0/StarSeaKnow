@@ -8,12 +8,18 @@ import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.model.SourceLocator;
 import com.starsea.ai.chunking.model.ContextConfig;
+import com.starsea.ai.chunking.model.EnrichedChunk;
+import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
 import com.starsea.ai.chunking.processing.FileProcessingService;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicy;
+import com.starsea.ai.chunking.spi.ChunkContextEnricher;
+import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.mapper.DocumentChunkMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -31,13 +37,25 @@ public class ChunkPreviewPersistenceService {
     private final DocumentChunkMapper chunkMapper;
     private final FileProcessingMapper processingMapper;
     private final FileProcessingService processingService;
+    private final ChunkContextEnricher contextEnricher;
 
+    @Autowired
     public ChunkPreviewPersistenceService(DocumentChunkMapper chunkMapper,
                                           FileProcessingMapper processingMapper,
-                                          FileProcessingService processingService) {
+                                          FileProcessingService processingService,
+                                          ChunkContextEnricher contextEnricher) {
         this.chunkMapper = chunkMapper;
         this.processingMapper = processingMapper;
         this.processingService = processingService;
+        this.contextEnricher = contextEnricher;
+    }
+
+    /** Compatibility constructor used by isolated persistence tests. */
+    public ChunkPreviewPersistenceService(DocumentChunkMapper chunkMapper,
+                                          FileProcessingMapper processingMapper,
+                                          FileProcessingService processingService) {
+        this(chunkMapper, processingMapper, processingService,
+                new StrategyAwareChunkContextEnricher(new CodePointTokenCounter()));
     }
 
     @Transactional
@@ -86,9 +104,28 @@ public class ChunkPreviewPersistenceService {
             throw ChunkingException.conflict("The current DRAFT set changed during replacement");
         }
 
+        java.util.ArrayList<DocumentChunk> inserted = new java.util.ArrayList<>(drafts.size());
         for (int position = 0; position < drafts.size(); position++) {
-            if (chunkMapper.insert(toEntity(tenantId, job, position, drafts.get(position))) != 1) {
+            DocumentChunk entity = toEntity(tenantId, job, position, drafts.get(position));
+            if (chunkMapper.insert(entity) != 1) {
                 throw new IllegalStateException("Unable to persist the complete DRAFT set");
+            }
+            inserted.add(entity);
+        }
+        if ("GENERAL".equalsIgnoreCase(job.strategyCode())) {
+            ChunkRuntimePolicy runtimePolicy = new ChunkRuntimePolicy(
+                    job.strategyCode(), job.strategyConfig(), job.contextConfig(),
+                    job.maxIndexTokens(),
+                    executionMetadata.get("tokenizerId") instanceof String tokenizerId ? tokenizerId : null);
+            List<EnrichedChunk> enriched = contextEnricher.enrich(inserted, runtimePolicy);
+            if (enriched.size() != inserted.size()) {
+                throw new IllegalStateException("Context enrichment omitted a preview chunk");
+            }
+            for (EnrichedChunk value : enriched) {
+                applyDerived(value.chunk(), value);
+                if (chunkMapper.update(value.chunk(), previewScope(value.chunk())) != 1) {
+                    throw new IllegalStateException("Unable to persist enriched preview context");
+                }
             }
         }
 
@@ -144,6 +181,27 @@ public class ChunkPreviewPersistenceService {
         return chunk;
     }
 
+    private void applyDerived(DocumentChunk chunk, EnrichedChunk enriched) {
+        chunk.setOverlapContent(enriched.overlapContent());
+        chunk.setOverlapSourceChunkId(enriched.overlapSourceChunkId());
+        chunk.setOverlapTokenCount(enriched.overlapTokenCount());
+        chunk.setOverlapCharacterCount(enriched.overlapCharacterCount());
+        chunk.setOverlapReductionReason(enriched.overlapReductionReason());
+        chunk.setIndexContent(enriched.indexContent());
+    }
+
+    private com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<DocumentChunk> previewScope(
+            DocumentChunk chunk) {
+        return new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<DocumentChunk>()
+                .eq("tenant_id", chunk.getTenantId())
+                .eq("knowledge_id", chunk.getKnowledgeId())
+                .eq("file_id", chunk.getFileId())
+                .eq("public_id", chunk.getPublicId())
+                .eq("position", chunk.getPosition())
+                .eq("status", ChunkStatus.DRAFT.code())
+                .eq("lock_version", 0);
+    }
+
     private Map<String, Object> sourceLocator(SourceLocator source) {
         if (source == null) {
             return Map.of();
@@ -183,5 +241,17 @@ public class ChunkPreviewPersistenceService {
             throw ChunkingException.notFound("A tenant context is required");
         }
         return context.getTenantId();
+    }
+
+    private static final class CodePointTokenCounter implements TokenCounter {
+        @Override
+        public int count(String text) {
+            return text == null ? 0 : text.codePointCount(0, text.length());
+        }
+
+        @Override
+        public String id() {
+            return "preview-test-code-point";
+        }
     }
 }

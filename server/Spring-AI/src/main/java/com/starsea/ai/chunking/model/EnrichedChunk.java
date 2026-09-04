@@ -8,5 +8,15 @@ public record EnrichedChunk(
         Long overlapSourceChunkId,
         String overlapContent,
         int overlapTokenCount,
+        int overlapCharacterCount,
+        String overlapReductionReason,
         String indexContent) {
+
+    /** Legacy Markdown-compatible constructor. */
+    public EnrichedChunk(DocumentChunk chunk, Long overlapSourceChunkId, String overlapContent,
+                         int overlapTokenCount, String indexContent) {
+        this(chunk, overlapSourceChunkId, overlapContent, overlapTokenCount,
+                overlapContent == null ? 0 : overlapContent.codePointCount(0, overlapContent.length()),
+                null, indexContent);
+    }
 }

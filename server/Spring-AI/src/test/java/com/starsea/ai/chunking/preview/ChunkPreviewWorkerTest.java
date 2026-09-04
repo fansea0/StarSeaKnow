@@ -356,6 +356,7 @@ class ChunkPreviewWorkerTest {
         when(chunkMapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(List.of());
         when(processingMapper.update(any(FileProcessing.class), any(LambdaUpdateWrapper.class))).thenReturn(1);
         when(chunkMapper.insert(any(DocumentChunk.class))).thenReturn(1);
+        when(chunkMapper.update(any(DocumentChunk.class), any())).thenReturn(1);
         ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
                 chunkMapper, processingMapper, realProcessingService);
 
@@ -393,6 +394,7 @@ class ChunkPreviewWorkerTest {
         when(chunkMapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(List.of());
         when(processingMapper.update(any(FileProcessing.class), any(LambdaUpdateWrapper.class))).thenReturn(1);
         when(chunkMapper.insert(any(DocumentChunk.class))).thenReturn(1);
+        when(chunkMapper.update(any(DocumentChunk.class), any())).thenReturn(1);
         ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
                 chunkMapper, processingMapper, stateService);
         ChunkPreviewWorker.Job generalJob = new ChunkPreviewWorker.Job(
@@ -410,7 +412,8 @@ class ChunkPreviewWorkerTest {
                 "preprocessingSummary", Map.of("urlMatches", 3));
 
         service.replace(generalJob, "source-hash", "general-deterministic-v1",
-                policy, context, execution, summary, List.of(draft("First", 2), draft("Second", 3)));
+                policy, context, execution, summary,
+                List.of(generalDraft("First", 2), generalDraft("Second", 3)));
 
         var chunks = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
         verify(chunkMapper, times(2)).insert(chunks.capture());
@@ -418,8 +421,11 @@ class ChunkPreviewWorkerTest {
         assertTrue(chunks.getAllValues().stream().allMatch(chunk -> chunk.getOverlapLimit() == 40));
         assertTrue(chunks.getAllValues().stream().allMatch(
                 chunk -> chunk.getOverlapUnit() == OverlapUnit.CHARACTERS));
-        assertTrue(chunks.getAllValues().stream().allMatch(chunk -> chunk.getOverlapContent() == null));
-        assertTrue(chunks.getAllValues().stream().allMatch(chunk -> chunk.getOverlapCharacterCount() == 0));
+        assertEquals("FIRST_CHUNK", chunks.getAllValues().get(0).getOverlapReductionReason());
+        assertEquals("First", chunks.getAllValues().get(1).getOverlapContent());
+        assertEquals(5, chunks.getAllValues().get(1).getOverlapCharacterCount());
+        assertEquals("上文：First\n\nSecond", chunks.getAllValues().get(1).getIndexContent());
+        verify(chunkMapper, times(2)).update(any(DocumentChunk.class), any());
 
         var metadata = org.mockito.ArgumentCaptor.forClass(FileProcessing.class);
         verify(processingMapper).update(metadata.capture(), any(LambdaUpdateWrapper.class));
@@ -437,6 +443,7 @@ class ChunkPreviewWorkerTest {
         when(chunkMapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(List.of());
         when(processingMapper.update(any(FileProcessing.class), any(LambdaUpdateWrapper.class))).thenReturn(1);
         when(chunkMapper.insert(any(DocumentChunk.class))).thenReturn(1);
+        when(chunkMapper.update(any(DocumentChunk.class), any())).thenReturn(1);
         ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
                 chunkMapper, processingMapper, stateService);
         ContextConfig disabled = new ContextConfig(false, 0, OverlapUnit.CHARACTERS,
@@ -657,6 +664,14 @@ class ChunkPreviewWorkerTest {
                         1, 1, null, null, List.of()),
                 tokens,
                 Map.of("end", "PARAGRAPH_END"));
+    }
+
+    private static ChunkDraft generalDraft(String content, int tokens) {
+        return new ChunkDraft(
+                List.of(), content,
+                new SourceLocator("text", List.of(), 0, content.length(),
+                        1, 1, null, null, List.of()),
+                tokens, Map.of("end", "DELIMITER"));
     }
 
     private static File file(Path path) {

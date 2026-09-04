@@ -8,6 +8,11 @@ import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.runtime.ChunkRuntimePolicyResolver;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicy;
+import com.starsea.ai.chunking.spi.ChunkContextEnricher;
+import com.starsea.ai.chunking.spi.TokenCounter;
+import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
+import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.FileProcessing;
@@ -46,6 +51,7 @@ public class ChunkVectorService {
     private final Executor executor;
     private final SourceHashReader sourceHashReader;
     private final ChunkRuntimePolicyResolver runtimePolicyResolver;
+    private final ChunkContextEnricher contextEnricher;
 
     @Autowired
     public ChunkVectorService(FileProcessingMapper processingMapper,
@@ -55,9 +61,11 @@ public class ChunkVectorService {
                               ChunkVectorWorker worker,
                               TransactionTemplate transactions,
                               @Qualifier("chunkingTaskExecutor") Executor executor,
-                              ChunkRuntimePolicyResolver runtimePolicyResolver) {
+                              ChunkRuntimePolicyResolver runtimePolicyResolver,
+                              ChunkContextEnricher contextEnricher) {
         this(processingMapper, fileMapper, chunkMapper, stateService, worker,
-                transactions, executor, ChunkVectorService::sha256File, runtimePolicyResolver);
+                transactions, executor, ChunkVectorService::sha256File, runtimePolicyResolver,
+                contextEnricher);
     }
 
     public ChunkVectorService(FileProcessingMapper processingMapper,
@@ -69,7 +77,7 @@ public class ChunkVectorService {
                               Executor executor) {
         this(processingMapper, fileMapper, chunkMapper, stateService, worker,
                 transactions, executor, ChunkVectorService::sha256File,
-                new ChunkRuntimePolicyResolver());
+                new ChunkRuntimePolicyResolver(), fallbackEnricher());
     }
 
     ChunkVectorService(FileProcessingMapper processingMapper,
@@ -81,7 +89,8 @@ public class ChunkVectorService {
                        Executor executor,
                        SourceHashReader sourceHashReader) {
         this(processingMapper, fileMapper, chunkMapper, stateService, worker,
-                transactions, executor, sourceHashReader, new ChunkRuntimePolicyResolver());
+                transactions, executor, sourceHashReader, new ChunkRuntimePolicyResolver(),
+                fallbackEnricher());
     }
 
     ChunkVectorService(FileProcessingMapper processingMapper,
@@ -92,7 +101,22 @@ public class ChunkVectorService {
                        TransactionTemplate transactions,
                        Executor executor,
                        SourceHashReader sourceHashReader,
-                       ChunkRuntimePolicyResolver runtimePolicyResolver) {
+                       ChunkContextEnricher contextEnricher) {
+        this(processingMapper, fileMapper, chunkMapper, stateService, worker,
+                transactions, executor, sourceHashReader, new ChunkRuntimePolicyResolver(),
+                contextEnricher);
+    }
+
+    ChunkVectorService(FileProcessingMapper processingMapper,
+                       FileMapper fileMapper,
+                       DocumentChunkMapper chunkMapper,
+                       FileProcessingService stateService,
+                       ChunkVectorWorker worker,
+                       TransactionTemplate transactions,
+                       Executor executor,
+                       SourceHashReader sourceHashReader,
+                       ChunkRuntimePolicyResolver runtimePolicyResolver,
+                       ChunkContextEnricher contextEnricher) {
         this.processingMapper = processingMapper;
         this.fileMapper = fileMapper;
         this.chunkMapper = chunkMapper;
@@ -102,6 +126,7 @@ public class ChunkVectorService {
         this.executor = executor;
         this.sourceHashReader = sourceHashReader;
         this.runtimePolicyResolver = Objects.requireNonNull(runtimePolicyResolver, "runtimePolicyResolver");
+        this.contextEnricher = Objects.requireNonNull(contextEnricher, "contextEnricher");
     }
 
     public void confirm(long knowledgeId, long fileId, ConfirmRequest request) {
@@ -137,9 +162,6 @@ public class ChunkVectorService {
         if (!isScoped(processing, tenantId, knowledgeId, fileId)) {
             throw ChunkingException.notFound(
                     "File was not found in the current tenant and knowledge base");
-        }
-        if ("GENERAL".equalsIgnoreCase(processing.getStrategyCode())) {
-            throw ChunkingException.generalContextUnavailable();
         }
         File file = requireFile(fileId);
         final Path path;
@@ -187,6 +209,10 @@ public class ChunkVectorService {
             }
             requireStableChunk(chunk);
         }
+        ChunkRuntimePolicy runtimePolicy = runtimePolicyResolver.resolve(processing);
+        ChunkVectorWorker.ProcessingSnapshot processingSnapshot =
+                ChunkVectorWorker.ProcessingSnapshot.from(processing, runtimePolicyResolver);
+        List<ChunkVectorWorker.PreparedChunk> prepared = prepare(chunks, chunks, runtimePolicy);
 
         int vectorizingLockVersion;
         if (current == PipelineState.FAILED) {
@@ -203,10 +229,10 @@ public class ChunkVectorService {
         List<ChunkVectorWorker.ChunkSnapshot> snapshots = chunks.stream()
                 .map(chunk -> markIndexing(chunk, tenantId, knowledgeId, fileId))
                 .toList();
-        int maxTokens = runtimePolicyResolver.resolve(processing).maxIndexTokens();
+        int maxTokens = runtimePolicy.maxIndexTokens();
         return new ChunkVectorWorker.BatchJob(tenantId, knowledgeId, fileId,
                 vectorizingLockVersion, source.hash(), maxTokens,
-                source.file(), snapshots, snapshots);
+                source.file(), snapshots, snapshots, processingSnapshot, prepared);
     }
 
     private ChunkVectorWorker.SingleJob prepareSingle(long tenantId, long knowledgeId, long fileId,
@@ -235,6 +261,10 @@ public class ChunkVectorService {
             throw ChunkingException.conflict("Only a DRAFT or ACTIVE chunk can be reindexed");
         }
         chunks.forEach(this::requireStableChunk);
+        ChunkRuntimePolicy runtimePolicy = runtimePolicyResolver.resolve(processing);
+        ChunkVectorWorker.ProcessingSnapshot processingSnapshot =
+                ChunkVectorWorker.ProcessingSnapshot.from(processing, runtimePolicyResolver);
+        List<ChunkVectorWorker.PreparedChunk> prepared = prepare(chunks, List.of(target), runtimePolicy);
 
         int adjustingLockVersion = value(processing.getLockVersion());
         if (current == PipelineState.COMPLETED) {
@@ -254,8 +284,32 @@ public class ChunkVectorService {
                 .toList();
         return new ChunkVectorWorker.SingleJob(tenantId, knowledgeId, fileId,
                 vectorizingLockVersion, source.hash(),
-                runtimePolicyResolver.resolve(processing).maxIndexTokens(),
-                source.file(), allSnapshots, targetSnapshot);
+                runtimePolicy.maxIndexTokens(), source.file(), allSnapshots, targetSnapshot,
+                processingSnapshot, prepared);
+    }
+
+    private List<ChunkVectorWorker.PreparedChunk> prepare(List<DocumentChunk> allChunks,
+                                                          List<DocumentChunk> targets,
+                                                          ChunkRuntimePolicy runtimePolicy) {
+        List<DocumentChunk> detached = allChunks.stream().map(this::detached).toList();
+        java.util.Map<Long, EnrichedChunk> byId = contextEnricher.enrich(detached, runtimePolicy).stream()
+                .filter(value -> value != null && value.chunk() != null
+                        && value.chunk().getId() != null)
+                .collect(java.util.stream.Collectors.toMap(value -> value.chunk().getId(), value -> value));
+        java.util.ArrayList<ChunkVectorWorker.PreparedChunk> prepared =
+                new java.util.ArrayList<>(targets.size());
+        for (DocumentChunk target : targets) {
+            EnrichedChunk value = byId.get(target.getId());
+            if (value == null) {
+                throw ChunkingException.conflict("The context enhancer omitted an indexing chunk");
+            }
+            prepared.add(ChunkVectorWorker.PreparedChunk.from(value));
+        }
+        return List.copyOf(prepared);
+    }
+
+    private DocumentChunk detached(DocumentChunk source) {
+        return ChunkVectorWorker.ChunkSnapshot.current(source).detached();
     }
 
     private ChunkVectorWorker.ChunkSnapshot markIndexing(DocumentChunk chunk, long tenantId,
@@ -378,6 +432,20 @@ public class ChunkVectorService {
 
     private int value(Integer value) {
         return value == null ? 0 : value;
+    }
+
+    private static ChunkContextEnricher fallbackEnricher() {
+        return new StrategyAwareChunkContextEnricher(new TokenCounter() {
+            @Override
+            public int count(String text) {
+                return text == null ? 0 : text.codePointCount(0, text.length());
+            }
+
+            @Override
+            public String id() {
+                return "compatibility-code-point";
+            }
+        });
     }
 
     private record SourceSnapshot(ChunkVectorWorker.FileSnapshot file, String hash) {

@@ -12,6 +12,7 @@ import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
 import com.starsea.ai.chunking.api.ChunkingApiModels.PreviewRequest;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.context.DefaultChunkContextEnricher;
+import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.indexing.ChunkVectorService;
 import com.starsea.ai.chunking.indexing.ChunkVectorWorker;
@@ -29,6 +30,7 @@ import com.starsea.ai.chunking.processing.ChunkTaskDispatcher;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.registry.ChunkStrategyRegistry;
 import com.starsea.ai.chunking.registry.DocumentStructureParserRegistry;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicyResolver;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.chunking.token.HuggingFaceTokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
@@ -242,7 +244,8 @@ class MarkdownChunkingWorkflowTest {
                 repository.transactions);
         ChunkVectorService vectors = new ChunkVectorService(
                 repository.processingMapper, repository.fileMapper, repository.chunkMapper,
-                states, vectorWorker, repository.transactions, executor);
+                states, vectorWorker, repository.transactions, executor,
+                new ChunkRuntimePolicyResolver(), new StrategyAwareChunkContextEnricher(counter));
         return new WorkflowServices(preview, commands, vectors);
     }
 
@@ -460,6 +463,8 @@ class MarkdownChunkingWorkflowTest {
                         if (patch.getPlannerVersion() != null) processing.setPlannerVersion(patch.getPlannerVersion());
                         if (patch.getPolicySnapshot() != null) processing.setPolicySnapshot(patch.getPolicySnapshot());
                         if (patch.getContextPolicy() != null) processing.setContextPolicy(patch.getContextPolicy());
+                        if (patch.getExecutionMetadata() != null) processing.setExecutionMetadata(patch.getExecutionMetadata());
+                        if (patch.getPreviewSummary() != null) processing.setPreviewSummary(patch.getPreviewSummary());
                         return 1;
                     });
         }

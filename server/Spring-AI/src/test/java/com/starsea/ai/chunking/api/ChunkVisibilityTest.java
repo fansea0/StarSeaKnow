@@ -2,6 +2,7 @@ package com.starsea.ai.chunking.api;
 
 import com.starsea.ai.chunking.api.ChunkingApiModels.ChunkResponse;
 import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
+import com.starsea.ai.chunking.model.OverlapUnit;
 import com.starsea.ai.chunking.preview.ChunkCommandService;
 import com.starsea.ai.chunking.preview.ChunkPreviewService;
 import com.starsea.ai.config.GlobalExceptionHandler;
@@ -34,7 +35,9 @@ class ChunkVisibilityTest {
         when(commandService.list(10L, 20L)).thenReturn(List.of(new ChunkResponse(
                 publicId, 3, "Visible body", List.of("Guide", "Install"),
                 Map.of("startLine", 7, "endLine", 11), 4, 0, true, 2,
-                true, 40, "Previous sentence.", 5, null)));
+                true, 40, OverlapUnit.TOKENS, "Previous sentence.", 5, 18,
+                "CONFIGURED_LIMIT", null, "TOKENS", 4, 9, 5,
+                Map.of("delimiterBefore", "---"))));
         MockMvc mockMvc = MockMvcBuilders
                 .standaloneSetup(new ChunkingController(previewService, commandService))
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -57,13 +60,16 @@ class ChunkVisibilityTest {
                 .andExpect(jsonPath("$[0].overlapContent").value("Previous sentence."))
                 .andExpect(jsonPath("$[0].overlapTokenCount").value(5))
                 .andExpect(jsonPath("$[0].overlapCharacterCount").value(18))
+                .andExpect(jsonPath("$[0].overlapReductionReason").value("CONFIGURED_LIMIT"))
                 .andExpect(jsonPath("$[0].overlapActualLength").value(5))
                 .andExpect(jsonPath("$[0].lengthUnit").value("TOKENS"))
+                .andExpect(jsonPath("$[0].bodyLength").value(4))
+                .andExpect(jsonPath("$[0].indexLength").value(9))
                 .andExpect(jsonPath("$[0].overlapTokenLimit").doesNotExist())
                 .andExpect(jsonPath("$[0].overlapUnavailableReason").doesNotExist())
                 .andExpect(jsonPath("$[0].indexContent").doesNotExist())
                 .andExpect(jsonPath("$[0].overlapSourceChunkId").doesNotExist())
-                .andExpect(jsonPath("$[0].boundaryReason").isEmpty())
+                .andExpect(jsonPath("$[0].boundaryReason.delimiterBefore").value("---"))
                 .andExpect(jsonPath("$[0].id").doesNotExist())
                 .andExpect(jsonPath("$[0].tenantId").doesNotExist())
                 .andExpect(jsonPath("$[0].knowledgeId").doesNotExist())

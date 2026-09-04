@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PerChunkOverlapContractTest {
@@ -33,6 +34,7 @@ class PerChunkOverlapContractTest {
         assertTrue(fields.contains("overlapLimit"));
         assertTrue(fields.contains("overlapUnit"));
         assertTrue(fields.contains("overlapCharacterCount"));
+        assertTrue(fields.contains("overlapReductionReason"));
     }
 
     @Test
@@ -64,6 +66,20 @@ class PerChunkOverlapContractTest {
         assertTrue(json.get("overlapEnabled").asBoolean());
         assertEquals(64, request.resolvedOverlapLimit());
         assertEquals(3, json.get("lockVersion").asInt());
+
+        EditChunkRequest generic = objectMapper.readValue("""
+                {"content":"正文","overlapEnabled":true,"overlapLimit":32,
+                 "overlapUnit":"CHARACTERS","lockVersion":4}
+                """, EditChunkRequest.class);
+        assertEquals(32, generic.resolvedOverlapLimit());
+        assertEquals("CHARACTERS", generic.overlapUnit().name());
+
+        EditChunkRequest conflicting = objectMapper.readValue("""
+                {"content":"正文","overlapEnabled":true,"overlapLimit":32,
+                 "overlapUnit":"TOKENS","overlapTokenLimit":40,"lockVersion":4}
+                """, EditChunkRequest.class);
+        assertEquals(422, assertThrows(ChunkingException.class,
+                conflicting::resolvedOverlapLimit).status().value());
     }
 
     @Test
@@ -76,15 +92,18 @@ class PerChunkOverlapContractTest {
             throws Exception {
         assertTrue(recordComponents(ChunkResponse.class).containsAll(List.of(
                 "overlapEnabled", "overlapLimit", "overlapUnit", "overlapContent",
-                "overlapTokenCount", "overlapCharacterCount", "overlapUnavailableReason")));
+                "overlapTokenCount", "overlapCharacterCount", "overlapReductionReason",
+                "overlapUnavailableReason", "lengthUnit", "bodyLength", "indexLength",
+                "overlapActualLength", "boundaryReason")));
         ChunkResponse response = objectMapper.readValue("""
                 {"publicId":"10000000-0000-0000-0000-000000000021","position":1,
                  "content":"正文","sectionPath":[],"sourceLocator":{},"tokenCount":2,
                  "status":0,"isModified":true,"lockVersion":4,
                  "overlapEnabled":true,"overlapLimit":40,"overlapUnit":"CHARACTERS",
                  "overlapContent":"前文。","overlapTokenCount":3,"overlapCharacterCount":3,
-                 "overlapUnavailableReason":null,"lengthUnit":"CHARACTERS",
-                 "bodyLength":2,"indexLength":5,"overlapActualLength":3,"boundaryReason":{}}
+                 "overlapReductionReason":"CONFIGURED_LIMIT","overlapUnavailableReason":null,
+                 "lengthUnit":"CHARACTERS","bodyLength":2,"indexLength":5,
+                 "overlapActualLength":3,"boundaryReason":{"delimiterBefore":"\\n"}}
                 """, ChunkResponse.class);
         JsonNode json = objectMapper.valueToTree(response);
 
@@ -94,7 +113,13 @@ class PerChunkOverlapContractTest {
         assertEquals("前文。", json.get("overlapContent").asText());
         assertEquals(3, json.get("overlapTokenCount").asInt());
         assertEquals(3, json.get("overlapCharacterCount").asInt());
+        assertEquals("CONFIGURED_LIMIT", json.get("overlapReductionReason").asText());
         assertTrue(json.get("overlapUnavailableReason").isNull());
+        assertEquals("CHARACTERS", json.get("lengthUnit").asText());
+        assertEquals(2, json.get("bodyLength").asInt());
+        assertEquals(5, json.get("indexLength").asInt());
+        assertEquals(3, json.get("overlapActualLength").asInt());
+        assertEquals("\n", json.get("boundaryReason").get("delimiterBefore").asText());
         assertTrue(json.get("overlapSourceChunkId") == null);
     }
 

@@ -6,13 +6,14 @@ import com.starsea.ai.chunking.api.ChunkingApiModels.ChunkResponse;
 import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
-import com.starsea.ai.chunking.context.DefaultChunkContextEnricher;
+import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.runtime.ChunkRuntimePolicyResolver;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicy;
 import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
@@ -88,7 +89,7 @@ public class ChunkCommandService {
                                ChunkIndexContentBuilder contentBuilder,
                                ChunkVectorGateway vectorGateway) {
         this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
-                vectorGateway, new DefaultChunkContextEnricher(tokenCounter), Thread::sleep,
+                vectorGateway, new StrategyAwareChunkContextEnricher(tokenCounter), Thread::sleep,
                 new ChunkRuntimePolicyResolver());
     }
 
@@ -100,7 +101,7 @@ public class ChunkCommandService {
                         ChunkVectorGateway vectorGateway,
                         RetrySleeper retrySleeper) {
         this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
-                vectorGateway, new DefaultChunkContextEnricher(tokenCounter), retrySleeper,
+                vectorGateway, new StrategyAwareChunkContextEnricher(tokenCounter), retrySleeper,
                 new ChunkRuntimePolicyResolver());
     }
 
@@ -159,21 +160,20 @@ public class ChunkCommandService {
         }
         long tenantId = requireTenantId();
         FileProcessing processing = lockMutableProcessing(knowledgeId, fileId, tenantId);
-        if ("GENERAL".equalsIgnoreCase(processing.getStrategyCode())) {
-            throw ChunkingException.generalContextUnavailable();
-        }
+        ChunkRuntimePolicy runtimePolicy = runtimePolicyResolver.resolve(processing);
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, request.lockVersion());
         int overlapLimit = requireOverlapLimit(request, target);
         com.starsea.ai.chunking.model.OverlapUnit overlapUnit = target.getOverlapUnit() == null
                 ? com.starsea.ai.chunking.model.OverlapUnit.TOKENS : target.getOverlapUnit();
-        TokenBudget budget = tokenBudget(processing, target.getSectionPath(), request.content());
+        TokenBudget budget = tokenBudget(runtimePolicy, target.getSectionPath(), request.content());
         if (budget.total() > budget.maximum()) {
-            throw ChunkingException.unprocessable("Edited chunk exceeds the token budget", Map.of(
-                    "titleTokenCount", budget.title(),
-                    "bodyTokenCount", budget.body(),
-                    "totalTokenCount", budget.total(),
-                    "maxTokens", budget.maximum()));
+            throw tokenBudgetFailure(budget, runtimePolicy, request.content());
+        }
+        if (runtimePolicy.strategyConfig() instanceof com.starsea.ai.chunking.model.GeneralChunkConfig general
+                && codePoints(request.content()) > general.maxCharacters()) {
+            throw generalBudgetFailure(request.content(), budget.total(), general.maxCharacters(),
+                    runtimePolicy.maxIndexTokens());
         }
 
         DocumentChunk previous = findPreviousChunk(fileId, tenantId, knowledgeId, target);
@@ -186,10 +186,10 @@ public class ChunkCommandService {
         edited.setOverlapEnabled(request.overlapEnabled());
         edited.setOverlapLimit(overlapLimit);
         edited.setOverlapUnit(overlapUnit);
-        EnrichedChunk editedContext = enrich(previous, edited, budget.maximum());
+        EnrichedChunk editedContext = enrich(previous, edited, runtimePolicy);
         applyDerivedContext(edited, editedContext);
         DocumentChunk dependent = changedOverlapDependent(
-                target, edited, dependentCandidate, budget.maximum());
+                target, edited, dependentCandidate, runtimePolicy);
         requireMutableDependent(dependent);
         edited.setStatus(ChunkStatus.DRAFT.code());
         edited.setIsModified(true);
@@ -213,13 +213,13 @@ public class ChunkCommandService {
     public void delete(long knowledgeId, long fileId, UUID chunkPublicId, int lockVersion) {
         long tenantId = requireTenantId();
         FileProcessing processing = lockMutableProcessing(knowledgeId, fileId, tenantId);
+        ChunkRuntimePolicy runtimePolicy = runtimePolicyResolver.resolve(processing);
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, lockVersion);
-        FileProcessing processingSnapshot = processing;
         DocumentChunk dependentCandidate = lockOverlapDependent(
                 fileId, tenantId, knowledgeId, target);
         DocumentChunk dependent = changedOverlapAfterSourceDeletion(
-                dependentCandidate, configuredMaximum(processingSnapshot));
+                dependentCandidate, runtimePolicy);
         requireMutableDependent(dependent);
         if (dependent != null) {
             recalculateDependent(dependent, dependentCandidate.getLockVersion());
@@ -343,13 +343,16 @@ public class ChunkCommandService {
     private int updateEdited(DocumentChunk chunk, int expectedLockVersion) {
         DocumentChunk patch = new DocumentChunk();
         patch.setOverlapEnabled(chunk.getOverlapEnabled());
-        patch.setOverlapTokenLimit(chunk.getOverlapTokenLimit());
+        patch.setOverlapLimit(chunk.getOverlapLimit());
+        patch.setOverlapUnit(chunk.getOverlapUnit());
         patch.setContent(chunk.getContent());
         patch.setTokenCount(chunk.getTokenCount());
         patch.setContentHash(chunk.getContentHash());
         patch.setOverlapContent(chunk.getOverlapContent());
         patch.setOverlapSourceChunkId(chunk.getOverlapSourceChunkId());
         patch.setOverlapTokenCount(chunk.getOverlapTokenCount());
+        patch.setOverlapCharacterCount(chunk.getOverlapCharacterCount());
+        patch.setOverlapReductionReason(chunk.getOverlapReductionReason());
         patch.setIndexContent(chunk.getIndexContent());
         patch.setStatus(ChunkStatus.DRAFT.code());
         patch.setIsModified(true);
@@ -364,6 +367,9 @@ public class ChunkCommandService {
         if (chunk.getOverlapSourceChunkId() == null) {
             update.set("overlap_source_chunk_id", null);
         }
+        if (chunk.getOverlapReductionReason() == null) {
+            update.set("overlap_reduction_reason", null);
+        }
         return chunkMapper.update(patch, update);
     }
 
@@ -373,6 +379,8 @@ public class ChunkCommandService {
         patch.setOverlapContent(chunk.getOverlapContent());
         patch.setOverlapSourceChunkId(chunk.getOverlapSourceChunkId());
         patch.setOverlapTokenCount(chunk.getOverlapTokenCount());
+        patch.setOverlapCharacterCount(chunk.getOverlapCharacterCount());
+        patch.setOverlapReductionReason(chunk.getOverlapReductionReason());
         patch.setIndexContent(chunk.getIndexContent());
         UpdateWrapper<DocumentChunk> update =
                 chunkScope(chunk, expectedLockVersion)
@@ -383,6 +391,9 @@ public class ChunkCommandService {
         }
         if (chunk.getOverlapSourceChunkId() == null) {
             update.set("overlap_source_chunk_id", null);
+        }
+        if (chunk.getOverlapReductionReason() == null) {
+            update.set("overlap_reduction_reason", null);
         }
         return chunkMapper.update(patch, update);
     }
@@ -423,12 +434,13 @@ public class ChunkCommandService {
     }
 
     private DocumentChunk changedOverlapDependent(
-            DocumentChunk target, DocumentChunk edited, DocumentChunk candidate, int maximum) {
+            DocumentChunk target, DocumentChunk edited, DocumentChunk candidate,
+            ChunkRuntimePolicy runtimePolicy) {
         if (candidate == null) {
             return null;
         }
         DocumentChunk recalculated = copyForContext(candidate);
-        applyDerivedContext(recalculated, enrich(edited, recalculated, maximum));
+        applyDerivedContext(recalculated, enrich(edited, recalculated, runtimePolicy));
         boolean referencesTarget = Objects.equals(
                 candidate.getOverlapSourceChunkId(), target.getId())
                 || Objects.equals(recalculated.getOverlapSourceChunkId(), target.getId());
@@ -439,26 +451,29 @@ public class ChunkCommandService {
     }
 
     private DocumentChunk changedOverlapAfterSourceDeletion(
-            DocumentChunk candidate, int maximum) {
+            DocumentChunk candidate, ChunkRuntimePolicy runtimePolicy) {
         if (candidate == null) {
             return null;
         }
         DocumentChunk recalculated = copyForContext(candidate);
-        applyDerivedContext(recalculated, enrich(null, recalculated, maximum));
+        applyDerivedContext(recalculated, enrich(null, recalculated, runtimePolicy));
         return sameDerivedContext(candidate, recalculated) ? null : recalculated;
     }
 
     private boolean sameDerivedContext(DocumentChunk left, DocumentChunk right) {
         return Objects.equals(left.getOverlapContent(), right.getOverlapContent())
                 && Objects.equals(left.getOverlapSourceChunkId(), right.getOverlapSourceChunkId())
-                && Objects.equals(left.getOverlapTokenCount(), right.getOverlapTokenCount())
+                && value(left.getOverlapTokenCount()) == value(right.getOverlapTokenCount())
+                && value(left.getOverlapCharacterCount()) == value(right.getOverlapCharacterCount())
+                && Objects.equals(left.getOverlapReductionReason(), right.getOverlapReductionReason())
                 && Objects.equals(left.getIndexContent(), right.getIndexContent());
     }
 
-    private EnrichedChunk enrich(DocumentChunk previous, DocumentChunk current, int maximum) {
+    private EnrichedChunk enrich(DocumentChunk previous, DocumentChunk current,
+                                 ChunkRuntimePolicy runtimePolicy) {
         List<DocumentChunk> input = previous == null
                 ? List.of(current) : List.of(previous, current);
-        return contextEnricher.enrich(input, maximum).stream()
+        return contextEnricher.enrich(input, runtimePolicy).stream()
                 .filter(value -> Objects.equals(value.chunk().getId(), current.getId()))
                 .findFirst()
                 .orElseThrow(() -> ChunkingException.conflict(
@@ -469,6 +484,8 @@ public class ChunkCommandService {
         chunk.setOverlapContent(enriched.overlapContent());
         chunk.setOverlapSourceChunkId(enriched.overlapSourceChunkId());
         chunk.setOverlapTokenCount(enriched.overlapTokenCount());
+        chunk.setOverlapCharacterCount(enriched.overlapCharacterCount());
+        chunk.setOverlapReductionReason(enriched.overlapReductionReason());
         chunk.setIndexContent(enriched.indexContent());
     }
 
@@ -482,7 +499,14 @@ public class ChunkCommandService {
         copy.setPosition(source.getPosition());
         copy.setContent(source.getContent());
         copy.setOverlapEnabled(source.getOverlapEnabled());
-        copy.setOverlapTokenLimit(source.getOverlapTokenLimit());
+        copy.setOverlapLimit(source.getOverlapLimit());
+        copy.setOverlapUnit(source.getOverlapUnit());
+        copy.setOverlapContent(source.getOverlapContent());
+        copy.setOverlapSourceChunkId(source.getOverlapSourceChunkId());
+        copy.setOverlapTokenCount(source.getOverlapTokenCount());
+        copy.setOverlapCharacterCount(source.getOverlapCharacterCount());
+        copy.setOverlapReductionReason(source.getOverlapReductionReason());
+        copy.setIndexContent(source.getIndexContent());
         copy.setSectionPath(source.getSectionPath());
         copy.setSourceLocator(source.getSourceLocator());
         copy.setTokenCount(source.getTokenCount());
@@ -511,16 +535,34 @@ public class ChunkCommandService {
         return value(processing.getLockVersion());
     }
 
-    private TokenBudget tokenBudget(FileProcessing processing, List<String> sectionPath, String body) {
-        int maximum = configuredMaximum(processing);
+    private TokenBudget tokenBudget(ChunkRuntimePolicy runtimePolicy,
+                                    List<String> sectionPath, String body) {
+        int maximum = runtimePolicy.maxIndexTokens();
         String titleText = contentBuilder.title(sectionPath);
         String fullText = contentBuilder.build(sectionPath, null, body);
         return new TokenBudget(tokenCounter.count(titleText), tokenCounter.count(body),
                 tokenCounter.count(fullText), maximum);
     }
 
-    private int configuredMaximum(FileProcessing processing) {
-        return runtimePolicyResolver.resolve(processing).maxIndexTokens();
+    private ChunkingException tokenBudgetFailure(TokenBudget budget,
+                                                 ChunkRuntimePolicy policy, String body) {
+        if (policy.strategyConfig() instanceof com.starsea.ai.chunking.model.GeneralChunkConfig general) {
+            return generalBudgetFailure(body, budget.total(), general.maxCharacters(), budget.maximum());
+        }
+        return ChunkingException.unprocessable("Edited chunk exceeds the token budget", Map.of(
+                "titleTokenCount", budget.title(),
+                "bodyTokenCount", budget.body(),
+                "totalTokenCount", budget.total(),
+                "maxTokens", budget.maximum()));
+    }
+
+    private ChunkingException generalBudgetFailure(String body, int tokens,
+                                                   int maxCharacters, int maxTokens) {
+        return ChunkingException.unprocessable("Edited GENERAL chunk exceeds its budget", Map.of(
+                "actualCharacterCount", codePoints(body),
+                "actualTokenCount", tokens,
+                "maxCharacters", maxCharacters,
+                "maxIndexTokens", maxTokens));
     }
 
     private List<UUID> vectorIds(DocumentChunk target, DocumentChunk dependent) {

@@ -2,6 +2,9 @@ package com.starsea.ai.chunking.context;
 
 import com.starsea.ai.chunking.model.ContextPolicy;
 import com.starsea.ai.chunking.model.EnrichedChunk;
+import com.starsea.ai.chunking.model.ChunkPolicy;
+import com.starsea.ai.chunking.model.ContextConfig;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicy;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
 import org.junit.jupiter.api.Test;
@@ -17,6 +20,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ChunkContextEnricherTest {
 
     private final DefaultChunkContextEnricher enricher = new DefaultChunkContextEnricher(new CharacterTokenCounter());
+
+    @Test
+    void strategy_aware_entry_keeps_markdown_complete_sentence_format_exactly() {
+        StrategyAwareChunkContextEnricher strategyAware =
+                new StrategyAwareChunkContextEnricher(new CharacterTokenCounter());
+        DocumentChunk first = chunk(11L, 0, List.of("Title"), "One. unfinished",
+                "DOCUMENT_START", "PARAGRAPH_END");
+        DocumentChunk second = chunk(12L, 1, List.of("Title"), "Body",
+                "PARAGRAPH_END", "PARAGRAPH_END");
+        ChunkRuntimePolicy policy = new ChunkRuntimePolicy("MARKDOWN_OPTIMIZED",
+                new ChunkPolicy(1, 20, 512), ContextConfig.markdownDefaults(),
+                512, "character-test");
+
+        EnrichedChunk result = strategyAware.enrich(List.of(first, second), policy).get(1);
+
+        assertNull(result.overlapContent());
+        assertEquals("标题：Title\n\nBody", result.indexContent());
+    }
 
     @Test
     void per_chunk_enabled_setting_overrides_disabled_legacy_file_policy() {
