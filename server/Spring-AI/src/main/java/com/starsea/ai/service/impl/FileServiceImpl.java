@@ -3,6 +3,7 @@ package com.starsea.ai.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.model.PipelineState;
+import com.starsea.ai.chunking.extraction.ManagedExtractionCache;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.domain.Knowledge;
 import com.starsea.ai.domain.KnowledgeFile;
@@ -49,15 +50,18 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
     private final KnowledgeFileMapper knowledgeFileMapper;
     private final KnowledgeMapper knowledgeMapper;
     private final FileProcessingMapper processingMapper;
+    private final ManagedExtractionCache extractionCache;
     private final TransactionTemplate transactionTemplate;
 
     public FileServiceImpl(FileMapper fileMapper, KnowledgeFileMapper knowledgeFileMapper,
                            KnowledgeMapper knowledgeMapper, FileProcessingMapper processingMapper,
+                           ManagedExtractionCache extractionCache,
                            PlatformTransactionManager transactionManager) {
         this.fileMapper = fileMapper;
         this.knowledgeFileMapper = knowledgeFileMapper;
         this.knowledgeMapper = knowledgeMapper;
         this.processingMapper = processingMapper;
+        this.extractionCache = extractionCache;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -102,6 +106,36 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
     @Override
     public List<com.starsea.ai.domain.File> listEnabledByKnowledgeIds(Long tenantId, Set<Long> knowledgeIds) {
         return fileMapper.selectEnabledByKnowledgeIds(tenantId, knowledgeIds);
+    }
+
+    @Override
+    public boolean deleteFile(Long fileId) {
+        long tenantId = requireTenantId();
+        if (fileId == null) {
+            return false;
+        }
+        com.starsea.ai.domain.File file = fileMapper.selectById(fileId);
+        if (file == null || !fileId.equals(file.getId())) {
+            return false;
+        }
+        Path uploadRoot = Path.of(path).toAbsolutePath().normalize();
+        Path source = Path.of(file.getPath()).toAbsolutePath().normalize();
+        if (!source.startsWith(uploadRoot)) {
+            throw new IllegalStateException("文件路径不在受管上传目录中");
+        }
+        extractionCache.deleteManagedFiles(tenantId, fileId);
+        try {
+            if (!Files.deleteIfExists(source)) {
+                throw new IllegalStateException("源文件不存在");
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("源文件删除失败", exception);
+        }
+        Integer removed = transactionTemplate.execute(status -> fileMapper.deleteById(fileId));
+        if (!Integer.valueOf(1).equals(removed)) {
+            throw new IllegalStateException("文件记录删除失败");
+        }
+        return true;
     }
 
     private void writePhysicalFile(MultipartFile file, Path uploadRoot, Path createdPath) {

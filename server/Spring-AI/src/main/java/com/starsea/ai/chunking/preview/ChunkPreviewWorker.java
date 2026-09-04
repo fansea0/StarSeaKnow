@@ -22,7 +22,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -70,7 +69,7 @@ public class ChunkPreviewWorker {
         try {
             ScopedSource source = requireScopedSource(job);
             byte[] exactSource = Files.readAllBytes(source.path());
-            if (exactSource.length == 0 || new String(exactSource, StandardCharsets.UTF_8).isBlank()) {
+            if (exactSource.length == 0) {
                 throw new IllegalArgumentException("The source document is empty");
             }
             String sourceHash = sha256(exactSource);

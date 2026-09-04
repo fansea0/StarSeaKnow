@@ -20,7 +20,6 @@ import com.starsea.ai.mapper.FileProcessingMapper;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -129,7 +128,7 @@ public class ChunkPreviewService {
     private void requireUsableSource(File file) {
         try {
             byte[] bytes = Files.readAllBytes(Path.of(file.getPath()));
-            if (bytes.length == 0 || new String(bytes, StandardCharsets.UTF_8).isBlank()) {
+            if (bytes.length == 0) {
                 throw ChunkingException.unprocessable("The source document is empty");
             }
         } catch (IOException | InvalidPathException | NullPointerException exception) {

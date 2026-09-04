@@ -59,6 +59,13 @@ file:
   outputPath: ${user.dir}/src/main/resources/output/
 
 chunking:
+  extraction:
+    cache-root: ${EXTRACTION_CACHE_ROOT:${user.dir}/data/extraction-cache}
+    max-source-bytes: ${EXTRACTION_MAX_SOURCE_BYTES:52428800}
+    max-output-characters: ${EXTRACTION_MAX_OUTPUT_CHARACTERS:10000000}
+    timeout: ${EXTRACTION_TIMEOUT:30s}
+    max-embedded-depth: ${EXTRACTION_MAX_EMBEDDED_DEPTH:8}
+    max-decompressed-bytes: ${EXTRACTION_MAX_DECOMPRESSED_BYTES:209715200}
   recovery:
     timeout: 10m
     initial-delay: 1m

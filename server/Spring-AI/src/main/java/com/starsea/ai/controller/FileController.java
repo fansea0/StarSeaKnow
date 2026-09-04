@@ -34,23 +34,16 @@ public class FileController {
     @RequireRole("tenant_admin")
     @DeleteMapping("/delete/{fileId}")
     public AjaxResult deleteFile(@PathVariable Long fileId){
-        File file = fileService.getById(fileId);
-        if(file == null){
+        if (!fileService.deleteFile(fileId)) {
             return AjaxResult.error("文件不存在");
         }
-        String path = file.getPath();
-        boolean delete = new java.io.File(path).delete();
-        if(delete){
-            fileService.removeById(fileId);
-            // 防御性:删除向量时也限定tenantId,避免误删其他租户的向量数据
-            com.starsea.ai.auth.AuthContext ctx = com.starsea.ai.auth.AuthContext.current();
-            String tenantExpr = (ctx == null || ctx.getTenantId() == null)
-                    ? "tenantId == -1"
-                    : "tenantId == " + ctx.getTenantId();
-            vectorStore.delete("(fileId == " + fileId + ") && " + tenantExpr);
-            return AjaxResult.success("删除成功");
-        }
-        return AjaxResult.error("删除失败");
+        // 防御性:删除向量时也限定tenantId,避免误删其他租户的向量数据
+        com.starsea.ai.auth.AuthContext ctx = com.starsea.ai.auth.AuthContext.current();
+        String tenantExpr = (ctx == null || ctx.getTenantId() == null)
+                ? "tenantId == -1"
+                : "tenantId == " + ctx.getTenantId();
+        vectorStore.delete("(fileId == " + fileId + ") && " + tenantExpr);
+        return AjaxResult.success("删除成功");
     }
 
     @RequireRole("tenant_admin")

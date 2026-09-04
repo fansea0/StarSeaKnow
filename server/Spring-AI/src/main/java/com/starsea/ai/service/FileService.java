@@ -18,4 +18,5 @@ public interface FileService extends IService<File> {
     Long uploadToKnowledge(MultipartFile file,Long knowledgeId);
     List<FileVo> listByKnowledgeId(Long knowledgeId);
     List<File> listEnabledByKnowledgeIds(Long tenantId, Set<Long> knowledgeIds);
+    boolean deleteFile(Long fileId);
 }

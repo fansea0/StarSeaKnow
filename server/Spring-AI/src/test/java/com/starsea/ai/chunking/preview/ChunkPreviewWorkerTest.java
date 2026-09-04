@@ -176,6 +176,20 @@ class ChunkPreviewWorkerTest {
     }
 
     @Test
+    void non_empty_source_with_whitespace_bytes_reaches_the_registered_parser() throws Exception {
+        Files.write(source, new byte[]{0x20, 0x0a, 0x0d});
+        FileResource resource = new FileResource(1L, 10L, 20L, null, "source.md", "md", source);
+        ParsedStructure structure = new ParsedStructure(resource, List.of());
+        when(parser.parse(any(FileResource.class))).thenReturn(structure);
+        when(planner.plan(eq(structure), any(ChunkPolicy.class))).thenReturn(List.of(draft("Body", 3)));
+
+        worker.generate(job());
+
+        verify(parser).parse(any(FileResource.class));
+        verify(persistence).replace(eq(job()), anyString(), eq("markdown-adaptive-v1"), any(), any());
+    }
+
+    @Test
     void parser_reads_the_same_immutable_snapshot_that_was_hashed() throws Exception {
         String capturedContent = Files.readString(source);
         String changedContent = "# Changed concurrently\n";

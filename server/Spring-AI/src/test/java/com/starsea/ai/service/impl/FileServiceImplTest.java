@@ -2,6 +2,7 @@ package com.starsea.ai.service.impl;
 
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.model.PipelineState;
+import com.starsea.ai.chunking.extraction.ManagedExtractionCache;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.domain.Knowledge;
 import com.starsea.ai.domain.KnowledgeFile;
@@ -57,6 +58,7 @@ class FileServiceImplTest {
     private KnowledgeMapper knowledgeMapper;
     private FileProcessingMapper processingMapper;
     private TestTransactionManager transactionManager;
+    private ManagedExtractionCache extractionCache;
     private FileServiceImpl service;
 
     @BeforeEach
@@ -66,8 +68,9 @@ class FileServiceImplTest {
         knowledgeMapper = mock(KnowledgeMapper.class);
         processingMapper = mock(FileProcessingMapper.class);
         transactionManager = new TestTransactionManager();
+        extractionCache = mock(ManagedExtractionCache.class);
         service = new FileServiceImpl(fileMapper, knowledgeFileMapper, knowledgeMapper,
-                processingMapper, transactionManager);
+                processingMapper, extractionCache, transactionManager);
         ReflectionTestUtils.setField(service, "path", uploadDirectory.toString());
         AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 7L, 1L, "tenant_admin", "jti-1"));
     }
@@ -268,6 +271,24 @@ class FileServiceImplTest {
         assertEquals(35, files.get(0).getProgress());
         assertEquals("parser failed", files.get(0).getProcessingError());
         verify(fileMapper).selectByKnowledgeId(1L, 10L);
+    }
+
+    @Test
+    void delete_file_removes_managed_extraction_and_source_through_the_service() throws Exception {
+        Path source = uploadDirectory.resolve("1/10/source.txt");
+        Files.createDirectories(source.getParent());
+        Files.writeString(source, "source");
+        com.starsea.ai.domain.File row = new com.starsea.ai.domain.File();
+        row.setId(20L);
+        row.setPath(source.toString());
+        when(fileMapper.selectById(20L)).thenReturn(row);
+        when(fileMapper.deleteById(20L)).thenReturn(1);
+
+        assertTrue(service.deleteFile(20L));
+
+        verify(extractionCache).deleteManagedFiles(1L, 20L);
+        verify(fileMapper).deleteById(20L);
+        assertFalse(Files.exists(source));
     }
 
     @Test
