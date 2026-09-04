@@ -42,6 +42,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class PgVectorRagServiceImpl implements RagService {
 
+    private static final int MAX_CANDIDATE_TOP_K = 1_000;
+
     private final VectorStore vectorStore;
     @Lazy
     private final FileService fileService;
@@ -78,19 +80,35 @@ public class PgVectorRagServiceImpl implements RagService {
         String filter = tenantFilterExpression(tenantId)
                 + " && knowledgeId in [" + knowledgeIds + "]"
                 + " && fileId in [" + fileIds + "]";
-        SearchRequest request = SearchRequest.builder()
-                .query(query.query())
-                .topK(overfetchTopK(query.topK()))
-                .similarityThreshold(query.scoreThreshold())
-                .filterExpression(filter)
-                .build();
+        int candidateTopK = overfetchTopK(query.topK());
+        while (true) {
+            SearchRequest request = SearchRequest.builder()
+                    .query(query.query())
+                    .topK(candidateTopK)
+                    .similarityThreshold(query.scoreThreshold())
+                    .filterExpression(filter)
+                    .build();
+            List<Document> documents = safeDocuments(vectorStore.similaritySearch(request));
+            List<ScoredCandidate> candidates = documents.stream()
+                    .map(document -> new ScoredCandidate(stablePublicId(document),
+                            normalizeScore(document.getScore())))
+                    .filter(candidate -> candidate.publicId() != null)
+                    .filter(candidate -> candidate.score() >= query.scoreThreshold())
+                    .toList();
+            List<RetrievedChunk> results = resolveCandidates(
+                    candidates, tenantId, query.knowledgeIds(), enabledFiles.keySet(), query.topK());
+            if (results.size() == query.topK()
+                    || documents.size() < candidateTopK
+                    || candidateTopK == MAX_CANDIDATE_TOP_K) {
+                return results;
+            }
+            candidateTopK = nextCandidateTopK(candidateTopK);
+        }
+    }
 
-        List<ScoredCandidate> candidates = safeDocuments(vectorStore.similaritySearch(request)).stream()
-                .map(document -> new ScoredCandidate(stablePublicId(document),
-                        normalizeScore(document.getScore())))
-                .filter(candidate -> candidate.publicId() != null)
-                .filter(candidate -> candidate.score() >= query.scoreThreshold())
-                .toList();
+    private List<RetrievedChunk> resolveCandidates(List<ScoredCandidate> candidates, long tenantId,
+                                                    Set<Long> knowledgeIds, Set<Long> enabledFileIds,
+                                                    int topK) {
         if (candidates.isEmpty()) {
             return List.of();
         }
@@ -99,8 +117,8 @@ public class PgVectorRagServiceImpl implements RagService {
                 .map(ScoredCandidate::publicId)
                 .toList()));
         Map<UUID, DocumentChunk> activeChunks = safeChunks(chunkMapper.findActiveByPublicIds(
-                tenantId, query.knowledgeIds(), publicIds)).stream()
-                .filter(chunk -> isPermittedActive(chunk, tenantId, query.knowledgeIds(), enabledFiles.keySet()))
+                tenantId, knowledgeIds, publicIds)).stream()
+                .filter(chunk -> isPermittedActive(chunk, tenantId, knowledgeIds, enabledFileIds))
                 .collect(Collectors.toMap(DocumentChunk::getPublicId, Function.identity(),
                         (first, ignored) -> first, LinkedHashMap::new));
         if (activeChunks.isEmpty()) {
@@ -116,7 +134,7 @@ public class PgVectorRagServiceImpl implements RagService {
                 continue;
             }
             results.add(toRetrievedChunk(candidate, chunk));
-            if (results.size() == query.topK()) {
+            if (results.size() == topK) {
                 break;
             }
         }
@@ -208,7 +226,11 @@ public class PgVectorRagServiceImpl implements RagService {
         if (topK < 1) {
             throw new IllegalArgumentException("topK must be positive");
         }
-        return (int) Math.min((long) topK * 3L, 100L);
+        return (int) Math.min((long) topK * 3L, MAX_CANDIDATE_TOP_K);
+    }
+
+    private static int nextCandidateTopK(int currentTopK) {
+        return (int) Math.min((long) currentTopK * 2L, MAX_CANDIDATE_TOP_K);
     }
 
     private static double normalizeScore(Double score) {

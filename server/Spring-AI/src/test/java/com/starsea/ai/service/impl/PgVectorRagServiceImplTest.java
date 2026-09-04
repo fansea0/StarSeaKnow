@@ -58,6 +58,12 @@ class PgVectorRagServiceImplTest {
             UUID.fromString("55555555-5555-5555-5555-555555555555");
     private static final UUID SECOND_PARENT_ID =
             UUID.fromString("66666666-6666-6666-6666-666666666666");
+    private static final UUID FIFTH_CHUNK_ID =
+            UUID.fromString("77777777-7777-7777-7777-777777777777");
+    private static final UUID SIXTH_CHUNK_ID =
+            UUID.fromString("88888888-8888-8888-8888-888888888888");
+    private static final UUID SEVENTH_CHUNK_ID =
+            UUID.fromString("99999999-9999-9999-9999-999999999999");
 
     @BeforeEach
     void setAuth() {
@@ -191,6 +197,42 @@ class PgVectorRagServiceImplTest {
         assertEquals(List.of("标题：Parent\n\nfirst parent body", "标题：Parent\n\nsecond parent body"),
                 result.stream().map(RetrievedChunk::content).toList());
         assertEquals(List.of(7, 9), result.stream().map(RetrievedChunk::chunkIndex).toList());
+    }
+
+    @Test
+    void expands_saturated_candidate_window_until_top_k_distinct_parent_contexts_are_found() {
+        Fixture fixture = fixture();
+        List<UUID> sameParentChildren = List.of(
+                FIRST_CHUNK_ID, SECOND_CHUNK_ID, THIRD_CHUNK_ID,
+                FOURTH_CHUNK_ID, FIFTH_CHUNK_ID, SIXTH_CHUNK_ID);
+        List<Document> firstWindow = java.util.stream.IntStream.range(0, sameParentChildren.size())
+                .mapToObj(index -> candidate(sameParentChildren.get(index), "same parent " + index,
+                        0.99 - index * 0.01))
+                .toList();
+        List<Document> expandedWindow = new java.util.ArrayList<>(firstWindow);
+        expandedWindow.add(candidate(SEVENTH_CHUNK_ID, "next parent", 0.90));
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenAnswer(invocation -> invocation.<SearchRequest>getArgument(0).getTopK() == 6
+                        ? firstWindow : expandedWindow);
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenAnswer(invocation -> invocation.<List<UUID>>getArgument(2).stream()
+                        .map(publicId -> childChunk(publicId,
+                                SEVENTH_CHUNK_ID.equals(publicId) ? SECOND_PARENT_ID : FIRST_PARENT_ID,
+                                SEVENTH_CHUNK_ID.equals(publicId) ? 9 : 7,
+                                "child index", SEVENTH_CHUNK_ID.equals(publicId)
+                                        ? "second parent body" : "first parent body"))
+                        .toList());
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("query", Set.of(KNOWLEDGE_ID), 2, 0.2));
+
+        assertEquals(List.of(FIRST_CHUNK_ID, SEVENTH_CHUNK_ID),
+                result.stream().map(RetrievedChunk::chunkId).toList());
+        assertEquals(List.of(0.99, 0.90), result.stream().map(RetrievedChunk::score).toList());
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<SearchRequest> searches = (ArgumentCaptor) ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore, org.mockito.Mockito.times(2)).similaritySearch(searches.capture());
+        assertEquals(List.of(6, 12), searches.getAllValues().stream().map(SearchRequest::getTopK).toList());
     }
 
     @Test
