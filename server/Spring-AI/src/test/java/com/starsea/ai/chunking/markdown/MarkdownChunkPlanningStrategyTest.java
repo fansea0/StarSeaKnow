@@ -68,6 +68,20 @@ class MarkdownChunkPlanningStrategyTest {
     }
 
     @Test
+    void typed_planning_counts_recursive_splits_proven_by_final_boundary_metadata() {
+        String content = "abcdefghijklmnopqrstuvwxyz";
+        ParsedStructure structure = structure(List.of(
+                block("p1", BlockType.PARAGRAPH, content, content, null, List.of())));
+
+        ChunkPlanningResult result = strategy.plan(new ChunkPlanningRequest(
+                structure, new ChunkPolicy(1, 5, 10), ContextConfig.markdownDefaults(), 512));
+
+        assertTrue(result.drafts().size() > 1);
+        assertTrue(result.forcedSplitCount() > 0);
+        assertEquals(0, result.tokenLimitedSplitCount());
+    }
+
+    @Test
     void persisted_token_count_measures_body_only_while_fit_includes_the_title_path() {
         ParsedStructure structure = structure(List.of(
                 block("p1", BlockType.PARAGRAPH, "正文", "正文", null,

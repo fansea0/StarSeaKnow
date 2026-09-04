@@ -234,6 +234,29 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void general_edit_uses_persisted_execution_token_limit_without_a_max_tokens_field() {
+        DocumentChunk chunk = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Body");
+        chunk.setSectionPath(List.of("Long"));
+        FileProcessing general = processing(PipelineState.ADJUSTING, 5, Map.of(
+                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 500,
+                "collapseWhitespace", true, "removeUrls", false, "removeEmails", false));
+        general.setStrategyCode("GENERAL");
+        general.setContextPolicy(Map.of("enabled", true, "limit", 40));
+        general.setExecutionMetadata(Map.of("tokenHardLimit", 12, "tokenizerId", "test-tokenizer"));
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(general);
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(chunk);
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                        new EditChunkRequest("abcdef", 2)));
+
+        assertEquals(12, failure.details().get("maxTokens"));
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+    }
+
+    @Test
     void edit_active_atomically_invalidates_target_and_dependent_before_vector_cleanup() {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
         target.setSectionPath(List.of());
@@ -748,7 +771,10 @@ class ChunkCommandServiceTest {
         processing.setKnowledgeId(KNOWLEDGE_ID);
         processing.setPipelineState(state.code());
         processing.setLockVersion(lockVersion);
+        processing.setStrategyCode("MARKDOWN_OPTIMIZED");
         processing.setPolicySnapshot(policy);
+        processing.setContextPolicy(Map.of("overlapEnabled", false, "overlapTokens", 40));
+        processing.setExecutionMetadata(Map.of());
         return processing;
     }
 

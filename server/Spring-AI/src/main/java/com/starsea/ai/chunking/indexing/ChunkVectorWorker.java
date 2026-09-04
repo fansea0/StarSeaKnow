@@ -7,6 +7,7 @@ import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicyResolver;
 import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
@@ -17,6 +18,7 @@ import com.starsea.ai.mapper.FileMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -46,6 +48,28 @@ public class ChunkVectorWorker {
     private final TokenCounter tokenCounter;
     private final ChunkVectorGateway gateway;
     private final TransactionTemplate transactions;
+    private final ChunkRuntimePolicyResolver runtimePolicyResolver;
+
+    @Autowired
+    public ChunkVectorWorker(FileProcessingMapper processingMapper,
+                             FileMapper fileMapper,
+                             DocumentChunkMapper chunkMapper,
+                             FileProcessingService stateService,
+                             ChunkContextEnricher enricher,
+                             TokenCounter tokenCounter,
+                             ChunkVectorGateway gateway,
+                             TransactionTemplate transactions,
+                             ChunkRuntimePolicyResolver runtimePolicyResolver) {
+        this.processingMapper = processingMapper;
+        this.fileMapper = fileMapper;
+        this.chunkMapper = chunkMapper;
+        this.stateService = stateService;
+        this.enricher = enricher;
+        this.tokenCounter = tokenCounter;
+        this.gateway = gateway;
+        this.transactions = transactions;
+        this.runtimePolicyResolver = Objects.requireNonNull(runtimePolicyResolver, "runtimePolicyResolver");
+    }
 
     public ChunkVectorWorker(FileProcessingMapper processingMapper,
                              FileMapper fileMapper,
@@ -55,14 +79,8 @@ public class ChunkVectorWorker {
                              TokenCounter tokenCounter,
                              ChunkVectorGateway gateway,
                              TransactionTemplate transactions) {
-        this.processingMapper = processingMapper;
-        this.fileMapper = fileMapper;
-        this.chunkMapper = chunkMapper;
-        this.stateService = stateService;
-        this.enricher = enricher;
-        this.tokenCounter = tokenCounter;
-        this.gateway = gateway;
-        this.transactions = transactions;
+        this(processingMapper, fileMapper, chunkMapper, stateService, enricher,
+                tokenCounter, gateway, transactions, new ChunkRuntimePolicyResolver());
     }
 
     public void vectorizeBatch(BatchJob job) {
@@ -333,7 +351,7 @@ public class ChunkVectorWorker {
 
     private void requireJobSnapshot(FileProcessing processing, String sourceHash, int maxTokens) {
         if (!Objects.equals(processing.getSourceHash(), sourceHash)
-                || configuredMaximum(processing.getPolicySnapshot()) != maxTokens) {
+                || runtimePolicyResolver.resolve(processing).maxIndexTokens() != maxTokens) {
             throw ChunkingException.conflict("File indexing policy snapshot changed");
         }
     }
@@ -378,17 +396,6 @@ public class ChunkVectorWorker {
     private Map<Long, DocumentChunk> byId(List<DocumentChunk> chunks) {
         return chunks.stream().filter(chunk -> chunk.getId() != null)
                 .collect(Collectors.toMap(DocumentChunk::getId, chunk -> chunk));
-    }
-
-    static int configuredMaximum(Map<String, Object> policySnapshot) {
-        Object configured = policySnapshot == null ? null : policySnapshot.get("maxTokens");
-        if (configured instanceof Number number) {
-            int value = number.intValue();
-            if (value > 0 && value <= ChunkPolicy.MAX_ALLOWED_TOKENS) {
-                return value;
-            }
-        }
-        return ChunkPolicy.MAX_ALLOWED_TOKENS;
     }
 
     private PipelineState pipelineState(FileProcessing processing) {

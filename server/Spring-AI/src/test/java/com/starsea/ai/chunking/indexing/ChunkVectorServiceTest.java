@@ -447,6 +447,43 @@ class ChunkVectorServiceTest {
     }
 
     @Test
+    void worker_validates_general_job_against_persisted_execution_token_limit() {
+        RecordingTransactionManager transactionManager = new RecordingTransactionManager();
+        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        FileMapper fileMapper = mock(FileMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
+        TokenCounter tokenCounter = mock(TokenCounter.class);
+        ChunkVectorGateway gateway = mock(ChunkVectorGateway.class);
+        FileProcessing processing = processing(PipelineState.VECTORIZING, 8, "hash");
+        processing.setStrategyCode("GENERAL");
+        processing.setPolicySnapshot(Map.of(
+                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 500,
+                "collapseWhitespace", true, "removeUrls", false, "removeEmails", false));
+        processing.setContextPolicy(Map.of("enabled", true, "limit", 40));
+        processing.setExecutionMetadata(Map.of("tokenHardLimit", 400, "tokenizerId", "test-tokenizer"));
+        DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.INDEXING, 3, "body");
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(List.of(first));
+        when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
+        when(enricher.enrich(any(), eq(400)))
+                .thenReturn(List.of(new EnrichedChunk(first, null, null, 0, "body")));
+        when(tokenCounter.count("body")).thenReturn(2);
+        when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
+        ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
+                stateService, enricher, tokenCounter, gateway, transactions);
+
+        worker.vectorizeSingle(singleJob(first, 8, ContextPolicy.defaults(), 400));
+
+        verify(stateService).transition(KNOWLEDGE_ID, FILE_ID, PipelineState.VECTORIZING,
+                PipelineState.COMPLETED, 8);
+    }
+
+    @Test
     void single_success_activates_the_exact_chunk_and_completes_when_all_are_active() {
         RecordingTransactionManager transactionManager = new RecordingTransactionManager();
         TransactionTemplate transactions = new TransactionTemplate(transactionManager);
@@ -916,8 +953,10 @@ class ChunkVectorServiceTest {
         processing.setLockVersion(lockVersion);
         processing.setProgress(state == PipelineState.COMPLETED || state == PipelineState.ADJUSTING ? 100 : 0);
         processing.setSourceHash(sourceHash);
+        processing.setStrategyCode("MARKDOWN_OPTIMIZED");
         processing.setPolicySnapshot(Map.of("maxTokens", 512));
         processing.setContextPolicy(Map.of("overlapEnabled", false, "overlapTokens", 40));
+        processing.setExecutionMetadata(Map.of());
         return processing;
     }
 

@@ -7,6 +7,7 @@ import com.starsea.ai.chunking.model.ContextMode;
 import com.starsea.ai.chunking.model.DelimiterMode;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
 import com.starsea.ai.chunking.model.OverlapUnit;
+import com.starsea.ai.domain.FileProcessing;
 import org.springframework.stereotype.Component;
 
 import java.util.Locale;
@@ -16,6 +17,12 @@ import java.util.Objects;
 /** The single parser for policy values read from persisted JSONB snapshots. */
 @Component
 public final class ChunkRuntimePolicyResolver {
+
+    public ChunkRuntimePolicy resolve(FileProcessing processing) {
+        Objects.requireNonNull(processing, "processing");
+        return resolve(processing.getStrategyCode(), processing.getPolicySnapshot(),
+                processing.getContextPolicy(), processing.getExecutionMetadata());
+    }
 
     public ChunkRuntimePolicy resolve(
             String strategyCode,
@@ -37,10 +44,10 @@ public final class ChunkRuntimePolicyResolver {
     private ChunkRuntimePolicy markdown(String code, Map<String, Object> policy,
                                         Map<String, Object> context, Map<String, Object> execution) {
         ChunkPolicy defaults = ChunkPolicy.defaults();
-        ChunkPolicy config = new ChunkPolicy(
-                integer(policy, "minTokens", defaults.minTokens()),
-                integer(policy, "targetTokens", defaults.targetTokens()),
-                integer(policy, "maxTokens", defaults.maxTokens()));
+        int maximum = integer(policy, "maxTokens", defaults.maxTokens());
+        int target = integer(policy, "targetTokens", Math.min(defaults.targetTokens(), maximum));
+        int minimum = integer(policy, "minTokens", Math.min(defaults.minTokens(), target));
+        ChunkPolicy config = new ChunkPolicy(minimum, target, maximum);
         ContextConfig contextConfig = context(context, OverlapUnit.TOKENS, ContextMode.COMPLETE_SENTENCE,
                 ContextConfig.markdownDefaults(), true);
         int maxIndexTokens = integer(execution, "tokenHardLimit", config.maxTokens());

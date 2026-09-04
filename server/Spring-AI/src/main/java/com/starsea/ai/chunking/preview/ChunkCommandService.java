@@ -8,11 +8,11 @@ import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.context.DefaultChunkContextEnricher;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
-import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicyResolver;
 import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
@@ -54,6 +54,7 @@ public class ChunkCommandService {
     private final ChunkContextEnricher contextEnricher;
     private final ChunkVectorGateway vectorGateway;
     private final RetrySleeper retrySleeper;
+    private final ChunkRuntimePolicyResolver runtimePolicyResolver;
 
     @Autowired
     public ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -62,9 +63,22 @@ public class ChunkCommandService {
                                TokenCounter tokenCounter,
                                ChunkIndexContentBuilder contentBuilder,
                                ChunkVectorGateway vectorGateway,
+                               ChunkContextEnricher contextEnricher,
+                               ChunkRuntimePolicyResolver runtimePolicyResolver) {
+        this(chunkMapper, processingMapper, stateService, tokenCounter,
+                contentBuilder, vectorGateway, contextEnricher, Thread::sleep, runtimePolicyResolver);
+    }
+
+    public ChunkCommandService(DocumentChunkMapper chunkMapper,
+                               FileProcessingMapper processingMapper,
+                               FileProcessingService stateService,
+                               TokenCounter tokenCounter,
+                               ChunkIndexContentBuilder contentBuilder,
+                               ChunkVectorGateway vectorGateway,
                                ChunkContextEnricher contextEnricher) {
         this(chunkMapper, processingMapper, stateService, tokenCounter,
-                contentBuilder, vectorGateway, contextEnricher, Thread::sleep);
+                contentBuilder, vectorGateway, contextEnricher, Thread::sleep,
+                new ChunkRuntimePolicyResolver());
     }
 
     public ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -74,7 +88,8 @@ public class ChunkCommandService {
                                ChunkIndexContentBuilder contentBuilder,
                                ChunkVectorGateway vectorGateway) {
         this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
-                vectorGateway, new DefaultChunkContextEnricher(tokenCounter), Thread::sleep);
+                vectorGateway, new DefaultChunkContextEnricher(tokenCounter), Thread::sleep,
+                new ChunkRuntimePolicyResolver());
     }
 
     ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -85,7 +100,8 @@ public class ChunkCommandService {
                         ChunkVectorGateway vectorGateway,
                         RetrySleeper retrySleeper) {
         this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
-                vectorGateway, new DefaultChunkContextEnricher(tokenCounter), retrySleeper);
+                vectorGateway, new DefaultChunkContextEnricher(tokenCounter), retrySleeper,
+                new ChunkRuntimePolicyResolver());
     }
 
     ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -96,6 +112,19 @@ public class ChunkCommandService {
                         ChunkVectorGateway vectorGateway,
                         ChunkContextEnricher contextEnricher,
                         RetrySleeper retrySleeper) {
+        this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
+                vectorGateway, contextEnricher, retrySleeper, new ChunkRuntimePolicyResolver());
+    }
+
+    ChunkCommandService(DocumentChunkMapper chunkMapper,
+                        FileProcessingMapper processingMapper,
+                        FileProcessingService stateService,
+                        TokenCounter tokenCounter,
+                        ChunkIndexContentBuilder contentBuilder,
+                        ChunkVectorGateway vectorGateway,
+                        ChunkContextEnricher contextEnricher,
+                        RetrySleeper retrySleeper,
+                        ChunkRuntimePolicyResolver runtimePolicyResolver) {
         this.chunkMapper = chunkMapper;
         this.processingMapper = processingMapper;
         this.stateService = stateService;
@@ -104,6 +133,7 @@ public class ChunkCommandService {
         this.contextEnricher = contextEnricher;
         this.vectorGateway = vectorGateway;
         this.retrySleeper = retrySleeper;
+        this.runtimePolicyResolver = Objects.requireNonNull(runtimePolicyResolver, "runtimePolicyResolver");
     }
 
     @Transactional(readOnly = true)
@@ -187,7 +217,7 @@ public class ChunkCommandService {
         DocumentChunk dependentCandidate = lockOverlapDependent(
                 fileId, tenantId, knowledgeId, target);
         DocumentChunk dependent = changedOverlapAfterSourceDeletion(
-                dependentCandidate, configuredMaximum(processingSnapshot.getPolicySnapshot()));
+                dependentCandidate, configuredMaximum(processingSnapshot));
         requireMutableDependent(dependent);
         if (dependent != null) {
             recalculateDependent(dependent, dependentCandidate.getLockVersion());
@@ -480,22 +510,15 @@ public class ChunkCommandService {
     }
 
     private TokenBudget tokenBudget(FileProcessing processing, List<String> sectionPath, String body) {
-        int maximum = configuredMaximum(processing.getPolicySnapshot());
+        int maximum = configuredMaximum(processing);
         String titleText = contentBuilder.title(sectionPath);
         String fullText = contentBuilder.build(sectionPath, null, body);
         return new TokenBudget(tokenCounter.count(titleText), tokenCounter.count(body),
                 tokenCounter.count(fullText), maximum);
     }
 
-    private int configuredMaximum(Map<String, Object> policySnapshot) {
-        Object configured = policySnapshot == null ? null : policySnapshot.get("maxTokens");
-        if (configured instanceof Number number) {
-            int maximum = number.intValue();
-            if (maximum > 0 && maximum <= ChunkPolicy.MAX_ALLOWED_TOKENS) {
-                return maximum;
-            }
-        }
-        return ChunkPolicy.MAX_ALLOWED_TOKENS;
+    private int configuredMaximum(FileProcessing processing) {
+        return runtimePolicyResolver.resolve(processing).maxIndexTokens();
     }
 
     private List<UUID> vectorIds(DocumentChunk target, DocumentChunk dependent) {

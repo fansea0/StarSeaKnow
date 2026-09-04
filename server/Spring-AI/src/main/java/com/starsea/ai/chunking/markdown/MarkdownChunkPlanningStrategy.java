@@ -81,7 +81,11 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
         if (!(request.strategyConfig() instanceof ChunkPolicy policy)) {
             throw new IllegalArgumentException("Markdown planner requires ChunkPolicy");
         }
-        return new ChunkPlanningResult(planDrafts(request.structure(), policy), 0, 0);
+        List<ChunkDraft> drafts = planDrafts(request.structure(), policy);
+        int forcedSplitCount = Math.toIntExact(drafts.stream()
+                .filter(draft -> Boolean.TRUE.equals(draft.boundaryReason().get("forcedSplit")))
+                .count());
+        return new ChunkPlanningResult(drafts, forcedSplitCount, 0);
     }
 
     private List<ChunkDraft> planDrafts(ParsedStructure structure, ChunkPolicy policy) {

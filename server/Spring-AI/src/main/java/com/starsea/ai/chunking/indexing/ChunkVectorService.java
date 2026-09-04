@@ -7,6 +7,7 @@ import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
+import com.starsea.ai.chunking.runtime.ChunkRuntimePolicyResolver;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.FileProcessing;
@@ -44,6 +45,7 @@ public class ChunkVectorService {
     private final TransactionTemplate transactions;
     private final Executor executor;
     private final SourceHashReader sourceHashReader;
+    private final ChunkRuntimePolicyResolver runtimePolicyResolver;
 
     @Autowired
     public ChunkVectorService(FileProcessingMapper processingMapper,
@@ -52,9 +54,22 @@ public class ChunkVectorService {
                               FileProcessingService stateService,
                               ChunkVectorWorker worker,
                               TransactionTemplate transactions,
-                              @Qualifier("chunkingTaskExecutor") Executor executor) {
+                              @Qualifier("chunkingTaskExecutor") Executor executor,
+                              ChunkRuntimePolicyResolver runtimePolicyResolver) {
         this(processingMapper, fileMapper, chunkMapper, stateService, worker,
-                transactions, executor, ChunkVectorService::sha256File);
+                transactions, executor, ChunkVectorService::sha256File, runtimePolicyResolver);
+    }
+
+    public ChunkVectorService(FileProcessingMapper processingMapper,
+                              FileMapper fileMapper,
+                              DocumentChunkMapper chunkMapper,
+                              FileProcessingService stateService,
+                              ChunkVectorWorker worker,
+                              TransactionTemplate transactions,
+                              Executor executor) {
+        this(processingMapper, fileMapper, chunkMapper, stateService, worker,
+                transactions, executor, ChunkVectorService::sha256File,
+                new ChunkRuntimePolicyResolver());
     }
 
     ChunkVectorService(FileProcessingMapper processingMapper,
@@ -65,6 +80,19 @@ public class ChunkVectorService {
                        TransactionTemplate transactions,
                        Executor executor,
                        SourceHashReader sourceHashReader) {
+        this(processingMapper, fileMapper, chunkMapper, stateService, worker,
+                transactions, executor, sourceHashReader, new ChunkRuntimePolicyResolver());
+    }
+
+    ChunkVectorService(FileProcessingMapper processingMapper,
+                       FileMapper fileMapper,
+                       DocumentChunkMapper chunkMapper,
+                       FileProcessingService stateService,
+                       ChunkVectorWorker worker,
+                       TransactionTemplate transactions,
+                       Executor executor,
+                       SourceHashReader sourceHashReader,
+                       ChunkRuntimePolicyResolver runtimePolicyResolver) {
         this.processingMapper = processingMapper;
         this.fileMapper = fileMapper;
         this.chunkMapper = chunkMapper;
@@ -73,6 +101,7 @@ public class ChunkVectorService {
         this.transactions = transactions;
         this.executor = executor;
         this.sourceHashReader = sourceHashReader;
+        this.runtimePolicyResolver = Objects.requireNonNull(runtimePolicyResolver, "runtimePolicyResolver");
     }
 
     public void confirm(long knowledgeId, long fileId, ConfirmRequest request) {
@@ -171,7 +200,7 @@ public class ChunkVectorService {
         List<ChunkVectorWorker.ChunkSnapshot> snapshots = chunks.stream()
                 .map(chunk -> markIndexing(chunk, tenantId, knowledgeId, fileId))
                 .toList();
-        int maxTokens = ChunkVectorWorker.configuredMaximum(processing.getPolicySnapshot());
+        int maxTokens = runtimePolicyResolver.resolve(processing).maxIndexTokens();
         return new ChunkVectorWorker.BatchJob(tenantId, knowledgeId, fileId,
                 vectorizingLockVersion, source.hash(), maxTokens,
                 source.file(), snapshots, snapshots);
@@ -222,7 +251,7 @@ public class ChunkVectorService {
                 .toList();
         return new ChunkVectorWorker.SingleJob(tenantId, knowledgeId, fileId,
                 vectorizingLockVersion, source.hash(),
-                ChunkVectorWorker.configuredMaximum(processing.getPolicySnapshot()),
+                runtimePolicyResolver.resolve(processing).maxIndexTokens(),
                 source.file(), allSnapshots, targetSnapshot);
     }
 

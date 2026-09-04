@@ -57,6 +57,15 @@ class ChunkRuntimePolicyResolverTest {
     }
 
     @Test
+    void resolves_partial_legacy_markdown_snapshot_that_only_saved_max_tokens() {
+        ChunkRuntimePolicy runtime = resolver.resolve(
+                "MARKDOWN_OPTIMIZED", Map.of("maxTokens", 12), Map.of(), Map.of());
+
+        assertEquals(new ChunkPolicy(12, 12, 12), runtime.strategyConfig());
+        assertEquals(12, runtime.maxIndexTokens());
+    }
+
+    @Test
     void resolves_general_character_policy_and_server_owned_context_mode() {
         ChunkRuntimePolicy runtime = resolver.resolve(
                 "GENERAL",
