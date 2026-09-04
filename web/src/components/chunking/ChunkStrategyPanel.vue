@@ -13,10 +13,10 @@
         :key="strategy.code"
         type="button"
         class="strategy-card"
-        :class="{ 'is-selected': strategy.code === selectedCode, 'is-disabled': strategy.disabled }"
+        :class="{ 'is-selected': strategy.code === selectedCode, 'is-disabled': strategy.disabled || interactionDisabled }"
         :data-strategy="strategy.code"
-        :disabled="strategy.disabled"
-        :aria-disabled="strategy.disabled ? 'true' : 'false'"
+        :disabled="strategy.disabled || interactionDisabled"
+        :aria-disabled="strategy.disabled || interactionDisabled ? 'true' : 'false'"
         :aria-pressed="strategy.code === selectedCode ? 'true' : 'false'"
         @click="$emit('select', strategy.code)"
       >
@@ -79,6 +79,7 @@ const props = defineProps({
   contextConfig: { type: Object, default: () => ({ enabled: false, limit: 40 }) },
   serverFieldErrors: { type: Object, default: () => ({}) },
   configDisabled: { type: Boolean, default: false },
+  interactionDisabled: { type: Boolean, default: false },
   configValid: { type: Boolean, default: true },
   loading: { type: Boolean, default: false },
   submitting: { type: Boolean, default: false },

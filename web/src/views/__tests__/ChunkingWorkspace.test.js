@@ -268,6 +268,90 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find('[data-testid="field-error-delimiter"]').exists()).toBe(false)
   })
 
+  it('locks strategy cards and selected controls for the complete preview request lifecycle', async () => {
+    const pendingPreview = deferred()
+    const pendingRefresh = deferred()
+    createPreview.mockReturnValue(pendingPreview.promise)
+    getProcessing
+      .mockResolvedValueOnce(processing(0))
+      .mockReturnValueOnce(pendingRefresh.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+    await wrapper.get('[data-strategy="GENERAL"]').trigger('click')
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('[data-strategy="GENERAL"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-strategy="GENERAL"]').attributes('aria-disabled')).toBe('true')
+    expect(wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="general-delimiter"] input').attributes('disabled')).toBeDefined()
+    wrapper.vm.selectStrategy('MARKDOWN_OPTIMIZED')
+    wrapper.vm.updateStrategyConfig({ ...wrapper.vm.strategyConfig, maxCharacters: 999 })
+    expect(wrapper.vm.selectedStrategy).toBe('GENERAL')
+    expect(wrapper.vm.strategyConfig.maxCharacters).toBe(500)
+
+    pendingPreview.resolve({ status: 202 })
+    await flushPromises()
+    expect(wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').attributes('disabled')).toBeDefined()
+    wrapper.vm.openConfirmDialog()
+    expect(wrapper.vm.confirmDialogVisible).toBe(false)
+
+    pendingRefresh.resolve(processing(1, { strategyCode: 'GENERAL' }))
+    await flushPromises()
+    expect(wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('does not attach a late 422 response to a different strategy', async () => {
+    const pendingPreview = deferred()
+    createPreview.mockReturnValue(pendingPreview.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+    await wrapper.get('[data-strategy="GENERAL"]').trigger('click')
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await nextTick()
+
+    wrapper.vm.selectedStrategy = 'MARKDOWN_OPTIMIZED'
+    pendingPreview.reject({ response: { status: 422, data: { data: { fieldErrors: { delimiter: '迟到错误' } } } } })
+    await flushPromises()
+
+    expect(wrapper.vm.serverFieldErrors).toEqual({})
+    expect(wrapper.find('[data-testid="field-error-delimiter"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('分块设置不符合要求')
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('clears cross-field delimiter errors when mode changes', async () => {
+    createPreview.mockRejectedValueOnce({ response: { status: 422, data: { data: { fieldErrors: { delimiter: '正则模式下分隔符无效' } } } } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+    await wrapper.get('[data-strategy="GENERAL"]').trigger('click')
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="delimiter-mode-regex"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="field-error-delimiter"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('clears cross-field limit errors when max characters changes', async () => {
+    createPreview.mockRejectedValueOnce({ response: { status: 422, data: { data: { fieldErrors: { limit: '补充上限超过正文预算' } } } } })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+    await wrapper.get('[data-strategy="GENERAL"]').trigger('click')
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeDefined()
+
+    const maximum = wrapper.get('[data-testid="general-max"] input')
+    await maximum.setValue('600')
+    await maximum.trigger('change')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('补充上限超过正文预算')
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
   it('renders only persisted processing summary values, including zero counts', async () => {
     getProcessing.mockResolvedValue(processing(2, {
       preprocessingSummary: { whitespaceMatches: 0, whitespaceCharactersRemoved: 0, urlMatches: 0, urlCharactersReplaced: 0, emailMatches: 0, emailCharactersReplaced: 0, controlCharactersRemoved: 0, emptySegmentsRemoved: 0 },

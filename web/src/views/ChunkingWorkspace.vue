@@ -16,7 +16,8 @@
         :strategy-config="strategyConfig"
         :context-config="contextConfig"
         :server-field-errors="serverFieldErrors"
-        :config-disabled="!strategyConfigHydrated"
+        :config-disabled="!strategyConfigHydrated || fileMutationInProgress"
+        :interaction-disabled="fileMutationInProgress"
         :config-valid="configValid"
         :loading="capabilityLoading"
         :submitting="previewSubmitting"
@@ -452,6 +453,7 @@ export default {
       }
     },
     selectStrategy(code) {
+      if (this.fileMutationInProgress) return
       const strategy = this.strategies.find(item => item.code === code)
       if (!strategy || strategy.disabled) return
       this.selectedStrategy = code
@@ -460,14 +462,14 @@ export default {
       this.serverFieldErrors = {}
     },
     updateStrategyConfig(config) {
-      if (!this.selectedStrategy || !this.currentStrategyState) return
+      if (this.fileMutationInProgress || !this.selectedStrategy || !this.currentStrategyState) return
       this.strategyStates = {
         ...this.strategyStates,
         [this.selectedStrategy]: { ...this.currentStrategyState, strategyConfig: { ...config } },
       }
     },
     updateContextConfig(config) {
-      if (!this.selectedStrategy || !this.currentStrategyState) return
+      if (this.fileMutationInProgress || !this.selectedStrategy || !this.currentStrategyState) return
       this.strategyStates = {
         ...this.strategyStates,
         [this.selectedStrategy]: { ...this.currentStrategyState, contextConfig: { ...config } },
@@ -482,14 +484,8 @@ export default {
     },
     clearServerFieldError(field) {
       if (!Object.keys(this.serverFieldErrors).length) return
-      if (!field || field === 'strategyConfig') {
-        this.serverFieldErrors = {}
-        return
-      }
-      const errors = { ...this.serverFieldErrors }
-      delete errors[field]
-      delete errors[`contextConfig.${field}`]
-      this.serverFieldErrors = errors
+      this.serverFieldErrors = {}
+      this.submissionError = ''
     },
     async refreshProcessing(forceChunkLoad = false, context = this.currentContext()) {
       if (!this.isCurrent(context)) return false
@@ -599,6 +595,9 @@ export default {
         || (isRetry ? !this.canRetryPreview : !this.canPreview)) return
       const selected = this.strategies.find(strategy => strategy.code === this.selectedStrategy)
       if (!selected || selected.disabled) return
+      const requestedStrategyCode = this.selectedStrategy
+      const requestedStrategyConfig = { ...this.strategyConfig }
+      const requestedContextConfig = { ...this.contextConfig }
       const context = this.currentContext()
       this.previewSubmitting = true
       this.submissionError = ''
@@ -620,9 +619,9 @@ export default {
         }
 
         await createPreview(context.knowledgeId, context.fileId, {
-          strategyCode: this.selectedStrategy,
-          strategyConfig: { ...this.strategyConfig },
-          contextConfig: { ...this.contextConfig },
+          strategyCode: requestedStrategyCode,
+          strategyConfig: requestedStrategyConfig,
+          contextConfig: requestedContextConfig,
           replaceEditedDrafts,
           lockVersion: this.processing.lockVersion,
         })
@@ -632,7 +631,8 @@ export default {
       } catch (cause) {
         if (!this.isCurrent(context)) return
         const status = cause?.response?.status
-        if (status === 422) {
+        if (status === 422 && this.selectedStrategy !== requestedStrategyCode) return
+        if (status === 422 && this.selectedStrategy === requestedStrategyCode) {
           this.serverFieldErrors = {
             ...(cause?.response?.data?.data?.fieldErrors || cause?.response?.data?.fieldErrors || {}),
           }

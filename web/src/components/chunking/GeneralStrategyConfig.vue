@@ -156,7 +156,7 @@ const localErrors = computed(() => {
   const errors = {}
   const length = countUnicodeCodePoints(actualDelimiter.value)
   if (!length) errors.delimiter = '分隔符不能为空'
-  else if (length > 256) errors.delimiter = '分隔符不能超过 256 个 Unicode 字符'
+  else if (length > delimiterMaximum.value) errors.delimiter = `分隔符不能超过 ${delimiterMaximum.value} 个 Unicode 字符`
   if (!Number.isInteger(values.maxCharacters) || values.maxCharacters < limits.value.maxCharacters.min || values.maxCharacters > limits.value.maxCharacters.max) {
     errors.maxCharacters = `最大字符数必须是 ${limits.value.maxCharacters.min}–${limits.value.maxCharacters.max} 的整数`
   }
@@ -166,6 +166,10 @@ const localErrors = computed(() => {
   return errors
 })
 const serverLimitError = computed(() => props.serverFieldErrors.limit || props.serverFieldErrors['contextConfig.limit'] || '')
+const delimiterMaximum = computed(() => {
+  const maximum = Number(field('delimiter')?.max)
+  return Number.isInteger(maximum) && maximum > 0 ? maximum : 256
+})
 const valid = computed(() => Object.keys(localErrors.value).length === 0 && Object.keys(props.serverFieldErrors).length === 0)
 
 function hydrate() {
@@ -220,6 +224,7 @@ function applyRecommendation() {
 
 watch([() => props.configFields, () => props.initialValues, () => props.initialContextConfig], hydrate, { immediate: true, deep: true })
 watch([delimiterDisplay, values, context], publish, { deep: true })
+watch(() => props.serverFieldErrors, publish, { deep: true })
 </script>
 
 <style scoped>

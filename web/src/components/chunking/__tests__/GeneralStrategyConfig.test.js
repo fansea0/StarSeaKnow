@@ -78,4 +78,17 @@ describe('GeneralStrategyConfig', () => {
     expect(wrapper.get('[data-testid="length-budget-rail"]').attributes('aria-label')).toContain('最大 500 字符')
     expect(wrapper.get('[data-testid="length-budget-rail"]').attributes('aria-label')).toContain('建议 75 字符')
   })
+
+  it('uses descriptor delimiter max while counting decoded Unicode code points', async () => {
+    const customFields = fields.map(field => field.key === 'delimiter' ? { ...field, max: 1 } : field)
+    const wrapper = mountConfig({ configFields: customFields })
+
+    await wrapper.get('[data-testid="general-delimiter"] input').setValue('\\n')
+    expect(wrapper.text()).not.toContain('分隔符不能超过 1 个')
+    expect(wrapper.emitted('config-change').at(-1)[0].delimiter).toBe('\n')
+
+    await wrapper.get('[data-testid="general-delimiter"] input').setValue('\\\\n')
+    expect(wrapper.text()).toContain('分隔符不能超过 1 个 Unicode 字符')
+    expect(wrapper.emitted('validity-change').at(-1)[0]).toBe(false)
+  })
 })
