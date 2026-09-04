@@ -5,6 +5,7 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingApiModels.ConfirmRequest;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.domain.DocumentChunk;
@@ -28,6 +29,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -155,6 +157,10 @@ public class ChunkVectorService {
             }
             requireStableChunk(chunk);
         }
+        if (chunks.stream().noneMatch(this::isVectorizable)) {
+            throw ChunkingException.unprocessable(
+                    "Confirmation requires at least one chunk that can be vectorized");
+        }
 
         int vectorizingLockVersion;
         if (current == PipelineState.FAILED) {
@@ -168,13 +174,18 @@ public class ChunkVectorService {
                     confirmedLockVersion).lockVersion();
         }
 
+        Map<Long, UUID> parentPublicIds = parentPublicIds(chunks);
         List<ChunkVectorWorker.ChunkSnapshot> snapshots = chunks.stream()
-                .map(chunk -> markIndexing(chunk, tenantId, knowledgeId, fileId))
+                .map(chunk -> markIndexing(chunk, tenantId, knowledgeId, fileId,
+                        parentPublicId(chunk, parentPublicIds)))
+                .toList();
+        List<ChunkVectorWorker.ChunkSnapshot> vectorTargets = snapshots.stream()
+                .filter(ChunkVectorWorker.ChunkSnapshot::vectorizable)
                 .toList();
         int maxTokens = ChunkVectorWorker.configuredMaximum(processing.getPolicySnapshot());
         return new ChunkVectorWorker.BatchJob(tenantId, knowledgeId, fileId,
                 vectorizingLockVersion, source.hash(), maxTokens,
-                source.file(), snapshots, snapshots);
+                source.file(), snapshots, vectorTargets);
     }
 
     private ChunkVectorWorker.SingleJob prepareSingle(long tenantId, long knowledgeId, long fileId,
@@ -195,6 +206,9 @@ public class ChunkVectorService {
                 .findFirst()
                 .orElseThrow(() -> ChunkingException.notFound(
                         "Chunk was not found in the requested file"));
+        if (!isVectorizable(target)) {
+            throw ChunkingException.unprocessable("A PARENT chunk cannot be reindexed");
+        }
         ChunkStatus status = chunkStatus(target);
         if (status == ChunkStatus.INDEXING) {
             throw ChunkingException.conflict("An INDEXING chunk cannot be reindexed again");
@@ -213,12 +227,15 @@ public class ChunkVectorService {
         int vectorizingLockVersion = stateService.transition(knowledgeId, fileId,
                 PipelineState.ADJUSTING, PipelineState.VECTORIZING,
                 adjustingLockVersion).lockVersion();
+        Map<Long, UUID> parentPublicIds = parentPublicIds(chunks);
         ChunkVectorWorker.ChunkSnapshot targetSnapshot = markIndexing(
-                target, tenantId, knowledgeId, fileId);
+                target, tenantId, knowledgeId, fileId,
+                parentPublicId(target, parentPublicIds));
         List<ChunkVectorWorker.ChunkSnapshot> allSnapshots = chunks.stream()
                 .map(chunk -> Objects.equals(chunk.getId(), target.getId())
                         ? targetSnapshot
-                        : ChunkVectorWorker.ChunkSnapshot.current(chunk))
+                        : ChunkVectorWorker.ChunkSnapshot.current(
+                                chunk, parentPublicId(chunk, parentPublicIds)))
                 .toList();
         return new ChunkVectorWorker.SingleJob(tenantId, knowledgeId, fileId,
                 vectorizingLockVersion, source.hash(),
@@ -227,9 +244,10 @@ public class ChunkVectorService {
     }
 
     private ChunkVectorWorker.ChunkSnapshot markIndexing(DocumentChunk chunk, long tenantId,
-                                                          long knowledgeId, long fileId) {
+                                                          long knowledgeId, long fileId,
+                                                          UUID parentPublicId) {
         ChunkVectorWorker.ChunkSnapshot snapshot =
-                ChunkVectorWorker.ChunkSnapshot.afterMarking(chunk);
+                ChunkVectorWorker.ChunkSnapshot.afterMarking(chunk, parentPublicId);
         DocumentChunk patch = new DocumentChunk();
         patch.setStatus(ChunkStatus.INDEXING.code());
         int updated = chunkMapper.update(patch, new UpdateWrapper<DocumentChunk>()
@@ -308,6 +326,37 @@ public class ChunkVectorService {
                 || chunk.getTenantId() == null || chunk.getKnowledgeId() == null
                 || chunk.getFileId() == null) {
             throw ChunkingException.conflict("Chunk identity or lock version is invalid");
+        }
+    }
+
+    private Map<Long, UUID> parentPublicIds(List<DocumentChunk> chunks) {
+        return chunks.stream()
+                .filter(chunk -> chunkType(chunk) == ChunkType.PARENT)
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        DocumentChunk::getId, DocumentChunk::getPublicId));
+    }
+
+    private UUID parentPublicId(DocumentChunk chunk, Map<Long, UUID> parentPublicIds) {
+        if (chunkType(chunk) != ChunkType.CHILD) {
+            return null;
+        }
+        UUID parentPublicId = parentPublicIds.get(chunk.getParentChunkId());
+        if (parentPublicId == null) {
+            throw ChunkingException.conflict("A CHILD chunk references an invalid parent");
+        }
+        return parentPublicId;
+    }
+
+    private boolean isVectorizable(DocumentChunk chunk) {
+        return chunkType(chunk) != ChunkType.PARENT;
+    }
+
+    private ChunkType chunkType(DocumentChunk chunk) {
+        try {
+            return chunk.getChunkType() == null
+                    ? ChunkType.SINGLE : ChunkType.fromCode(chunk.getChunkType());
+        } catch (IllegalArgumentException exception) {
+            throw ChunkingException.conflict("The current chunk type is invalid");
         }
     }
 

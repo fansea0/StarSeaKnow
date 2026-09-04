@@ -137,7 +137,10 @@ public class ChunkCommandService {
         FileProcessing processing = lockMutableProcessing(knowledgeId, fileId, tenantId);
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, request.lockVersion());
-        TokenBudget budget = tokenBudget(processing, target.getSectionPath(), request.content());
+        ChunkType targetType = requireVectorizable(target, "edited");
+        requireChildOverlapMatchesPolicy(processing, targetType, request);
+        TokenBudget budget = tokenBudget(
+                processing, targetType, target.getSectionPath(), request.content());
         if (budget.total() > budget.maximum()) {
             throw ChunkingException.unprocessable("Edited chunk exceeds the token budget", Map.of(
                     "titleTokenCount", budget.title(),
@@ -184,11 +187,13 @@ public class ChunkCommandService {
         FileProcessing processing = lockMutableProcessing(knowledgeId, fileId, tenantId);
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, lockVersion);
+        ChunkType targetType = requireVectorizable(target, "deleted");
         FileProcessing processingSnapshot = processing;
         DocumentChunk dependentCandidate = lockOverlapDependent(
                 fileId, tenantId, knowledgeId, target);
         DocumentChunk dependent = changedOverlapAfterSourceDeletion(
-                dependentCandidate, configuredMaximum(processingSnapshot.getPolicySnapshot()));
+                dependentCandidate,
+                configuredMaximum(processingSnapshot.getPolicySnapshot(), targetType));
         requireMutableDependent(dependent);
         if (dependent != null) {
             recalculateDependent(dependent, dependentCandidate.getLockVersion());
@@ -197,6 +202,10 @@ public class ChunkCommandService {
                 fileId, tenantId, knowledgeId, chunkPublicId, lockVersion);
         if (deleted != 1) {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
+        }
+        if (targetType == ChunkType.CHILD && target.getParentChunkId() != null) {
+            chunkMapper.deleteEmptyParent(
+                    target.getParentChunkId(), tenantId, knowledgeId, fileId);
         }
         int adjustingLockVersion = moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
         scheduleVectorCleanup(tenantId, knowledgeId, fileId, adjustingLockVersion,
@@ -208,8 +217,11 @@ public class ChunkCommandService {
     public void requireConfirmable(long knowledgeId, long fileId) {
         long tenantId = requireTenantId();
         requireScopedProcessing(knowledgeId, fileId, tenantId);
-        if (chunkMapper.findByFile(fileId, tenantId, knowledgeId).isEmpty()) {
-            throw ChunkingException.unprocessable("Confirmation requires at least one chunk");
+        boolean hasVectorizable = chunkMapper.findByFile(fileId, tenantId, knowledgeId).stream()
+                .anyMatch(this::isVectorizable);
+        if (!hasVectorizable) {
+            throw ChunkingException.unprocessable(
+                    "Confirmation requires at least one chunk that can be vectorized");
         }
     }
 
@@ -373,8 +385,9 @@ public class ChunkCommandService {
         if (target.getPosition() == null) {
             return null;
         }
-        return chunkMapper.findScopedByPosition(
+        DocumentChunk previous = chunkMapper.findScopedByPosition(
                 fileId, tenantId, knowledgeId, target.getPosition() - 1);
+        return isVectorizable(previous) ? previous : null;
     }
 
     private DocumentChunk lockOverlapDependent(
@@ -388,6 +401,8 @@ public class ChunkCommandService {
         return dependent != null
                 && Integer.valueOf(expectedPosition).equals(dependent.getPosition())
                 && Boolean.TRUE.equals(dependent.getOverlapEnabled())
+                && isVectorizable(dependent)
+                && sameParent(target, dependent)
                 ? dependent : null;
     }
 
@@ -449,6 +464,10 @@ public class ChunkCommandService {
         copy.setKnowledgeId(source.getKnowledgeId());
         copy.setFileId(source.getFileId());
         copy.setPosition(source.getPosition());
+        copy.setChunkType(source.getChunkType());
+        copy.setParentChunkId(source.getParentChunkId());
+        copy.setParentPublicId(source.getParentPublicId());
+        copy.setSiblingPosition(source.getSiblingPosition());
         copy.setContent(source.getContent());
         copy.setOverlapEnabled(source.getOverlapEnabled());
         copy.setOverlapTokenLimit(source.getOverlapTokenLimit());
@@ -480,16 +499,18 @@ public class ChunkCommandService {
         return value(processing.getLockVersion());
     }
 
-    private TokenBudget tokenBudget(FileProcessing processing, List<String> sectionPath, String body) {
-        int maximum = configuredMaximum(processing.getPolicySnapshot());
+    private TokenBudget tokenBudget(FileProcessing processing, ChunkType type,
+                                    List<String> sectionPath, String body) {
+        int maximum = configuredMaximum(processing.getPolicySnapshot(), type);
         String titleText = contentBuilder.title(sectionPath);
         String fullText = contentBuilder.build(sectionPath, null, body);
         return new TokenBudget(tokenCounter.count(titleText), tokenCounter.count(body),
                 tokenCounter.count(fullText), maximum);
     }
 
-    private int configuredMaximum(Map<String, Object> policySnapshot) {
-        Object configured = policySnapshot == null ? null : policySnapshot.get("maxTokens");
+    private int configuredMaximum(Map<String, Object> policySnapshot, ChunkType type) {
+        String key = type == ChunkType.CHILD ? "childMaxTokens" : "maxTokens";
+        Object configured = policySnapshot == null ? null : policySnapshot.get(key);
         if (configured instanceof Number number) {
             int maximum = number.intValue();
             if (maximum > 0 && maximum <= ChunkPolicy.MAX_ALLOWED_TOKENS) {
@@ -501,10 +522,10 @@ public class ChunkCommandService {
 
     private List<UUID> vectorIds(DocumentChunk target, DocumentChunk dependent) {
         LinkedHashSet<UUID> ids = new LinkedHashSet<>();
-        if (target.getPublicId() != null) {
+        if (isVectorizable(target) && target.getPublicId() != null) {
             ids.add(target.getPublicId());
         }
-        if (dependent != null && dependent.getPublicId() != null) {
+        if (isVectorizable(dependent) && dependent.getPublicId() != null) {
             ids.add(dependent.getPublicId());
         }
         return List.copyOf(ids);
@@ -571,6 +592,47 @@ public class ChunkCommandService {
     private ChunkType chunkType(DocumentChunk chunk) {
         Integer code = chunk.getChunkType();
         return code == null ? ChunkType.SINGLE : ChunkType.fromCode(code);
+    }
+
+    private ChunkType requireVectorizable(DocumentChunk chunk, String operation) {
+        ChunkType type = chunkType(chunk);
+        if (type == ChunkType.PARENT) {
+            throw ChunkingException.unprocessable("A PARENT chunk cannot be " + operation);
+        }
+        return type;
+    }
+
+    private boolean isVectorizable(DocumentChunk chunk) {
+        return chunk != null && chunkType(chunk) != ChunkType.PARENT;
+    }
+
+    private boolean sameParent(DocumentChunk source, DocumentChunk dependent) {
+        if (chunkType(source) != ChunkType.CHILD) {
+            return true;
+        }
+        return chunkType(dependent) == ChunkType.CHILD
+                && Objects.equals(source.getParentChunkId(), dependent.getParentChunkId());
+    }
+
+    private void requireChildOverlapMatchesPolicy(FileProcessing processing, ChunkType type,
+                                                  EditChunkRequest request) {
+        if (type != ChunkType.CHILD) {
+            return;
+        }
+        Map<String, Object> snapshot = processing.getPolicySnapshot();
+        Object configured = snapshot == null ? null : snapshot.get("childOverlapTokens");
+        if (!(configured instanceof Number number)
+                || number.intValue() < 0 || number.intValue() > 128) {
+            throw ChunkingException.conflict("The child overlap policy snapshot is invalid");
+        }
+        int overlapTokens = number.intValue();
+        boolean expectedEnabled = overlapTokens > 0;
+        int expectedLimit = Math.max(overlapTokens, 1);
+        if (!Objects.equals(request.overlapEnabled(), expectedEnabled)
+                || !Objects.equals(request.overlapTokenLimit(), expectedLimit)) {
+            throw ChunkingException.unprocessable(
+                    "Child overlap settings must match the file strategy snapshot");
+        }
     }
 
     private int siblingPosition(DocumentChunk chunk) {

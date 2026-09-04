@@ -1,12 +1,14 @@
 package com.starsea.ai.chunking.indexing;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.starsea.ai.chunking.model.ChunkType;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -42,7 +44,7 @@ class SpringAiChunkVectorGatewayTest {
         assertEquals(chunkPublicId.toString(), document.getId());
         assertEquals("标题：指南 > 网络\n\n重置密码。", document.getText());
         assertEquals(Set.of("tenantId", "knowledgeId", "fileId", "documentPublicId",
-                        "documentChunkId", "chunkIndex", "fileType", "sectionPath"),
+                        "documentChunkId", "chunkIndex", "fileType", "sectionPath", "chunkType"),
                 document.getMetadata().keySet());
         assertEquals(1L, document.getMetadata().get("tenantId"));
         assertEquals(10L, document.getMetadata().get("knowledgeId"));
@@ -52,8 +54,30 @@ class SpringAiChunkVectorGatewayTest {
         assertEquals(3, document.getMetadata().get("chunkIndex"));
         assertEquals("md", document.getMetadata().get("fileType"));
         assertEquals("[\"指南\",\"网络\"]", document.getMetadata().get("sectionPath"));
+        assertEquals("SINGLE", document.getMetadata().get("chunkType"));
         assertTrue(document.getMetadata().values().stream().allMatch(value ->
                 value instanceof String || value instanceof Number || value instanceof Boolean));
+    }
+
+    @Test
+    void child_metadata_includes_parent_public_id() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        SpringAiChunkVectorGateway gateway = new SpringAiChunkVectorGateway(
+                vectorStore, new ObjectMapper());
+        UUID childPublicId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        UUID documentPublicId = UUID.fromString("22222222-2222-2222-2222-222222222222");
+        UUID parentPublicId = UUID.fromString("33333333-3333-3333-3333-333333333333");
+        ChunkVectorGateway.VectorDocument child = new ChunkVectorGateway.VectorDocument(
+                childPublicId, "child", 1L, 10L, 20L, documentPublicId,
+                2, "md", List.of("Guide"), ChunkType.CHILD, parentPublicId);
+
+        gateway.add(List.of(child));
+
+        ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(captor.capture());
+        Map<String, Object> metadata = captor.getValue().get(0).getMetadata();
+        assertEquals("CHILD", metadata.get("chunkType"));
+        assertEquals(parentPublicId.toString(), metadata.get("parentChunkId"));
     }
 
     @Test

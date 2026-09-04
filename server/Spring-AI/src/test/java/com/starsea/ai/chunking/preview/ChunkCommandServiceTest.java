@@ -7,8 +7,11 @@ import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
+import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
+import com.starsea.ai.chunking.spi.ChunkContextEnricher;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.FileProcessing;
@@ -426,6 +429,128 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void parent_chunks_cannot_be_edited_or_deleted() {
+        DocumentChunk parent = chunk(31L, CHUNK_ID, 0, ChunkStatus.DRAFT, 2, "Parent");
+        parent.setChunkType(ChunkType.PARENT.code());
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(parent);
+
+        ChunkingException editFailure = assertThrows(ChunkingException.class,
+                () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                        new EditChunkRequest("Changed", false, 40, 2)));
+        ChunkingException deleteFailure = assertThrows(ChunkingException.class,
+                () -> service.delete(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, 2));
+
+        assertEquals(422, editFailure.status().value());
+        assertEquals(422, deleteFailure.status().value());
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+        verify(chunkMapper, never()).deleteScoped(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2);
+    }
+
+    @Test
+    void child_edit_uses_child_token_budget() {
+        DocumentChunk child = chunk(31L, CHUNK_ID, 1, ChunkStatus.DRAFT, 2, "Old");
+        child.setChunkType(ChunkType.CHILD.code());
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing(PipelineState.ADJUSTING, 5, Map.of(
+                        "maxTokens", 512, "childMaxTokens", 8, "childOverlapTokens", 3)));
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(child);
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                        new EditChunkRequest("123456789", true, 3, 2)));
+
+        assertEquals(422, failure.status().value());
+        assertEquals(8, failure.details().get("maxTokens"));
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+    }
+
+    @Test
+    void child_edit_rejects_overlap_that_differs_from_strategy_snapshot() {
+        DocumentChunk child = chunk(31L, CHUNK_ID, 1, ChunkStatus.DRAFT, 2, "Old");
+        child.setChunkType(ChunkType.CHILD.code());
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing(PipelineState.ADJUSTING, 5, Map.of(
+                        "maxTokens", 512, "childMaxTokens", 64, "childOverlapTokens", 0)));
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(child);
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                        new EditChunkRequest("Changed", true, 40, 2)));
+
+        assertEquals(422, failure.status().value());
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+    }
+
+    @Test
+    void editing_first_child_never_sends_its_parent_to_context_enricher() {
+        DocumentChunk parent = chunk(30L, UUID.randomUUID(), 0,
+                ChunkStatus.ACTIVE, 1, "Parent answer context");
+        parent.setChunkType(ChunkType.PARENT.code());
+        DocumentChunk child = chunk(31L, CHUNK_ID, 1, ChunkStatus.ACTIVE, 2, "Old");
+        child.setChunkType(ChunkType.CHILD.code());
+        child.setParentChunkId(parent.getId());
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing(PipelineState.ADJUSTING, 5, Map.of(
+                        "childMaxTokens", 64, "childOverlapTokens", 0)));
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(child);
+        when(chunkMapper.findScopedByPosition(FILE_ID, TENANT_ID, KNOWLEDGE_ID, 0))
+                .thenReturn(parent);
+        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
+        when(enricher.enrich(any(), eq(64))).thenAnswer(invocation -> {
+            List<DocumentChunk> inputs = invocation.getArgument(0);
+            assertEquals(List.of(ChunkType.CHILD.code()),
+                    inputs.stream().map(DocumentChunk::getChunkType).toList());
+            DocumentChunk edited = inputs.get(0);
+            return List.of(new EnrichedChunk(edited, null, null, 0, edited.getContent()));
+        });
+        ChunkCommandService childService = new ChunkCommandService(
+                chunkMapper, processingMapper, stateService, new CharacterTokenCounter(),
+                new ChunkIndexContentBuilder(), vectorGateway, enricher, millis -> { });
+
+        childService.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                new EditChunkRequest("Changed", false, 1, 2));
+
+        verify(enricher).enrich(any(), eq(64));
+        assertEquals("Parent answer context", parent.getContent());
+    }
+
+    @Test
+    void deleting_last_child_requests_fully_scoped_empty_parent_cleanup() {
+        DocumentChunk child = chunk(31L, CHUNK_ID, 1, ChunkStatus.ACTIVE, 2, "Child");
+        child.setChunkType(ChunkType.CHILD.code());
+        child.setParentChunkId(30L);
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(child);
+        when(chunkMapper.deleteScoped(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID, 2)).thenReturn(1);
+
+        service.delete(KNOWLEDGE_ID, FILE_ID, CHUNK_ID, 2);
+
+        verify(chunkMapper).deleteEmptyParent(30L, TENANT_ID, KNOWLEDGE_ID, FILE_ID);
+        verify(vectorGateway).delete(CHUNK_ID);
+    }
+
+    @Test
+    void parent_only_file_is_not_confirmable() {
+        DocumentChunk parent = chunk(31L, CHUNK_ID, 0, ChunkStatus.DRAFT, 2, "Parent");
+        parent.setChunkType(ChunkType.PARENT.code());
+        when(processingMapper.selectById(FILE_ID))
+                .thenReturn(processing(PipelineState.ADJUSTING, 5));
+        when(chunkMapper.findByFile(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(List.of(parent));
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> service.requireConfirmable(KNOWLEDGE_ID, FILE_ID));
+
+        assertEquals(422, failure.status().value());
+    }
+
+    @Test
     void vector_cleanup_has_exactly_three_bounded_attempts_without_rolling_back_success() {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
         when(chunkMapper.findScopedByPublicIdForUpdate(
@@ -623,6 +748,10 @@ class ChunkCommandServiceTest {
                 "com.starsea.ai.mapper.DocumentChunkMapper.findNextDependentForUpdate", Map.of(
                         "fileId", FILE_ID, "tenantId", TENANT_ID,
                         "knowledgeId", KNOWLEDGE_ID, "position", 5));
+        String emptyParentDelete = sql(configuration,
+                "com.starsea.ai.mapper.DocumentChunkMapper.deleteEmptyParent", Map.of(
+                        "parentId", 30L, "tenantId", TENANT_ID,
+                        "knowledgeId", KNOWLEDGE_ID, "fileId", FILE_ID));
 
         assertTrue(delete.startsWith("DELETE FROM document_chunk"));
         assertTrue(delete.contains("tenant_id = ?"));
@@ -639,6 +768,16 @@ class ChunkCommandServiceTest {
         assertTrue(dependentLock.contains("overlap_enabled = TRUE"));
         assertTrue(!dependentLock.contains("overlap_source_chunk_id"));
         assertTrue(dependentLock.endsWith("FOR UPDATE"));
+        assertTrue(emptyParentDelete.startsWith("DELETE FROM document_chunk"));
+        assertTrue(emptyParentDelete.contains("id = ?"));
+        assertTrue(emptyParentDelete.contains("tenant_id = ?"));
+        assertTrue(emptyParentDelete.contains("knowledge_id = ?"));
+        assertTrue(emptyParentDelete.contains("file_id = ?"));
+        assertTrue(emptyParentDelete.contains("chunk_type = 1"));
+        assertTrue(emptyParentDelete.contains("NOT EXISTS"));
+        assertTrue(emptyParentDelete.contains("child.tenant_id = ?"));
+        assertTrue(emptyParentDelete.contains("child.knowledge_id = ?"));
+        assertTrue(emptyParentDelete.contains("child.file_id = ?"));
     }
 
     private static DocumentChunk chunk(long id, UUID publicId, int position,
