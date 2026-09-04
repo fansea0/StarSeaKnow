@@ -77,27 +77,42 @@ public final class CharacterTailContextEnricher {
         }
 
         int configuredLength = Math.min(limit, sourceLength);
-        String configuredTail = tail(source, configuredLength);
-        String configuredIndex = contentBuilder.build(current.getSectionPath(), configuredTail, body);
-        boolean characterReduced = codePoints(configuredIndex) > maxCharacters;
-        boolean tokenReduced = tokenCounter.count(configuredIndex) > maxTokens;
-        for (int length = configuredLength; length > 0; length--) {
-            String candidate = tail(source, length);
+        int characterMaximum = maximumAcceptedLength(source, configuredLength,
+                candidate -> codePoints(contentBuilder.build(
+                        current.getSectionPath(), candidate, body)) <= maxCharacters);
+        int tokenMaximum = maximumAcceptedLength(source, configuredLength,
+                candidate -> tokenCounter.count(contentBuilder.build(
+                        current.getSectionPath(), candidate, body)) <= maxTokens);
+        int acceptedLength = Math.min(characterMaximum, tokenMaximum);
+        while (acceptedLength > 0) {
+            String candidate = tail(source, acceptedLength);
             String index = contentBuilder.build(current.getSectionPath(), candidate, body);
             if (codePoints(index) <= maxCharacters && tokenCounter.count(index) <= maxTokens) {
                 OverlapReductionReason reason;
-                if (length == configuredLength) {
+                if (acceptedLength == configuredLength) {
                     reason = sourceLength > limit
                             ? OverlapReductionReason.CONFIGURED_LIMIT : OverlapReductionReason.NONE;
-                } else if (tokenReduced && !characterReduced) {
+                } else if (tokenMaximum < characterMaximum) {
                     reason = OverlapReductionReason.MODEL_TOKEN_LIMIT;
                 } else {
+                    // Character budget wins ties so the persisted reason remains deterministic.
                     reason = OverlapReductionReason.CHARACTER_LIMIT;
                 }
                 return enriched(current, previous.getId(), candidate, baseTokens, index, reason);
             }
+            acceptedLength--;
         }
         return empty(current, base, OverlapReductionReason.FORMAT_OVERHEAD);
+    }
+
+    private int maximumAcceptedLength(String source, int configuredLength,
+                                      java.util.function.Predicate<String> accepts) {
+        for (int length = configuredLength; length > 0; length--) {
+            if (accepts.test(tail(source, length))) {
+                return length;
+            }
+        }
+        return 0;
     }
 
     private EnrichedChunk enriched(DocumentChunk current, Long sourceId, String overlap,

@@ -110,6 +110,56 @@ class CharacterTailContextEnricherTest {
     }
 
     @Test
+    void reports_token_limit_when_both_budgets_reduce_but_tokens_are_tighter() {
+        CharacterTailContextEnricher doubleTokenEnricher =
+                new CharacterTailContextEnricher(new DoubleCodePointTokenCounter());
+        ChunkRuntimePolicy combined = policy(64, 112);
+        DocumentChunk previous = chunk(11L, 0, "ABCDEFGHIJKLMNOPQRST");
+        DocumentChunk current = chunk(12L, 1, "x".repeat(50));
+        current.setOverlapLimit(20);
+
+        EnrichedChunk result = doubleTokenEnricher.enrich(
+                List.of(previous, current), combined).get(1);
+
+        assertEquals("T", result.overlapContent());
+        assertEquals(1, result.overlapCharacterCount());
+        assertEquals("MODEL_TOKEN_LIMIT", result.overlapReductionReason());
+    }
+
+    @Test
+    void reports_character_limit_when_both_budgets_reduce_but_characters_are_tighter() {
+        CharacterTailContextEnricher doubleTokenEnricher =
+                new CharacterTailContextEnricher(new DoubleCodePointTokenCounter());
+        ChunkRuntimePolicy combined = policy(64, 130);
+        DocumentChunk previous = chunk(11L, 0, "ABCDEFGHIJKLMNOPQRST");
+        DocumentChunk current = chunk(12L, 1, "x".repeat(54));
+        current.setOverlapLimit(20);
+
+        EnrichedChunk result = doubleTokenEnricher.enrich(
+                List.of(previous, current), combined).get(1);
+
+        assertEquals("PQRST", result.overlapContent());
+        assertEquals(5, result.overlapCharacterCount());
+        assertEquals("CHARACTER_LIMIT", result.overlapReductionReason());
+    }
+
+    @Test
+    void equal_character_and_token_caps_use_the_stable_character_priority() {
+        CharacterTailContextEnricher doubleTokenEnricher =
+                new CharacterTailContextEnricher(new DoubleCodePointTokenCounter());
+        ChunkRuntimePolicy equalCaps = policy(64, 128);
+        DocumentChunk previous = chunk(11L, 0, "ABCDEFGHIJKLMNOPQRST");
+        DocumentChunk current = chunk(12L, 1, "x".repeat(54));
+        current.setOverlapLimit(20);
+
+        EnrichedChunk result = doubleTokenEnricher.enrich(
+                List.of(previous, current), equalCaps).get(1);
+
+        assertEquals("PQRST", result.overlapContent());
+        assertEquals("CHARACTER_LIMIT", result.overlapReductionReason());
+    }
+
+    @Test
     void emits_no_overlap_when_the_formatter_label_has_no_room() {
         DocumentChunk previous = chunk(11L, 0, "previous");
         DocumentChunk current = chunk(12L, 1, "x".repeat(60));

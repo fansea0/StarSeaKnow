@@ -213,6 +213,7 @@ public class ChunkVectorWorker {
         requireFileSnapshot(fileId, file);
         Map<Long, DocumentChunk> currentById = byId(
                 chunkMapper.findByFileForUpdate(fileId, tenantId, knowledgeId));
+        requireExactChunkSet(currentById, allSnapshots);
         Set<Long> targetIds = targets.stream().map(ChunkSnapshot::id).collect(Collectors.toSet());
         for (ChunkSnapshot snapshot : allSnapshots) {
             DocumentChunk current = currentById.get(snapshot.id());
@@ -294,6 +295,7 @@ public class ChunkVectorWorker {
         List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(
                 job.fileId(), job.tenantId(), job.knowledgeId());
         Map<Long, DocumentChunk> currentById = byId(chunks);
+        requireExactChunkSet(currentById, job.allChunks());
         for (EnrichedChunk enriched : prepared.chunks()) {
             ChunkSnapshot snapshot = job.snapshot(enriched.chunk().getId());
             DocumentChunk current = currentById.get(snapshot.id());
@@ -312,6 +314,7 @@ public class ChunkVectorWorker {
         List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(
                 job.fileId(), job.tenantId(), job.knowledgeId());
         Map<Long, DocumentChunk> currentById = byId(chunks);
+        requireExactChunkSet(currentById, job.allChunks());
         for (ChunkSnapshot snapshot : job.allChunks()) {
             if (!Objects.equals(snapshot.id(), job.chunk().id())) {
                 requireRelatedSnapshot(currentById.get(snapshot.id()), snapshot);
@@ -529,6 +532,18 @@ public class ChunkVectorWorker {
                 || !Objects.equals(current.getOverlapUnit(), expected.overlapUnit())) {
             throw ChunkingException.conflict(
                     "Related chunk snapshot changed during vectorization");
+        }
+    }
+
+    private void requireExactChunkSet(Map<Long, DocumentChunk> currentById,
+                                      List<ChunkSnapshot> expected) {
+        Set<Long> expectedIds = expected.stream().map(ChunkSnapshot::id)
+                .collect(Collectors.toSet());
+        if (expectedIds.size() != expected.size()
+                || currentById.size() != expectedIds.size()
+                || !currentById.keySet().equals(expectedIds)) {
+            throw ChunkingException.conflict(
+                    "Chunk set changed during vectorization");
         }
     }
 
