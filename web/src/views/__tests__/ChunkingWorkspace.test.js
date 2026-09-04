@@ -196,6 +196,38 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.get('[data-strategy="PARENT_CHILD"]').classes()).toContain('is-selected')
   })
 
+  it('groups a flat parent-child response, confirms only retrieval children, and refreshes after deleting the last child', async () => {
+    const parent = {
+      ...draftChunk, publicId: 'parent-1', position: 0, siblingPosition: 0, chunkType: 'PARENT',
+      content: '只读父块上下文', tokenCount: 80, overlapEnabled: false,
+    }
+    const child = {
+      ...draftChunk, publicId: 'child-1', position: 1, siblingPosition: 0, chunkType: 'CHILD',
+      parentPublicId: 'parent-1', content: '可编辑检索子块', overlapEnabled: true, overlapTokenLimit: 32,
+    }
+    getProcessing.mockResolvedValue(processing(3, { strategyCode: 'PARENT_CHILD' }))
+    getChunks
+      .mockResolvedValueOnce({ data: [child, parent] })
+      .mockResolvedValueOnce({ data: [] })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="parent-chunk-parent-1"]').text()).toContain('父块 01')
+    expect(wrapper.findAll('[data-testid="child-chunk"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="overlap-switch"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="open-confirm"]').trigger('click')
+    await flushPromises()
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog.querySelector('[data-testid="confirm-total-count"]').textContent).toContain('1')
+    expect(dialog.textContent).toContain('1 父块 · 1 子块')
+
+    await wrapper.get('[data-testid="delete-chunk"]').trigger('click')
+    await flushPromises()
+    expect(getChunks).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="parent-chunk-parent-1"]').exists()).toBe(false)
+  })
+
   it('isolates strategy configs, restores the processing strategy snapshot, and submits the selected parent-child config', async () => {
     getStrategies.mockResolvedValue({
       data: {
@@ -917,7 +949,7 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.find('[data-testid="create-preview"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="vectorization-complete"]').text()).toContain('索引建立完成')
-    expect(wrapper.get('[data-testid="vectorization-complete"]').text()).toContain('1 个分块')
+    expect(wrapper.get('[data-testid="vectorization-complete"]').text()).toContain('1 个检索单元')
     expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(true)
 
     await wrapper.get('[data-testid="back-to-knowledge"]').trigger('click')

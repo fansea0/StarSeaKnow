@@ -6,7 +6,7 @@
         <h2 id="preview-title">人工检查原始分块</h2>
         <p>标题路径只读；正文修改会自动保存。</p>
       </div>
-      <span v-if="chunks.length" class="chunk-count mono">{{ chunks.length }} 块</span>
+      <span v-if="chunks.length" class="chunk-count mono">{{ countLabel }}</span>
     </header>
 
     <div v-if="processing" class="processing-strip" aria-live="polite">
@@ -21,8 +21,32 @@
       <span>选择可用策略并生成预览后，在这里逐块检查。</span>
     </div>
     <div v-else class="chunk-stack">
+      <div v-if="hierarchy.orphanChildren.length" class="hierarchy-integrity" role="alert">
+        <span>分块层级数据异常：发现无法关联父块的检索子块。请刷新预览后重试。</span>
+        <el-button link type="danger" @click="$emit('reload')">刷新预览</el-button>
+      </div>
+      <template v-if="hierarchy.hierarchical">
+        <ParentChunkGroup
+          v-for="group in hierarchy.parents"
+          :key="group.parent.publicId"
+          :knowledge-id="knowledgeId"
+          :file-id="fileId"
+          :parent="group.parent"
+          :children="group.children"
+          :disabled="actionsDisabled"
+          :show-reindex="canReindex"
+          :is-reindexing="isReindexing"
+          :reindex-disabled="reindexDisabled"
+          :reload-epochs="reloadEpochs"
+          @updated="$emit('updated', $event)"
+          @deleted="$emit('deleted', $event)"
+          @reload="$emit('reload', $event)"
+          @reindex="$emit('reindex', $event)"
+          @save-state="$emit('save-state', $event)"
+        />
+      </template>
       <ChunkCard
-        v-for="chunk in chunks"
+        v-for="chunk in hierarchy.singles"
         :key="chunk.publicId"
         :knowledge-id="knowledgeId"
         :file-id="fileId"
@@ -42,7 +66,7 @@
     <footer v-if="chunks.length && showConfirm" class="preview-panel__footer">
       <div>
         <strong>检查完成</strong>
-        <span>确认后开始为当前文件建立向量索引。</span>
+        <span>确认后开始为当前文件建立 {{ hierarchy.vectorCount }} 个检索单元的向量索引。</span>
       </div>
       <el-button
         type="primary"
@@ -55,12 +79,18 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import ChunkCard from './ChunkCard.vue'
+import ParentChunkGroup from './ParentChunkGroup.vue'
 
 const props = defineProps({
   knowledgeId: { type: [String, Number], required: true },
   fileId: { type: [String, Number], required: true },
   chunks: { type: Array, default: () => [] },
+  hierarchy: {
+    type: Object,
+    default: () => ({ hierarchical: false, parents: [], singles: [], orphanChildren: [], parentCount: 0, childCount: 0, vectorCount: 0 }),
+  },
   loading: { type: Boolean, default: false },
   fileState: { type: Number, default: 0 },
   progress: { type: Number, default: 0 },
@@ -76,6 +106,10 @@ const props = defineProps({
 })
 
 defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm', 'save-state'])
+
+const countLabel = computed(() => props.hierarchy.hierarchical
+  ? `${props.hierarchy.parentCount} 父块 · ${props.hierarchy.childCount} 子块`
+  : `${props.hierarchy.vectorCount} 块`)
 
 function canReindex(chunk) {
   return [3, 6].includes(Number(props.fileState))
@@ -112,6 +146,7 @@ function isReindexing(chunk) {
 .preview-panel__header p { margin: 0; color: var(--sea-muted); font-size: 13px; }
 .chunk-count { padding-top: 4px; white-space: nowrap; }
 .chunk-stack { display: grid; gap: 14px; padding-bottom: 22px; }
+.hierarchy-integrity { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--sea-danger) 32%, var(--sea-paper)); border-radius: 8px; background: color-mix(in srgb, var(--sea-danger) 7%, var(--sea-paper)); color: var(--sea-danger); font-size: 12px; line-height: 1.5; }
 
 .preview-empty {
   display: grid;
@@ -168,5 +203,6 @@ function isReindexing(chunk) {
 @media (max-width: 520px) {
   .preview-panel { padding: 20px 16px 0; }
   .preview-panel__footer { align-items: stretch; flex-direction: column; margin: 0 -16px; padding: 15px 16px; }
+  .hierarchy-integrity { align-items: flex-start; flex-direction: column; }
 }
 </style>

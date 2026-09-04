@@ -6,9 +6,14 @@
     :close-on-click-modal="false"
     @update:model-value="$emit('update:modelValue', $event)"
   >
-    <p class="dialog-intro">确认当前逐块审核结果后，将开始为这份文件建立向量索引。</p>
+    <p class="dialog-intro">{{ dialogIntro }}</p>
 
-    <dl class="confirm-summary" aria-label="分块补充上文统计">
+    <div v-if="hierarchical" class="hierarchy-summary">
+      <span>{{ parentCount }} 父块 · {{ childCount }} 子块</span>
+      <span data-testid="confirm-total-count">{{ totalCount }} 个检索单元</span>
+    </div>
+
+    <dl v-if="!hierarchical" class="confirm-summary" aria-label="分块补充上文统计">
       <div data-testid="confirm-total-count">
         <dt>总块数</dt>
         <dd>{{ totalCount }}</dd>
@@ -59,10 +64,16 @@ const props = defineProps({
   totalCount: { type: Number, default: 0 },
   enabledCount: { type: Number, default: 0 },
   generatedCount: { type: Number, default: 0 },
+  hierarchical: { type: Boolean, default: false },
+  parentCount: { type: Number, default: 0 },
+  childCount: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['update:modelValue', 'confirm', 'reload'])
 const displayError = computed(() => props.serverError)
+const dialogIntro = computed(() => props.hierarchical
+  ? '仅对子块建立向量，命中后使用父块回答。'
+  : '确认当前逐块审核结果后，将开始为这份文件建立向量索引。')
 
 function confirm() {
   if (props.submitting || props.reloading || props.blocked) return
@@ -72,6 +83,8 @@ function confirm() {
 
 <style scoped>
 .dialog-intro { margin: 0 0 18px; color: var(--sea-muted); font-size: 13px; line-height: 1.65; }
+.hierarchy-summary { display: grid; gap: 5px; margin: 0; padding: 13px 10px; border-radius: 8px; background: var(--sea-mist); color: var(--sea-deep); font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 600; text-align: center; }
+.hierarchy-summary span:last-child { color: var(--sea-muted); font-size: 11px; font-weight: 500; }
 
 .confirm-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0; }
 .confirm-summary div { display: grid; gap: 5px; padding: 13px 10px; border-radius: 8px; background: var(--sea-mist); text-align: center; }

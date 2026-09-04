@@ -1,7 +1,7 @@
 <template>
   <article class="chunk-card" :aria-disabled="actionsDisabled ? 'true' : 'false'">
     <header class="chunk-ribbon">
-      <span class="chunk-code mono">CHUNK {{ chunkNumber }}</span>
+      <span class="chunk-code mono">{{ cardLabel }}</span>
       <nav
         data-testid="section-path"
         :title="sectionPathText"
@@ -37,7 +37,7 @@
         <el-button v-if="conflict" link data-testid="reload-chunk" @click="$emit('reload', localChunk.publicId)">重新加载</el-button>
       </div>
 
-      <section class="overlap-setting" data-testid="overlap-switch">
+      <section v-if="showOverlapControls" class="overlap-setting" data-testid="overlap-switch">
         <div class="overlap-setting__heading">
           <strong>补充上文</strong>
           <span>使用服务端生成的相邻正文补充当前块语境</span>
@@ -50,7 +50,7 @@
         />
       </section>
 
-      <div v-if="overlapEnabled" class="overlap-details">
+      <div v-if="showOverlapControls && overlapEnabled" class="overlap-details">
         <label class="overlap-limit" data-testid="overlap-token-limit">
           <span>补充上限</span>
           <el-input-number
@@ -123,6 +123,8 @@ const props = defineProps({
   showReindex: { type: Boolean, default: false },
   reindexDisabled: { type: Boolean, default: false },
   reloadEpoch: { type: Number, default: 0 },
+  label: { type: String, default: '' },
+  showOverlapControls: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['updated', 'deleted', 'reload', 'reindex', 'save-state'])
@@ -146,6 +148,7 @@ const overlapUnavailableMessages = Object.freeze({
 })
 
 const chunkNumber = computed(() => String((Number(localChunk.position) || 0) + 1).padStart(2, '0'))
+const cardLabel = computed(() => props.label || `CHUNK ${chunkNumber.value}`)
 const actionsDisabled = computed(() => props.disabled || Number(localChunk.status) === 1)
 const sectionPathText = computed(() => localChunk.sectionPath?.length ? localChunk.sectionPath.join(' / ') : '文档正文')
 const overlapUnavailableText = computed(() => {

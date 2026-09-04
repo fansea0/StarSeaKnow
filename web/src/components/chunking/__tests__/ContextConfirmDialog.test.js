@@ -33,4 +33,15 @@ describe('ContextConfirmDialog', () => {
     expect(wrapper.emitted('confirm')?.[0]).toEqual([])
     wrapper.unmount()
   })
+
+  it('explains parent-child vectorization using retrieval child counts instead of overlap summary', async () => {
+    const wrapper = mountDialog({ totalCount: 3, parentCount: 2, childCount: 3, hierarchical: true })
+    await flushPromises()
+    const dialog = document.body.querySelector('[role="dialog"]')
+
+    expect(dialog.textContent).toContain('2 父块 · 3 子块')
+    expect(dialog.textContent).toContain('仅对子块建立向量，命中后使用父块回答')
+    expect(dialog.querySelector('[data-testid="confirm-enabled-count"]')).toBeNull()
+    wrapper.unmount()
+  })
 })

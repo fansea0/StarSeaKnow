@@ -65,7 +65,7 @@
           <div class="completion-banner__copy">
             <span class="completion-banner__eyebrow mono">INDEX / READY</span>
             <strong>索引建立完成</strong>
-            <p>已将 {{ chunks.length }} 个分块写入向量索引，现在可以在知识库中使用这份文档。</p>
+            <p>已将 {{ chunkHierarchy.vectorCount }} 个检索单元写入向量索引，现在可以在知识库中使用这份文档。</p>
           </div>
           <div class="completion-banner__actions">
             <el-button data-testid="back-to-knowledge" @click="backToKnowledge">返回知识库</el-button>
@@ -76,6 +76,7 @@
           :knowledge-id="knowledgeId"
           :file-id="fileId"
           :chunks="chunks"
+          :hierarchy="chunkHierarchy"
           :loading="chunksLoading || (processingLoading && !processingLoaded)"
           :loading-label="processingLoading && !processingLoaded ? '正在读取文件处理状态…' : '正在读取分块…'"
           :file-state="processing.state"
@@ -105,9 +106,12 @@
       :server-conflict="confirmConflict"
       :reloading="confirmReloading"
       :blocked="!canConfirm || confirmConflict || hasBlockingChunkSaves || fileMutationInProgress"
-      :total-count="chunks.length"
+      :total-count="chunkHierarchy.vectorCount"
       :enabled-count="overlapEnabledCount"
       :generated-count="overlapGeneratedCount"
+      :hierarchical="chunkHierarchy.hierarchical"
+      :parent-count="chunkHierarchy.parentCount"
+      :child-count="chunkHierarchy.childCount"
       @confirm="submitVectorization"
       @reload="reloadConfirmState"
     />
@@ -126,6 +130,7 @@ import {
 } from '../api/chunking'
 import { mergeStrategies } from '../features/chunking/strategyCatalog'
 import { defaultConfigFor, normalizePolicySnapshot } from '../features/chunking/strategyConfig'
+import { groupChunks } from '../features/chunking/chunkHierarchy'
 import ChunkPreviewPanel from '../components/chunking/ChunkPreviewPanel.vue'
 import ChunkStrategyPanel from '../components/chunking/ChunkStrategyPanel.vue'
 import ContextConfirmDialog from '../components/chunking/ContextConfirmDialog.vue'
@@ -224,11 +229,12 @@ export default {
       return this.processingLoaded && !this.processingLoading && !this.chunksLoading
         && this.isCompleted && this.chunksLoadedKey === this.currentChunksKey && this.chunks.length > 0
     },
+    chunkHierarchy() { return groupChunks(this.chunks) },
     canPreview() {
       return this.processingLoaded && !this.processingLoading && previewStates.has(Number(this.processing.state))
     },
     canConfirm() {
-      return this.processingLoaded && !this.processingLoading && confirmStates.has(Number(this.processing.state)) && this.chunks.length > 0
+      return this.processingLoaded && !this.processingLoading && confirmStates.has(Number(this.processing.state)) && this.chunkHierarchy.vectorCount > 0
     },
     canRetryPreview() {
       return this.processingLoaded && !this.processingLoading && this.showRetryPreview && this.retainedChunksLoaded
