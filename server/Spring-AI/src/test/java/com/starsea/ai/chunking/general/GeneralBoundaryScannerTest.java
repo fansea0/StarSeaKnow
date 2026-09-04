@@ -107,6 +107,16 @@ class GeneralBoundaryScannerTest {
     }
 
     @Test
+    void fallback_scan_stops_at_the_code_point_budget_without_materializing_a_stream_array() {
+        BoundaryUnit unit = GeneralBoundaryScanner.scanFallback(
+                "😀".repeat(64) + "never-scanned", 64, null);
+
+        assertEquals("😀".repeat(64), unit.text());
+        assertEquals(64, unit.cleanedEnd());
+        assertEquals(BoundaryKind.FORCED_CHARACTER, unit.boundaryAfter());
+    }
+
+    @Test
     void scanner_reuses_the_pattern_compiled_while_validating_the_config() throws Exception {
         GeneralChunkConfig config = config("\\|{2,3}", DelimiterMode.REGEX);
         GeneralBoundaryScanner scanner = new GeneralBoundaryScanner(config);

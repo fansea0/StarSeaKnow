@@ -20,6 +20,8 @@ import java.util.Set;
 public interface FileMapper extends BaseMapper<File> {
     File selectByFileId(Long id);
 
+    File selectScopedForUpdate(@Param("tenantId") Long tenantId, @Param("fileId") Long fileId);
+
     List<FileVo> selectByKnowledgeId(@Param("tenantId") Long tenantId,
                                      @Param("knowledgeId") Long knowledgeId);
 
@@ -27,5 +29,4 @@ public interface FileMapper extends BaseMapper<File> {
                                            @Param("knowledgeIds") Set<Long> knowledgeIds);
 
 }
-
 

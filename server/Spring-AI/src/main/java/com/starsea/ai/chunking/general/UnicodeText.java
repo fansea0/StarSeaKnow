@@ -1,6 +1,5 @@
 package com.starsea.ai.chunking.general;
 
-import java.util.Arrays;
 import java.util.Objects;
 
 /** Unicode code-point operations used by character-budget chunking. */
@@ -53,11 +52,20 @@ public final class UnicodeText {
     public static final class CodePointIndex {
         private final String value;
         private final int[] charOffsets;
+        private final int codePointLength;
         private final int scanOperations;
 
         private CodePointIndex(String value) {
             this.value = Objects.requireNonNull(value, "value");
-            int[] offsets = new int[value.length() + 1];
+            int firstSupplementary = firstSupplementaryOffset(value);
+            if (firstSupplementary < 0) {
+                this.charOffsets = null;
+                this.codePointLength = value.length();
+                this.scanOperations = codePointLength;
+                return;
+            }
+            this.codePointLength = value.codePointCount(0, value.length());
+            int[] offsets = new int[codePointLength + 1];
             int charOffset = 0;
             int codePointOffset = 0;
             while (charOffset < value.length()) {
@@ -65,23 +73,41 @@ public final class UnicodeText {
                 charOffset += Character.charCount(value.codePointAt(charOffset));
             }
             offsets[codePointOffset] = value.length();
-            this.charOffsets = Arrays.copyOf(offsets, codePointOffset + 1);
+            this.charOffsets = offsets;
             this.scanOperations = codePointOffset;
         }
 
-        public int length() { return charOffsets.length - 1; }
+        public int length() { return codePointLength; }
         public int scanOperations() { return scanOperations; }
 
         public int charIndex(int codePointOffset) {
-            if (codePointOffset < 0 || codePointOffset >= charOffsets.length) {
+            if (codePointOffset < 0 || codePointOffset > codePointLength) {
                 throw new IndexOutOfBoundsException("codePointOffset=" + codePointOffset);
             }
-            return charOffsets[codePointOffset];
+            return charOffsets == null ? codePointOffset : charOffsets[codePointOffset];
         }
 
         public String substring(int codePointStart, int codePointEnd) {
             if (codePointEnd < codePointStart) throw new IndexOutOfBoundsException("end before start");
             return value.substring(charIndex(codePointStart), charIndex(codePointEnd));
+        }
+
+        int offsetTableArrayCount() {
+            return charOffsets == null ? 0 : 1;
+        }
+
+        int offsetTableLength() {
+            return charOffsets == null ? 0 : charOffsets.length;
+        }
+
+        private static int firstSupplementaryOffset(String value) {
+            for (int index = 0; index + 1 < value.length(); index++) {
+                if (Character.isHighSurrogate(value.charAt(index))
+                        && Character.isLowSurrogate(value.charAt(index + 1))) {
+                    return index;
+                }
+            }
+            return -1;
         }
     }
 }

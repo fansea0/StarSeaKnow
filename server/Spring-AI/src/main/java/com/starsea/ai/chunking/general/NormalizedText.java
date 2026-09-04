@@ -12,19 +12,17 @@ import java.util.Map;
 public final class NormalizedText {
     private final String text;
     private final int controlCharactersRemoved;
-    private final int[] originalOffsets;
-    private final int[] originalCharacterStarts;
-    private final int[] originalCharacterEnds;
+    private final TextOffsetMap originalOffsets;
     private final List<SourceSpan> sourceSpans;
 
-    NormalizedText(String text, int controlCharactersRemoved, int[] originalOffsets,
-                   int[] originalCharacterStarts, int[] originalCharacterEnds,
+    NormalizedText(String text, int controlCharactersRemoved, TextOffsetMap originalOffsets,
                    List<SourceSpan> sourceSpans) {
         this.text = text;
         this.controlCharactersRemoved = controlCharactersRemoved;
-        this.originalOffsets = originalOffsets.clone();
-        this.originalCharacterStarts = originalCharacterStarts.clone();
-        this.originalCharacterEnds = originalCharacterEnds.clone();
+        this.originalOffsets = originalOffsets;
+        if (originalOffsets.textLength() != text.length()) {
+            throw new IllegalArgumentException("Offset mapping length does not match normalized text");
+        }
         this.sourceSpans = sourceSpans == null ? List.of() : sourceSpans.stream()
                 .sorted(Comparator.comparingInt(SourceSpan::textStart))
                 .toList();
@@ -35,18 +33,15 @@ public final class NormalizedText {
     public int codePointCount() { return UnicodeText.length(text); }
 
     public int originalOffset(int normalizedUtf16Offset) {
-        if (normalizedUtf16Offset < 0 || normalizedUtf16Offset >= originalOffsets.length) {
-            throw new IndexOutOfBoundsException("normalizedUtf16Offset=" + normalizedUtf16Offset);
-        }
-        return originalOffsets[normalizedUtf16Offset];
+        return originalOffsets.sourceOffset(normalizedUtf16Offset);
     }
 
     public int originalCharacterStart(int normalizedUtf16Offset) {
-        return originalCharacterStarts[normalizedUtf16Offset];
+        return originalOffsets.characterStart(normalizedUtf16Offset);
     }
 
     public int originalCharacterEnd(int normalizedUtf16Offset) {
-        return originalCharacterEnds[normalizedUtf16Offset];
+        return originalOffsets.characterEnd(normalizedUtf16Offset);
     }
 
     public SourceLocator sourceLocator(int normalizedStart, int normalizedEnd) {
@@ -54,9 +49,9 @@ public final class NormalizedText {
             throw new IndexOutOfBoundsException("Invalid normalized range");
         }
         int originalStart = normalizedStart < normalizedEnd
-                ? originalCharacterStarts[normalizedStart] : originalOffset(normalizedStart);
+                ? originalCharacterStart(normalizedStart) : originalOffset(normalizedStart);
         int originalEnd = normalizedStart < normalizedEnd
-                ? originalCharacterEnds[normalizedEnd - 1] : originalStart;
+                ? originalCharacterEnd(normalizedEnd - 1) : originalStart;
         List<Map<String, Object>> regions = new ArrayList<>();
         Integer startPage = null;
         Integer endPage = null;
@@ -81,6 +76,41 @@ public final class NormalizedText {
         }
         return new SourceLocator(type, List.of(), originalStart, originalEnd,
                 null, null, startPage, endPage, regions);
+    }
+
+    List<MappedSourceRegion> sourceRegions(int normalizedStart, int normalizedEnd) {
+        if (normalizedStart < 0 || normalizedEnd < normalizedStart || normalizedEnd > text.length()) {
+            throw new IndexOutOfBoundsException("Invalid normalized range");
+        }
+        int originalStart = normalizedStart < normalizedEnd
+                ? originalCharacterStart(normalizedStart) : originalOffset(normalizedStart);
+        int originalEnd = normalizedStart < normalizedEnd
+                ? originalCharacterEnd(normalizedEnd - 1) : originalStart;
+        List<MappedSourceRegion> regions = new ArrayList<>();
+        for (int index = firstCandidateSpan(originalStart); index < sourceSpans.size(); index++) {
+            SourceSpan span = sourceSpans.get(index);
+            if (span.textStart() >= originalEnd) break;
+            if (span.textEnd() > originalStart) {
+                regions.add(new MappedSourceRegion(span.textStart(), span.textEnd(), span.source()));
+            }
+        }
+        return List.copyOf(regions);
+    }
+
+    TextOffsetMap offsetMapping() {
+        return originalOffsets;
+    }
+
+    boolean hasIdentityOffsetMapping() {
+        return originalOffsets.hasIdentityMapping();
+    }
+
+    int offsetMappingArrayCount() {
+        return originalOffsets.storageArrayCount();
+    }
+
+    int offsetMappingSegmentCount() {
+        return originalOffsets.segmentCount();
     }
 
     private int firstCandidateSpan(int originalStart) {

@@ -223,6 +223,61 @@ class GeneralChunkPlanningStrategyTest {
     }
 
     @Test
+    void preserves_unavoidable_leading_middle_and_trailing_whitespace_chunks_losslessly() {
+        List<StructuredBlock> blocks = List.of(
+                mappedBlock("leading", " ".repeat(130), 0, 130, true),
+                mappedBlock("left", "a", 133, 134, true),
+                mappedBlock("middle", "\u2007".repeat(130), 137, 267, true),
+                mappedBlock("right", "b", 270, 271, true),
+                mappedBlock("trailing", "\u202f".repeat(130), 274, 404, false));
+
+        List<ChunkDraft> drafts = planMapped(blocks, 64);
+
+        assertEquals(" ".repeat(130) + "\n" + "a\n" + "\u2007".repeat(130)
+                        + "\n" + "b\n" + "\u202f".repeat(130),
+                drafts.stream().map(ChunkDraft::content).reduce("", String::concat));
+        assertTrue(drafts.stream().allMatch(draft -> !draft.content().isEmpty()));
+        assertTrue(drafts.stream().allMatch(draft -> UnicodeText.length(draft.content()) <= 64));
+        assertTrue(drafts.stream().anyMatch(draft -> UnicodeText.isBlank(draft.content())));
+    }
+
+    @Test
+    void sliced_locators_filter_page_regions_by_their_exact_source_interval() {
+        String text = "x".repeat(140);
+        SourceLocator locator = new SourceLocator("PAGE", List.of("cross-page"), 0, 140,
+                null, null, 1, 2, List.of(Map.of("page", 1), Map.of("page", 2)));
+        StructuredBlock block = new StructuredBlock("cross-page", BlockType.PARAGRAPH,
+                text, text, null, List.of(), 140, locator,
+                Map.of("boundaryAfter", "DOCUMENT_END",
+                        CleanedSegment.OFFSET_MAP_ATTRIBUTE, CleanedOffsetMap.identity(text, 0),
+                        CleanedSegment.SOURCE_REGIONS_ATTRIBUTE, List.of(
+                                new MappedSourceRegion(0, 70,
+                                        Map.of("page", 1, "line", 11, "region", "top")),
+                                new MappedSourceRegion(70, 140,
+                                        Map.of("page", 2, "line", 22, "region", "bottom")))));
+
+        List<ChunkDraft> drafts = planMapped(List.of(block), 64);
+
+        assertEquals(List.of(0, 64, 128), drafts.stream()
+                .map(draft -> draft.sourceLocator().startOffset()).toList());
+        assertEquals(List.of(64, 128, 140), drafts.stream()
+                .map(draft -> draft.sourceLocator().endOffset()).toList());
+        assertEquals(List.of(1, 1, 2), drafts.stream()
+                .map(draft -> draft.sourceLocator().startPage()).toList());
+        assertEquals(List.of(1, 2, 2), drafts.stream()
+                .map(draft -> draft.sourceLocator().endPage()).toList());
+        assertEquals(List.of(11, 11, 22), drafts.stream()
+                .map(draft -> draft.sourceLocator().startLine()).toList());
+        assertEquals(List.of(11, 22, 22), drafts.stream()
+                .map(draft -> draft.sourceLocator().endLine()).toList());
+        assertEquals(List.of(Map.of("page", 1, "line", 11, "region", "top")),
+                drafts.get(0).sourceLocator().regions());
+        assertEquals(2, drafts.get(1).sourceLocator().regions().size());
+        assertEquals(List.of(Map.of("page", 2, "line", 22, "region", "bottom")),
+                drafts.get(2).sourceLocator().regions());
+    }
+
+    @Test
     void indexed_planning_work_grows_linearly_for_ten_times_more_input() {
         AtomicInteger smallCalls = new AtomicInteger();
         AtomicInteger largeCalls = new AtomicInteger();

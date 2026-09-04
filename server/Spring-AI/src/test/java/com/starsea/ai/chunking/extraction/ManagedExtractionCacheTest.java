@@ -2,9 +2,14 @@ package com.starsea.ai.chunking.extraction;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.starsea.ai.domain.FileTextExtraction;
+import com.starsea.ai.mapper.FileMapper;
 import com.starsea.ai.mapper.FileTextExtractionMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,6 +24,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -68,16 +74,18 @@ class ManagedExtractionCacheTest {
         cache.getOrExtract(1L, 9L, "a".repeat(64), source, "text/plain");
         Path oldText = Path.of(mapper.row.getManagedTextPath());
         Path oldMap = Path.of(mapper.row.getSourceMapPath());
-        mapper.row.setManagedTextPath(cacheRoot.resolve("managed/1/9/stale-text.txt").toString());
-        mapper.row.setSourceMapPath(cacheRoot.resolve("managed/1/9/stale-map.json").toString());
-        Files.move(oldText, Path.of(mapper.row.getManagedTextPath()));
-        Files.move(oldMap, Path.of(mapper.row.getSourceMapPath()));
+        Path staleText = cacheRoot.resolve("managed/1/9/text-" + java.util.UUID.randomUUID() + ".txt");
+        Path staleMap = cacheRoot.resolve("managed/1/9/source-map-" + java.util.UUID.randomUUID() + ".json");
+        mapper.row.setManagedTextPath(staleText.toString());
+        mapper.row.setSourceMapPath(staleMap.toString());
+        Files.move(oldText, staleText);
+        Files.move(oldMap, staleMap);
 
         cache.getOrExtract(1L, 9L, "b".repeat(64), source, "text/plain");
 
         assertEquals(2, calls.get());
-        assertFalse(Files.exists(cacheRoot.resolve("managed/1/9/stale-text.txt")));
-        assertFalse(Files.exists(cacheRoot.resolve("managed/1/9/stale-map.json")));
+        assertFalse(Files.exists(staleText));
+        assertFalse(Files.exists(staleMap));
         assertEquals("b".repeat(64), mapper.row.getSourceHash());
     }
 
@@ -353,6 +361,74 @@ class ManagedExtractionCacheTest {
     }
 
     @Test
+    void database_row_lock_serializes_two_cache_instances_through_extraction_and_metadata_commit()
+            throws Exception {
+        Path source = cacheRoot.resolve("multi-instance.txt");
+        Files.writeString(source, "source");
+        CountDownLatch firstExtracting = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        DocumentTextExtractor extractor = new DocumentTextExtractor() {
+            @Override public String id() { return "database-lock"; }
+            @Override public String version() { return "v1"; }
+            @Override public int priority() { return 100; }
+            @Override public Set<String> supportedMediaTypes() { return Set.of("text/plain"); }
+            @Override public ExtractedText extract(Path path, ExtractionCapability capability) {
+                if (calls.incrementAndGet() == 1) {
+                    firstExtracting.countDown();
+                    try {
+                        if (!releaseFirst.await(2, TimeUnit.SECONDS)) throw new IllegalStateException("timeout");
+                    } catch (InterruptedException failure) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(failure);
+                    }
+                }
+                return new ExtractedText("body", "text/plain", id(), version(),
+                        List.of(new SourceSpan(0, 4, Map.of())), Map.of());
+            }
+        };
+        KeyedMapper extractionRows = new KeyedMapper();
+        ReentrantLock databaseRowLock = new ReentrantLock();
+        CountDownLatch secondLockAttempted = new CountDownLatch(1);
+        AtomicInteger lockAttempts = new AtomicInteger();
+        FileMapper files = mock(FileMapper.class);
+        com.starsea.ai.domain.File owner = new com.starsea.ai.domain.File();
+        owner.setId(9L);
+        when(files.selectScopedForUpdate(1L, 9L)).thenAnswer(invocation -> {
+            if (lockAttempts.incrementAndGet() == 2) secondLockAttempted.countDown();
+            databaseRowLock.lock();
+            return owner;
+        });
+        RowLockTransactionManager transactions = new RowLockTransactionManager(databaseRowLock);
+        Path managed = cacheRoot.resolve("multi-managed");
+        DurableCleanupJournal journal = new DurableCleanupJournal(
+                new ObjectMapper(), managed, cacheRoot.resolve("upload"));
+        var registry = new DocumentTextExtractorRegistry(List.of(extractor));
+        ManagedExtractionCache firstCache = new ManagedExtractionCache(extractionRows.proxy(), registry,
+                new ObjectMapper(), managed, journal, files, new TransactionTemplate(transactions));
+        ManagedExtractionCache secondCache = new ManagedExtractionCache(extractionRows.proxy(), registry,
+                new ObjectMapper(), managed, journal, files, new TransactionTemplate(transactions));
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> firstCache.getOrExtract(
+                    1L, 9L, "a".repeat(64), source, "text/plain"));
+            assertTrue(firstExtracting.await(1, TimeUnit.SECONDS));
+            var second = executor.submit(() -> secondCache.getOrExtract(
+                    1L, 9L, "b".repeat(64), source, "text/plain"));
+
+            assertTrue(secondLockAttempted.await(1, TimeUnit.SECONDS));
+            assertEquals(1, calls.get(), "second instance must wait on the database row lock");
+            releaseFirst.countDown();
+            assertEquals("body", first.get(2, TimeUnit.SECONDS).text());
+            assertEquals("body", second.get(2, TimeUnit.SECONDS).text());
+            assertEquals(2, calls.get());
+        } finally {
+            releaseFirst.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void failed_post_commit_plaintext_cleanup_persists_a_retry_obligation() throws Exception {
         Path source = cacheRoot.resolve("cleanup-obligation.txt");
         Files.writeString(source, "source");
@@ -394,8 +470,18 @@ class ManagedExtractionCacheTest {
         Files.writeString(source, "source");
         Path managedRoot = cacheRoot.resolve("managed");
         ObjectMapper objectMapper = new ObjectMapper();
+        java.util.concurrent.atomic.AtomicBoolean preparedBeforeWrite =
+                new java.util.concurrent.atomic.AtomicBoolean();
         DurableCleanupJournal journal = new DurableCleanupJournal(
-                objectMapper, managedRoot, cacheRoot.resolve("upload"));
+                objectMapper, managedRoot, cacheRoot.resolve("upload")) {
+            @Override
+            public java.util.UUID prepareGeneration(long tenantId, long fileId,
+                                                     List<CleanupTarget> targets) {
+                preparedBeforeWrite.set(targets.stream().noneMatch(target -> Files.exists(
+                        managedRoot.resolve(target.relativePath()))));
+                return super.prepareGeneration(tenantId, fileId, targets);
+            }
+        };
         FileTextExtractionMapper mapper = mock(FileTextExtractionMapper.class);
         when(mapper.insert(any(FileTextExtraction.class))).thenReturn(0);
         ManagedExtractionCache cache = new ManagedExtractionCache(mapper,
@@ -411,6 +497,7 @@ class ManagedExtractionCacheTest {
                 () -> cache.getOrExtract(1L, 9L, "d".repeat(64), source, "text/plain"));
 
         assertEquals("Extraction cache metadata was not saved", failure.getMessage());
+        assertTrue(preparedBeforeWrite.get());
         assertEquals(1, failure.getSuppressed().length);
         assertTrue(failure.getSuppressed()[0]
                 instanceof ManagedExtractionCache.CleanupPendingException);
@@ -499,5 +586,15 @@ class ManagedExtractionCacheTest {
         private static String key(long tenantId, long fileId) {
             return tenantId + ":" + fileId;
         }
+    }
+
+    private static final class RowLockTransactionManager extends AbstractPlatformTransactionManager {
+        private final ReentrantLock rowLock;
+        private RowLockTransactionManager(ReentrantLock rowLock) { this.rowLock = rowLock; }
+        @Override protected Object doGetTransaction() { return new Object(); }
+        @Override protected void doBegin(Object transaction, TransactionDefinition definition) { }
+        @Override protected void doCommit(DefaultTransactionStatus status) { unlock(); }
+        @Override protected void doRollback(DefaultTransactionStatus status) { unlock(); }
+        private void unlock() { if (rowLock.isHeldByCurrentThread()) rowLock.unlock(); }
     }
 }

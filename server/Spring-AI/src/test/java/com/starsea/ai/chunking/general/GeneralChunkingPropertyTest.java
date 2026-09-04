@@ -102,7 +102,8 @@ class GeneralChunkingPropertyTest {
         List<ChunkDraft> drafts = new GeneralChunkPlanningStrategy(codePointCounter()).plan(request).drafts();
 
         assertEquals(List.of(64, 1), drafts.stream().map(draft -> UnicodeText.length(draft.content())).toList());
-        assertEquals(source, drafts.stream().map(ChunkDraft::content).reduce("", String::concat));
+        assertEquals(source, drafts.stream().map(ChunkDraft::content)
+                .collect(java.util.stream.Collectors.joining()));
         drafts.forEach(draft -> assertWellFormedUtf16(draft.content(), -1));
     }
 
@@ -165,20 +166,23 @@ class GeneralChunkingPropertyTest {
 
     private String referenceCollapseWhitespace(String input) {
         StringBuilder result = new StringBuilder();
-        int[] points = input.codePoints().toArray();
-        for (int index = 0; index < points.length;) {
-            if (!isWhitespace(points[index])) {
-                result.appendCodePoint(points[index++]);
+        for (int offset = 0; offset < input.length();) {
+            int codePoint = input.codePointAt(offset);
+            if (!isWhitespace(codePoint)) {
+                result.appendCodePoint(codePoint);
+                offset += Character.charCount(codePoint);
                 continue;
             }
-            int start = index;
+            int start = offset;
             int lineFeeds = 0;
-            while (index < points.length && isWhitespace(points[index])) {
-                if (points[index] == '\n') lineFeeds++;
-                index++;
+            while (offset < input.length()) {
+                int current = input.codePointAt(offset);
+                if (!isWhitespace(current)) break;
+                if (current == '\n') lineFeeds++;
+                offset += Character.charCount(current);
             }
             if (lineFeeds > 0) result.append("\n".repeat(Math.min(2, lineFeeds)));
-            else if (start > 0 && index < points.length) result.append(' ');
+            else if (start > 0 && offset < input.length()) result.append(' ');
         }
         return result.toString();
     }

@@ -47,7 +47,7 @@ public class PlainTextExtractor implements DocumentTextExtractor {
     }
 
     @Override public String id() { return "plain-text"; }
-    @Override public String version() { return "3"; }
+    @Override public String version() { return "4"; }
     @Override public int priority() { return 300; }
     @Override public Set<String> supportedMediaTypes() { return MEDIA_TYPES; }
 
@@ -130,6 +130,10 @@ public class PlainTextExtractor implements DocumentTextExtractor {
         Attempt utf8 = decodeAttempt(original, 0, StandardCharsets.UTF_8, true);
         if (utf8 != null) {
             requireWithinLimit(utf8, StandardCharsets.UTF_8);
+            Attempt alternateGb = decodeAttempt(original, 0, Charset.forName("GB18030"), false);
+            if (alternateGb != null && isUtf8LegacyAmbiguity(utf8.analysis(), alternateGb.analysis())) {
+                throw unreliableEncoding();
+            }
             return utf8.decoded();
         }
 
@@ -141,6 +145,14 @@ public class PlainTextExtractor implements DocumentTextExtractor {
         return requireDecoded(original, 0, selected);
     }
 
+    private boolean isUtf8LegacyAmbiguity(Analysis utf8, Analysis gb) {
+        return utf8.otherScriptCodePoints() >= 2
+                && utf8.latinCodePoints() == 0
+                && utf8.cjkCodePoints() == 0
+                && gb.cjkCodePoints() >= 2
+                && gb.cjkCodePoints() * 2 >= gb.letterCodePoints();
+    }
+
     private Charset selectLegacyCharset(byte[] original, Attempt gb, Attempt western,
                                         Charset gb18030, Charset windows1252) {
         if (gb == null && western == null) throw unreliableEncoding();
@@ -150,6 +162,10 @@ public class PlainTextExtractor implements DocumentTextExtractor {
         DetectorConfidence confidence = detectorConfidence(original);
         Analysis gbAnalysis = gb.analysis();
         Analysis westernAnalysis = western.analysis();
+        if (gbAnalysis.cjkCodePoints() >= 4
+                && gbAnalysis.cjkCodePoints() * 2 >= gbAnalysis.letterCodePoints()) {
+            return requireWithinLimit(gb, gb18030);
+        }
         if (gbAnalysis.cjkCodePoints() >= 2
                 && gbAnalysis.cjkCodePoints() * 2 >= gbAnalysis.letterCodePoints()
                 && confidence.gb18030() >= confidence.windows1252()) {
@@ -260,10 +276,21 @@ public class PlainTextExtractor implements DocumentTextExtractor {
                 && codePoint != '\t' && codePoint != '\f') return false;
         analysis.codePoints++;
         if (isCjk(codePoint)) analysis.cjkCodePoints++;
-        if (Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.LATIN) {
+        Character.UnicodeScript script = Character.UnicodeScript.of(codePoint);
+        if (script == Character.UnicodeScript.LATIN) {
             analysis.latinCodePoints++;
         }
-        if (Character.isLetter(codePoint)) analysis.letterCodePoints++;
+        if (Character.isLetter(codePoint)) {
+            analysis.letterCodePoints++;
+            if (script != Character.UnicodeScript.LATIN && !isCjk(codePoint)) {
+                analysis.otherLetterCodePoints++;
+            }
+        }
+        if (script != Character.UnicodeScript.LATIN && !isCjk(codePoint)
+                && script != Character.UnicodeScript.COMMON
+                && script != Character.UnicodeScript.INHERITED) {
+            analysis.otherScriptCodePoints++;
+        }
         return true;
     }
 
@@ -291,8 +318,9 @@ public class PlainTextExtractor implements DocumentTextExtractor {
 
     private record Decoded(String text, String charset) {}
     private record DetectorConfidence(int gb18030, int windows1252) {}
-    private record Analysis(int codePoints, int cjkCodePoints,
-                            int latinCodePoints, int letterCodePoints) {}
+    private record Analysis(int codePoints, int cjkCodePoints, int latinCodePoints,
+                            int letterCodePoints, int otherLetterCodePoints,
+                            int otherScriptCodePoints) {}
     private record Attempt(Analysis analysis, Decoded decoded, boolean tooLarge) {}
 
     private static final class MutableAnalysis {
@@ -300,10 +328,13 @@ public class PlainTextExtractor implements DocumentTextExtractor {
         private int cjkCodePoints;
         private int latinCodePoints;
         private int letterCodePoints;
+        private int otherLetterCodePoints;
+        private int otherScriptCodePoints;
         private char pendingHighSurrogate;
 
         private Analysis freeze() {
-            return new Analysis(codePoints, cjkCodePoints, latinCodePoints, letterCodePoints);
+            return new Analysis(codePoints, cjkCodePoints, latinCodePoints,
+                    letterCodePoints, otherLetterCodePoints, otherScriptCodePoints);
         }
     }
 }

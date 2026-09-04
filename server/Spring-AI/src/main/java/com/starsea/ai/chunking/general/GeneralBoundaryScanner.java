@@ -43,36 +43,50 @@ public final class GeneralBoundaryScanner {
     /** Finds one preferred fallback boundary without consuming or changing any source character. */
     public static BoundaryUnit scanFallback(String text, int maximumCodePoints, SourceLocator sourceLocator) {
         Objects.requireNonNull(text, "text");
-        int available = Math.min(UnicodeText.length(text), maximumCodePoints);
-        if (available <= 0) throw new IllegalArgumentException("maximumCodePoints must be positive");
-        int[] codePoints = text.codePoints().limit(available).toArray();
+        if (maximumCodePoints <= 0 || text.isEmpty()) {
+            throw new IllegalArgumentException("maximumCodePoints must be positive");
+        }
         int line = -1;
         int sentence = -1;
         int whitespace = -1;
-        for (int index = 0; index < codePoints.length; index++) {
-            int codePoint = codePoints[index];
-            if (codePoint == '\n') line = index + 1;
-            if (isSentenceEnd(codePoint)) sentence = index + 1;
+        int lineCharEnd = -1;
+        int sentenceCharEnd = -1;
+        int whitespaceCharEnd = -1;
+        int scanned = 0;
+        int charOffset = 0;
+        while (charOffset < text.length() && scanned < maximumCodePoints) {
+            int codePoint = text.codePointAt(charOffset);
+            charOffset += Character.charCount(codePoint);
+            scanned++;
+            if (codePoint == '\n') { line = scanned; lineCharEnd = charOffset; }
+            if (isSentenceEnd(codePoint)) { sentence = scanned; sentenceCharEnd = charOffset; }
             if (UnicodeText.isWhitespace(codePoint)) {
-                whitespace = index + 1;
+                whitespace = scanned;
+                whitespaceCharEnd = charOffset;
             }
         }
+        if (scanned == 0) throw new IllegalArgumentException("maximumCodePoints must be positive");
         int end;
+        int endChar;
         BoundaryKind kind;
         if (line > 0) {
             end = line;
+            endChar = lineCharEnd;
             kind = BoundaryKind.LINE_BREAK;
         } else if (sentence > 0) {
             end = sentence;
+            endChar = sentenceCharEnd;
             kind = BoundaryKind.SENTENCE_END;
         } else if (whitespace > 0) {
             end = whitespace;
+            endChar = whitespaceCharEnd;
             kind = BoundaryKind.WHITESPACE;
         } else {
-            end = available;
+            end = scanned;
+            endChar = charOffset;
             kind = BoundaryKind.FORCED_CHARACTER;
         }
-        return new BoundaryUnit(UnicodeText.substring(text, 0, end), 0, end, sourceLocator, kind);
+        return new BoundaryUnit(text.substring(0, endChar), 0, end, sourceLocator, kind);
     }
 
     private static boolean isSentenceEnd(int codePoint) {

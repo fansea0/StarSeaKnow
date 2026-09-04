@@ -4,7 +4,6 @@ import com.starsea.ai.chunking.extraction.ExtractedText;
 import com.starsea.ai.chunking.extraction.SourceSpan;
 import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
 import java.util.List;
 
 /** Applies unconditional newline and control-character normalization in one pass. */
@@ -22,11 +21,11 @@ public final class TextNormalizer {
 
     private NormalizedText normalize(String input, List<SourceSpan> spans) {
         String source = input == null ? "" : input;
+        if (!requiresNormalization(source)) {
+            return new NormalizedText(source, 0, TextOffsetMap.identity(source, 0), spans);
+        }
         StringBuilder output = new StringBuilder(source.length());
-        int[] offsets = new int[source.length() + 1];
-        int[] characterStarts = new int[source.length()];
-        int[] characterEnds = new int[source.length()];
-        int offsetCount = 1;
+        TextOffsetMap.Builder offsets = TextOffsetMap.builder();
         int removed = 0;
         for (int index = 0; index < source.length();) {
             int codePoint = source.codePointAt(index);
@@ -34,30 +33,34 @@ public final class TextNormalizer {
             if (codePoint == '\r') {
                 int consumed = index + 1 < source.length() && source.charAt(index + 1) == '\n' ? 2 : 1;
                 output.append('\n');
-                characterStarts[output.length() - 1] = index;
-                characterEnds[output.length() - 1] = index + consumed;
-                offsets[offsetCount++] = index + consumed;
+                if (consumed == 1) offsets.appendIdentity(1, index);
+                else offsets.appendConstant(1, index, index + consumed);
                 index += consumed;
                 continue;
             }
             if (Character.getType(codePoint) == Character.CONTROL && codePoint != '\n' && codePoint != '\t') {
                 removed++;
                 index += width;
-                offsets[offsetCount - 1] = index;
                 continue;
             }
             output.appendCodePoint(codePoint);
-            int outputStart = output.length() - width;
-            for (int outputIndex = outputStart; outputIndex < output.length(); outputIndex++) {
-                characterStarts[outputIndex] = index;
-                characterEnds[outputIndex] = index + width;
-            }
-            if (width == 2) offsets[offsetCount++] = index + 1;
-            offsets[offsetCount++] = index + width;
+            offsets.appendIdentity(width, index);
             index += width;
         }
-        return new NormalizedText(output.toString(), removed, Arrays.copyOf(offsets, offsetCount),
-                Arrays.copyOf(characterStarts, output.length()),
-                Arrays.copyOf(characterEnds, output.length()), spans);
+        String normalized = output.toString();
+        return new NormalizedText(normalized, removed,
+                offsets.build(normalized, source.length()), spans);
+    }
+
+    private boolean requiresNormalization(String source) {
+        for (int index = 0; index < source.length();) {
+            int codePoint = source.codePointAt(index);
+            if (codePoint == '\r' || Character.getType(codePoint) == Character.CONTROL
+                    && codePoint != '\n' && codePoint != '\t') {
+                return true;
+            }
+            index += Character.charCount(codePoint);
+        }
+        return false;
     }
 }

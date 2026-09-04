@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GeneralTextCleanerTest {
@@ -131,9 +132,48 @@ class GeneralTextCleanerTest {
         assertEquals("\nalpha\n", clean(" \t\n alpha \n\t ", config));
     }
 
+    @Test
+    void disabled_cleaning_shares_ten_megabyte_identity_source_mapping_without_arrays() {
+        String source = "x".repeat(10_000_000);
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
+                false, false, false);
+        NormalizedText normalized = new TextNormalizer().normalize(source);
+
+        CleanedSegment segment = new GeneralTextCleaner().clean(
+                new GeneralBoundaryScanner(config).scan(normalized), config, normalized)
+                .segments().get(0);
+
+        assertSame(source, segment.text());
+        assertTrue(segment.offsetMap().hasIdentityMapping());
+        assertTrue(segment.offsetMap().sharesSourceMapping(normalized));
+        assertEquals(0, segment.offsetMap().mappingArrayCount());
+        assertEquals(1, segment.offsetMap().mappingSegmentCount());
+        assertEquals(9_999_999, segment.offsetMap().sourceStart(9_999_999));
+        assertEquals(10_000_000, segment.offsetMap().sourceEnd(10_000_000));
+    }
+
+    @Test
+    void cleaned_offset_mapping_uses_one_packed_array_and_linear_run_growth() {
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
+                true, true, true);
+        String unit = "a   https://example.test/path  user@example.test\n\uD83D\uDE00 ";
+        CleanedOffsetMap small = cleanSegment(unit.repeat(100), config).offsetMap();
+        CleanedOffsetMap large = cleanSegment(unit.repeat(1_000), config).offsetMap();
+
+        assertEquals(1, small.mappingArrayCount());
+        assertEquals(1, large.mappingArrayCount());
+        assertTrue(large.mappingSegmentCount() <= small.mappingSegmentCount() * 11,
+                () -> "cleaned mapping runs grew from " + small.mappingSegmentCount()
+                        + " to " + large.mappingSegmentCount());
+    }
+
     private String clean(String source, GeneralChunkConfig config) {
+        return cleanSegment(source, config).text();
+    }
+
+    private CleanedSegment cleanSegment(String source, GeneralChunkConfig config) {
         NormalizedText normalized = new TextNormalizer().normalize(source);
         return new GeneralTextCleaner().clean(new GeneralBoundaryScanner(config).scan(normalized),
-                config, normalized).segments().get(0).text();
+                config, normalized).segments().get(0);
     }
 }

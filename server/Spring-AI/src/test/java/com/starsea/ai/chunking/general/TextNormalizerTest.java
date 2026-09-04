@@ -9,6 +9,8 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TextNormalizerTest {
 
@@ -56,5 +58,49 @@ class TextNormalizerTest {
         assertEquals(1, normalized.sourceLocator(0, 1).endOffset());
         assertEquals(2, normalized.sourceLocator(1, 2).startOffset());
         assertEquals(3, normalized.sourceLocator(1, 2).endOffset());
+    }
+
+    @Test
+    void unchanged_ten_megabyte_ascii_text_uses_shared_identity_mapping_without_arrays() {
+        String source = "x".repeat(10_000_000);
+
+        NormalizedText normalized = new TextNormalizer().normalize(source);
+
+        assertSame(source, normalized.text());
+        assertTrue(normalized.hasIdentityOffsetMapping());
+        assertEquals(0, normalized.offsetMappingArrayCount());
+        assertEquals(1, normalized.offsetMappingSegmentCount());
+        assertEquals(9_999_999, normalized.originalCharacterStart(9_999_999));
+        assertEquals(10_000_000, normalized.originalOffset(10_000_000));
+    }
+
+    @Test
+    void changed_offset_mapping_uses_one_packed_array_and_grows_linearly_by_runs() {
+        String unit = "a\r\nb\u0000\uD83D\uDE00";
+        NormalizedText small = new TextNormalizer().normalize(unit.repeat(100));
+        NormalizedText large = new TextNormalizer().normalize(unit.repeat(1_000));
+
+        assertEquals(1, small.offsetMappingArrayCount());
+        assertEquals(1, large.offsetMappingArrayCount());
+        assertTrue(large.offsetMappingSegmentCount() <= small.offsetMappingSegmentCount() * 11,
+                () -> "mapping runs grew from " + small.offsetMappingSegmentCount()
+                        + " to " + large.offsetMappingSegmentCount());
+    }
+
+    @Test
+    void compact_mapping_preserves_boundary_and_character_bias_around_removed_text() {
+        NormalizedText normalized = new TextNormalizer().normalize(
+                "\u0000A\r\n\uD83D\uDE00\u0002B\u0003");
+
+        assertEquals("A\n\uD83D\uDE00B", normalized.text());
+        assertEquals(List.of(1, 2, 4, 5, 7, 9),
+                java.util.stream.IntStream.rangeClosed(0, normalized.text().length())
+                        .mapToObj(normalized::originalOffset).toList());
+        assertEquals(List.of(1, 2, 4, 4, 7),
+                java.util.stream.IntStream.range(0, normalized.text().length())
+                        .mapToObj(normalized::originalCharacterStart).toList());
+        assertEquals(List.of(2, 4, 6, 6, 8),
+                java.util.stream.IntStream.range(0, normalized.text().length())
+                        .mapToObj(normalized::originalCharacterEnd).toList());
     }
 }

@@ -114,6 +114,20 @@ class DocumentTextExtractorContractTest {
     }
 
     @Test
+    void valid_utf8_shaped_gbk_bytes_are_not_misreported_as_cyrillic_text() throws Exception {
+        Path source = tempDir.resolve("utf8-shaped-gbk.txt");
+        byte[] bytes = new byte[]{(byte) 0xd4, (byte) 0xad, (byte) 0xd6, (byte) 0xb1};
+        Files.write(source, bytes);
+        PlainTextExtractor extractor = new PlainTextExtractor(10_000, 10_000);
+
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> extractor.extract(source, extractor.probe(source, "text/plain")));
+
+        assertEquals(DocumentTextExtractor.FailureReason.UNRELIABLE_ENCODING, failure.reason());
+    }
+
+    @Test
     void rejects_binary_content_even_when_it_starts_with_a_valid_text_bom() throws Exception {
         Path source = tempDir.resolve("bom-binary.txt");
         Files.write(source, new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF, 0, 1, 2});
@@ -504,6 +518,8 @@ class DocumentTextExtractorContractTest {
                         "GB18030 中文分块测试"),
                 Arguments.of("GB18030", java.nio.charset.Charset.forName("GBK"),
                         "GBK 中文兼容测试"),
+                Arguments.of("GB18030", java.nio.charset.Charset.forName("GBK"),
+                        "厂东农二正使"),
                 Arguments.of("windows-1252", java.nio.charset.Charset.forName("windows-1252"),
                         "Windows résumé — café €"),
                 Arguments.of("windows-1252", java.nio.charset.Charset.forName("windows-1252"),

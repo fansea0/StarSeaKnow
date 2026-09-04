@@ -72,13 +72,35 @@ class FileServiceImplTest {
     private FileServiceImpl service;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         fileMapper = mock(FileMapper.class);
         knowledgeFileMapper = mock(KnowledgeFileMapper.class);
         knowledgeMapper = mock(KnowledgeMapper.class);
         processingMapper = mock(FileProcessingMapper.class);
         transactionManager = new TestTransactionManager();
         extractionCache = mock(ManagedExtractionCache.class);
+        doAnswer(invocation -> {
+            Files.deleteIfExists(invocation.getArgument(0));
+            return null;
+        }).when(extractionCache).deleteUploadedSource(any(Path.class));
+        when(extractionCache.prepareSourceDeletion(any(Long.class), any(Long.class),
+                any(Path.class), any(Path.class))).thenAnswer(invocation ->
+                new ManagedExtractionCache.PreparedSourceDeletion(UUID.randomUUID(),
+                        invocation.getArgument(2), invocation.getArgument(3)));
+        doAnswer(invocation -> {
+            ManagedExtractionCache.PreparedSourceDeletion deletion = invocation.getArgument(0);
+            Files.createDirectories(deletion.quarantine().getParent());
+            Files.move(deletion.source(), deletion.quarantine());
+            return null;
+        }).when(extractionCache).movePreparedSource(
+                any(ManagedExtractionCache.PreparedSourceDeletion.class));
+        doAnswer(invocation -> {
+            ManagedExtractionCache.PreparedSourceDeletion deletion = invocation.getArgument(0);
+            Files.createDirectories(deletion.source().getParent());
+            Files.move(deletion.quarantine(), deletion.source());
+            return null;
+        }).when(extractionCache).restorePreparedSource(
+                any(ManagedExtractionCache.PreparedSourceDeletion.class));
         extractorRegistry = mock(DocumentTextExtractorRegistry.class);
         service = new FileServiceImpl(fileMapper, knowledgeFileMapper, knowledgeMapper,
                 processingMapper, extractionCache, extractorRegistry, transactionManager);
@@ -248,7 +270,7 @@ class FileServiceImplTest {
     }
 
     @Test
-    void missing_processing_insert_rejects_upload_and_removes_physical_file() {
+    void missing_processing_insert_rejects_upload_and_removes_physical_file() throws Exception {
         Knowledge knowledge = new Knowledge();
         knowledge.setId(10L);
         when(knowledgeMapper.selectById(10L)).thenReturn(knowledge);
@@ -263,7 +285,8 @@ class FileServiceImplTest {
         assertThrows(IllegalStateException.class,
                 () -> service.uploadToKnowledge(markdown("missing-row.md"), 10L));
 
-        assertFalse(Files.exists(uploadDirectory.resolve("missing-row.md")));
+        assertEquals(0, storedFileCount());
+        verify(extractionCache).deleteUploadedSource(any(Path.class));
     }
 
     @Test
@@ -299,7 +322,10 @@ class FileServiceImplTest {
         com.starsea.ai.domain.File row = new com.starsea.ai.domain.File();
         row.setId(20L);
         row.setPath(source.toString());
-        when(fileMapper.selectById(20L)).thenReturn(row);
+        when(fileMapper.selectScopedForUpdate(1L, 20L)).thenAnswer(invocation -> {
+            assertTrue(transactionManager.isActive());
+            return row;
+        });
         when(fileMapper.deleteById(20L)).thenReturn(1);
         ManagedExtractionCache.ManagedFileQuarantine quarantine =
                 mock(ManagedExtractionCache.ManagedFileQuarantine.class);
@@ -317,6 +343,25 @@ class FileServiceImplTest {
         verify(quarantine, never()).restore();
         verify(fileMapper).deleteById(20L);
         assertFalse(Files.exists(source));
+        var order = inOrder(fileMapper, extractionCache);
+        order.verify(fileMapper).selectScopedForUpdate(1L, 20L);
+        order.verify(extractionCache).quarantineManagedFiles(1L, 20L);
+        order.verify(extractionCache).prepareSourceDeletion(
+                org.mockito.ArgumentMatchers.eq(1L), org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.eq(source), any(Path.class));
+        order.verify(extractionCache).movePreparedSource(
+                any(ManagedExtractionCache.PreparedSourceDeletion.class));
+        order.verify(fileMapper).deleteById(20L);
+    }
+
+    @Test
+    void delete_missing_scoped_owner_does_not_touch_any_managed_file() {
+        when(fileMapper.selectScopedForUpdate(1L, 20L)).thenReturn(null);
+
+        assertFalse(service.deleteFile(20L));
+
+        verify(extractionCache, never()).quarantineManagedFiles(any(Long.class), any(Long.class));
+        verify(fileMapper, never()).deleteById(any(Long.class));
     }
 
     @Test
@@ -331,7 +376,7 @@ class FileServiceImplTest {
         com.starsea.ai.domain.File row = new com.starsea.ai.domain.File();
         row.setId(20L);
         row.setPath(source.toString());
-        when(fileMapper.selectById(20L)).thenReturn(row);
+        when(fileMapper.selectScopedForUpdate(1L, 20L)).thenReturn(row);
         when(fileMapper.deleteById(20L)).thenReturn(1);
         ManagedExtractionCache.ManagedFileQuarantine quarantine =
                 mock(ManagedExtractionCache.ManagedFileQuarantine.class);
@@ -362,7 +407,7 @@ class FileServiceImplTest {
         com.starsea.ai.domain.File row = new com.starsea.ai.domain.File();
         row.setId(20L);
         row.setPath(source.toString());
-        when(fileMapper.selectById(20L)).thenReturn(row);
+        when(fileMapper.selectScopedForUpdate(1L, 20L)).thenReturn(row);
         when(fileMapper.deleteById(20L)).thenReturn(1);
         ManagedExtractionCache.ManagedFileQuarantine quarantine =
                 mock(ManagedExtractionCache.ManagedFileQuarantine.class);
@@ -388,16 +433,11 @@ class FileServiceImplTest {
         com.starsea.ai.domain.File row = new com.starsea.ai.domain.File();
         row.setId(20L);
         row.setPath(source.toString());
-        when(fileMapper.selectById(20L)).thenReturn(row);
+        when(fileMapper.selectScopedForUpdate(1L, 20L)).thenReturn(row);
         when(fileMapper.deleteById(20L)).thenReturn(1);
         ManagedExtractionCache.ManagedFileQuarantine quarantine =
                 mock(ManagedExtractionCache.ManagedFileQuarantine.class);
         when(extractionCache.quarantineManagedFiles(1L, 20L)).thenReturn(quarantine);
-        UUID obligationId = UUID.randomUUID();
-        when(extractionCache.persistSourceCleanup(
-                org.mockito.ArgumentMatchers.eq(1L),
-                org.mockito.ArgumentMatchers.eq(20L), any(Path.class)))
-                .thenReturn(obligationId);
         FileServiceImpl failingCleanup = new FileServiceImpl(fileMapper, knowledgeFileMapper,
                 knowledgeMapper, processingMapper, extractionCache, extractorRegistry,
                 transactionManager) {
@@ -410,11 +450,10 @@ class FileServiceImplTest {
 
         assertTrue(failingCleanup.deleteFile(20L));
 
-        verify(extractionCache).persistSourceCleanup(
+        verify(extractionCache).prepareSourceDeletion(
                 org.mockito.ArgumentMatchers.eq(1L),
-                org.mockito.ArgumentMatchers.eq(20L),
-                org.mockito.ArgumentMatchers.argThat(path -> path.getFileName().toString()
-                        .contains(".deleting-")));
+                org.mockito.ArgumentMatchers.eq(20L), any(Path.class),
+                org.mockito.ArgumentMatchers.argThat(path -> path.toString().contains(".deleting")));
         verify(quarantine).commit();
         assertFalse(Files.exists(source));
     }
@@ -439,6 +478,12 @@ class FileServiceImplTest {
                 .map(mapping -> mapping.getProperty())
                 .toList()
                 .containsAll(List.of("pipelineState", "progress", "processingError")));
+
+        MappedStatement lockStatement = configuration.getMappedStatement(
+                "com.starsea.ai.mapper.FileMapper.selectScopedForUpdate");
+        String lockSql = lockStatement.getBoundSql(Map.of("tenantId", 1L, "fileId", 20L))
+                .getSql().replaceAll("\\s+", " ").trim();
+        assertTrue(lockSql.contains("WHERE tenant_id = ? AND id = ? FOR UPDATE"));
     }
 
     private MockMultipartFile markdown(String filename) {

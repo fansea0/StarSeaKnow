@@ -41,6 +41,13 @@
         select * from file where id = #{id}
     </select>
 
+    <select id="selectScopedForUpdate" resultMap="BaseResultMap">
+        SELECT <include refid="Base_Column_List"/>
+        FROM file
+        WHERE tenant_id = #{tenantId} AND id = #{fileId}
+        FOR UPDATE
+    </select>
+
     <select id="selectByKnowledgeId" resultMap="FileVoResultMap">
         SELECT f.id, f.file_name, f.size, f.status, f.type, f.path, f.create_time, f.update_time,
                fp.pipeline_state, fp.progress, fp.last_error AS processing_error

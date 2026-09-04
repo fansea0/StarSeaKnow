@@ -163,8 +163,9 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
 
     private PlannedDraft plannedDraft(List<MappedFragment> fragments, String start, String end,
                                       boolean forced) {
-        String content = fragments.stream().map(MappedFragment::text)
-                .reduce("", String::concat);
+        StringBuilder contentBuilder = new StringBuilder();
+        fragments.forEach(fragment -> contentBuilder.append(fragment.text()));
+        String content = contentBuilder.toString();
         SourceLocator locator = combineLocators(fragments.stream()
                 .map(MappedFragment::sourceLocator).filter(Objects::nonNull).toList());
         return new PlannedDraft(List.copyOf(fragments), content, locator,
@@ -195,8 +196,56 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
             startOffset = source.startOffset() == null ? null : source.startOffset() + charStart;
             endOffset = source.startOffset() == null ? source.endOffset() : source.startOffset() + charEnd;
         }
+        List<Map<String, Object>> regions = source.regions();
+        Integer startPage = source.startPage();
+        Integer endPage = source.endPage();
+        Integer startLine = source.startLine();
+        Integer endLine = source.endLine();
+        Object mapped = block.attributes().get(CleanedSegment.SOURCE_REGIONS_ATTRIBUTE);
+        if (mapped instanceof List<?> candidates && startOffset != null && endOffset != null) {
+            List<Map<String, Object>> sliced = new ArrayList<>();
+            Integer slicedStartPage = null;
+            Integer slicedEndPage = null;
+            Integer slicedStartLine = null;
+            Integer slicedEndLine = null;
+            for (Object candidate : candidates) {
+                if (!(candidate instanceof MappedSourceRegion region)
+                        || region.sourceEnd() <= startOffset || region.sourceStart() >= endOffset) {
+                    continue;
+                }
+                sliced.add(region.region());
+                Object page = region.region().get("page");
+                if (page instanceof Number number) {
+                    int value = number.intValue();
+                    slicedStartPage = slicedStartPage == null ? value : Math.min(slicedStartPage, value);
+                    slicedEndPage = slicedEndPage == null ? value : Math.max(slicedEndPage, value);
+                }
+                Integer regionStartLine = integer(region.region().get("startLine"));
+                Integer regionEndLine = integer(region.region().get("endLine"));
+                Integer line = integer(region.region().get("line"));
+                if (regionStartLine == null) regionStartLine = line;
+                if (regionEndLine == null) regionEndLine = line;
+                if (regionStartLine != null) {
+                    slicedStartLine = slicedStartLine == null ? regionStartLine
+                            : Math.min(slicedStartLine, regionStartLine);
+                }
+                if (regionEndLine != null) {
+                    slicedEndLine = slicedEndLine == null ? regionEndLine
+                            : Math.max(slicedEndLine, regionEndLine);
+                }
+            }
+            regions = List.copyOf(sliced);
+            startPage = slicedStartPage;
+            endPage = slicedEndPage;
+            startLine = slicedStartLine;
+            endLine = slicedEndLine;
+        }
         return new SourceLocator(source.type(), source.blockIds(), startOffset, endOffset,
-                source.startLine(), source.endLine(), source.startPage(), source.endPage(), source.regions());
+                startLine, endLine, startPage, endPage, regions);
+    }
+
+    private Integer integer(Object value) {
+        return value instanceof Number number ? number.intValue() : null;
     }
 
     private SourceLocator combineLocators(List<SourceLocator> locators) {
@@ -242,7 +291,10 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
                     boundaryValue(range.get(range.size() - 1), "end"));
             result.subList(rangeStart, rangeEnd).clear();
             result.addAll(rangeStart, replacement);
-            index = Math.max(0, rangeStart - 1);
+            // Repartitioning may legitimately leave whitespace-only chunks when a run is longer
+            // than every body budget. The selected range already includes both available
+            // neighbouring seeds, so revisiting it cannot improve the layout and would loop.
+            index = rangeStart + replacement.size();
         }
         return result;
     }
@@ -264,9 +316,6 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
     private List<PlannedDraft> repartition(MappedSequence sequence, int globalStartIndex,
                                             int firstBudget, int laterBudget, int maxTokens,
                                             String outerStart, String outerEnd) {
-        if (UnicodeText.isBlank(sequence.content())) {
-            throw new IllegalArgumentException("Retained Unicode whitespace contains no chunkable text");
-        }
         List<Integer> boundaries = new ArrayList<>();
         boundaries.add(0);
         int start = 0;
@@ -274,28 +323,24 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
             int budget = globalStartIndex + boundaries.size() - 1 == 0
                     ? firstBudget : laterBudget;
             int end = maximumFittingEnd(sequence.index(), start, budget, maxTokens);
-            if (end <= start || UnicodeText.isBlank(sequence.index().substring(start, end))) {
-                throw cannotPackWhitespace();
-            }
+            if (end <= start) throw cannotPackWhitespace();
             if (end < sequence.length()) {
                 int lastNonWhitespace = sequence.lastNonWhitespace();
                 if (lastNonWhitespace < end) {
                     int adjusted = lastNonWhitespace;
-                    if (adjusted <= start
-                            || UnicodeText.isBlank(sequence.index().substring(start, adjusted))) {
-                        throw cannotPackWhitespace();
+                    if (adjusted > start
+                            && !UnicodeText.isBlank(sequence.index().substring(start, adjusted))) {
+                        end = adjusted;
                     }
-                    end = adjusted;
                 } else {
                     int nextEnd = maximumFittingEnd(
                             sequence.index(), end, laterBudget, maxTokens);
                     if (UnicodeText.isBlank(sequence.index().substring(end, nextEnd))) {
                         int seed = sequence.previousNonWhitespace(end - 1);
-                        if (seed <= start
-                                || UnicodeText.isBlank(sequence.index().substring(start, seed))) {
-                            throw cannotPackWhitespace();
+                        if (seed > start
+                                && !UnicodeText.isBlank(sequence.index().substring(start, seed))) {
+                            end = seed;
                         }
-                        end = seed;
                     }
                 }
             }
@@ -341,7 +386,7 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
         for (int index = 0; index < drafts.size(); index++) {
             PlannedDraft draft = drafts.get(index);
             int budget = index == 0 ? firstBudget : laterBudget;
-            if (UnicodeText.isBlank(draft.content())
+            if (draft.content() == null || draft.content().isEmpty()
                     || UnicodeText.length(draft.content()) > budget
                     || tokenCounter.count(ChunkIndexContentBuilder.preview(List.of(), draft.content())) > maxTokens) {
                 throw new IllegalStateException("General planner produced an invalid chunk");
@@ -401,8 +446,9 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
 
         private MappedSequence(List<MappedFragment> fragments) {
             this.fragments = List.copyOf(fragments);
-            this.content = fragments.stream().map(MappedFragment::text)
-                    .reduce("", String::concat);
+            StringBuilder joined = new StringBuilder();
+            fragments.forEach(fragment -> joined.append(fragment.text()));
+            this.content = joined.toString();
             this.index = UnicodeText.index(content);
         }
 

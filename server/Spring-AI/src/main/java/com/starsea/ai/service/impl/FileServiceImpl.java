@@ -149,61 +149,49 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
         if (fileId == null) {
             return false;
         }
-        com.starsea.ai.domain.File file = fileMapper.selectById(fileId);
-        if (file == null || !fileId.equals(file.getId())) {
-            return false;
-        }
-        Path uploadRoot = Path.of(path).toAbsolutePath().normalize();
-        Path source = Path.of(file.getPath()).toAbsolutePath().normalize();
-        if (!source.startsWith(uploadRoot)) {
-            throw new IllegalStateException("文件路径不在受管上传目录中");
-        }
-        ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine =
-                extractionCache.quarantineManagedFiles(tenantId, fileId);
-        Path sourceQuarantine;
+        extractionCache.recoverManagedFiles(tenantId, fileId);
+        DeletionState[] state = new DeletionState[1];
         try {
-            if (!Files.exists(source)) {
-                throw new IllegalStateException("源文件不存在");
-            }
-            sourceQuarantine = source.resolveSibling(source.getFileName()
-                    + ".deleting-" + UUID.randomUUID());
-            moveAtomically(source, sourceQuarantine);
-        } catch (IOException exception) {
-            IllegalStateException failure = new IllegalStateException("源文件隔离失败", exception);
-            restoreCache(cacheQuarantine, failure);
-            throw failure;
-        } catch (RuntimeException failure) {
-            restoreCache(cacheQuarantine, failure);
-            throw failure;
-        }
-        try {
-            transactionTemplate.executeWithoutResult(status -> {
+            DeletionState committed = transactionTemplate.execute(status -> {
+                com.starsea.ai.domain.File file = fileMapper.selectScopedForUpdate(tenantId, fileId);
+                if (file == null || !fileId.equals(file.getId())) return null;
+                Path uploadRoot = Path.of(path).toAbsolutePath().normalize();
+                Path source = Path.of(file.getPath()).toAbsolutePath().normalize();
+                if (!source.startsWith(uploadRoot)) {
+                    throw new IllegalStateException("文件路径不在受管上传目录中");
+                }
+                if (!Files.isRegularFile(source, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    throw new IllegalStateException("源文件不存在");
+                }
+                ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine =
+                        extractionCache.quarantineManagedFiles(tenantId, fileId);
+                Path sourceQuarantine = uploadRoot.resolve(".deleting")
+                        .resolve(Long.toString(tenantId)).resolve(Long.toString(fileId))
+                        .resolve(source.getFileName() + ".deleting-" + UUID.randomUUID());
+                ManagedExtractionCache.PreparedSourceDeletion sourceDeletion;
+                try {
+                    sourceDeletion = extractionCache.prepareSourceDeletion(
+                            tenantId, fileId, source, sourceQuarantine);
+                    DeletionState prepared = new DeletionState(cacheQuarantine, sourceDeletion);
+                    state[0] = prepared;
+                    extractionCache.movePreparedSource(sourceDeletion);
+                    prepared.sourceMoved = true;
+                } catch (IOException | RuntimeException exception) {
+                    if (state[0] == null) restoreCache(cacheQuarantine, exception);
+                    if (exception instanceof RuntimeException runtime) throw runtime;
+                    throw new IllegalStateException("源文件隔离失败", exception);
+                }
                 if (fileMapper.deleteById(fileId) != 1) {
                     throw new IllegalStateException("文件记录删除失败");
                 }
+                return state[0];
             });
+            if (committed == null) return false;
+            finalizeCommittedDeletion(committed, tenantId, fileId);
+            return true;
         } catch (RuntimeException databaseFailure) {
-            restoreSource(sourceQuarantine, source, databaseFailure);
-            restoreCache(cacheQuarantine, databaseFailure);
+            restoreDeletion(state[0], databaseFailure);
             throw databaseFailure;
-        }
-        finalizeCommittedDeletion(cacheQuarantine, sourceQuarantine, tenantId, fileId);
-        return true;
-    }
-
-    private void moveAtomically(Path source, Path destination) throws IOException {
-        try {
-            Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException exception) {
-            throw new IOException("上传存储不支持原子移动", exception);
-        }
-    }
-
-    private void restoreSource(Path quarantine, Path source, Throwable failure) {
-        try {
-            moveAtomically(quarantine, source);
-        } catch (IOException restoreFailure) {
-            failure.addSuppressed(restoreFailure);
         }
     }
 
@@ -216,39 +204,57 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
         }
     }
 
-    private void finalizeCommittedDeletion(
-            ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine,
-            Path sourceQuarantine, long tenantId, long fileId) {
-        RuntimeException unjournaledFailure = null;
-        try {
-            deleteCommittedSource(sourceQuarantine);
-        } catch (IOException | RuntimeException failure) {
+    private void restoreDeletion(DeletionState state, Throwable failure) {
+        if (state == null) return;
+        if (state.sourceMoved) {
             try {
-                UUID obligationId = extractionCache.persistSourceCleanup(
-                        tenantId, fileId, sourceQuarantine);
-                log.warn("Cleanup obligation {} retained for tenant {} file {}",
-                        obligationId, tenantId, fileId);
-            } catch (RuntimeException journalFailure) {
-                unjournaledFailure = journalFailure;
+                extractionCache.restorePreparedSource(state.sourceDeletion);
+                extractionCache.completeCleanup(state.sourceDeletion.obligationId());
+            } catch (IOException | RuntimeException restoreFailure) {
+                failure.addSuppressed(restoreFailure);
+            }
+        } else {
+            try {
+                extractionCache.completeCleanup(state.sourceDeletion.obligationId());
+            } catch (RuntimeException completionFailure) {
+                failure.addSuppressed(completionFailure);
             }
         }
+        restoreCache(state.cacheQuarantine, failure);
+    }
+
+    private void finalizeCommittedDeletion(
+            DeletionState state, long tenantId, long fileId) {
         try {
-            cacheQuarantine.commit();
+            deleteCommittedSource(state.sourceDeletion.quarantine());
+            extractionCache.completeCleanup(state.sourceDeletion.obligationId());
+        } catch (IOException | RuntimeException failure) {
+            log.warn("Cleanup obligation {} retained for tenant {} file {}",
+                    state.sourceDeletion.obligationId(), tenantId, fileId);
+        }
+        try {
+            state.cacheQuarantine.commit();
         } catch (ManagedExtractionCache.CleanupPendingException pending) {
             log.warn("Cleanup obligation {} retained for tenant {} file {}",
                     pending.obligationId(), tenantId, fileId);
         } catch (RuntimeException failure) {
-            if (unjournaledFailure == null) unjournaledFailure = failure;
-            else unjournaledFailure.addSuppressed(failure);
-        }
-        if (unjournaledFailure != null) {
-            throw new IllegalStateException(
-                    "Post-commit cleanup could not persist an obligation", unjournaledFailure);
+            log.warn("Managed cache cleanup remains pending for tenant {} file {}", tenantId, fileId);
         }
     }
 
     protected void deleteCommittedSource(Path sourceQuarantine) throws IOException {
-        Files.deleteIfExists(sourceQuarantine);
+        extractionCache.deletePreparedSourcePath(sourceQuarantine);
+    }
+
+    private static final class DeletionState {
+        private final ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine;
+        private final ManagedExtractionCache.PreparedSourceDeletion sourceDeletion;
+        private boolean sourceMoved;
+        private DeletionState(ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine,
+                              ManagedExtractionCache.PreparedSourceDeletion sourceDeletion) {
+            this.cacheQuarantine = cacheQuarantine;
+            this.sourceDeletion = sourceDeletion;
+        }
     }
 
     private void writePhysicalFile(MultipartFile file, Path uploadRoot, Path createdPath) {
@@ -296,7 +302,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
 
     private void deleteCreatedPath(Path createdPath, Throwable failure) {
         try {
-            Files.deleteIfExists(createdPath);
+            extractionCache.deleteUploadedSource(createdPath);
         } catch (IOException cleanupFailure) {
             failure.addSuppressed(cleanupFailure);
             log.warn("Failed to remove a newly created upload");

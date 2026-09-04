@@ -264,7 +264,7 @@ public class ChunkPreviewWorker {
         }
         List<ChunkDraft> normalized = new java.util.ArrayList<>(drafts.size());
         for (ChunkDraft draft : drafts) {
-            if (draft == null || draft.content() == null || UnicodeText.isBlank(draft.content())) {
+            if (draft == null || draft.content() == null || draft.content().isEmpty()) {
                 throw new IllegalArgumentException("The planner produced an invalid chunk");
             }
             int bodyTokens = tokenCounter.count(draft.content());

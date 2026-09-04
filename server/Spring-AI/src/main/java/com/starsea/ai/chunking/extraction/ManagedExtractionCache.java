@@ -2,12 +2,15 @@ package com.starsea.ai.chunking.extraction;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.starsea.ai.domain.FileTextExtraction;
+import com.starsea.ai.mapper.FileMapper;
 import com.starsea.ai.mapper.FileTextExtractionMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -37,6 +40,8 @@ public class ManagedExtractionCache {
     private final ObjectMapper objectMapper;
     private final Path root;
     private final DurableCleanupJournal cleanupJournal;
+    private final FileMapper fileMapper;
+    private final TransactionTemplate transactionTemplate;
     private final ConcurrentHashMap<CacheKey, LockEntry> keyLocks = new ConcurrentHashMap<>();
 
     @Autowired
@@ -44,8 +49,11 @@ public class ManagedExtractionCache {
                                   DocumentTextExtractorRegistry registry,
                                   ObjectMapper objectMapper,
                                   @Value("${chunking.extraction.cache-root:${user.dir}/data/extraction-cache}") String root,
-                                  DurableCleanupJournal cleanupJournal) {
-        this(mapper, registry, objectMapper, Path.of(root), cleanupJournal);
+                                  DurableCleanupJournal cleanupJournal,
+                                  FileMapper fileMapper,
+                                  PlatformTransactionManager transactionManager) {
+        this(mapper, registry, objectMapper, Path.of(root), cleanupJournal, fileMapper,
+                new TransactionTemplate(transactionManager));
     }
 
     public ManagedExtractionCache(FileTextExtractionMapper mapper,
@@ -53,7 +61,7 @@ public class ManagedExtractionCache {
                                   ObjectMapper objectMapper,
                                   Path root) {
         this(mapper, registry, objectMapper, root,
-                new DurableCleanupJournal(objectMapper, root, root));
+                new DurableCleanupJournal(objectMapper, root, root), null, null);
     }
 
     ManagedExtractionCache(FileTextExtractionMapper mapper,
@@ -61,11 +69,23 @@ public class ManagedExtractionCache {
                            ObjectMapper objectMapper,
                            Path root,
                            DurableCleanupJournal cleanupJournal) {
+        this(mapper, registry, objectMapper, root, cleanupJournal, null, null);
+    }
+
+    ManagedExtractionCache(FileTextExtractionMapper mapper,
+                           DocumentTextExtractorRegistry registry,
+                           ObjectMapper objectMapper,
+                           Path root,
+                           DurableCleanupJournal cleanupJournal,
+                           FileMapper fileMapper,
+                           TransactionTemplate transactionTemplate) {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.registry = Objects.requireNonNull(registry, "registry");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.root = Objects.requireNonNull(root, "root").toAbsolutePath().normalize();
         this.cleanupJournal = Objects.requireNonNull(cleanupJournal, "cleanupJournal");
+        this.fileMapper = fileMapper;
+        this.transactionTemplate = transactionTemplate;
     }
 
     public ExtractedText getOrExtract(long tenantId, long fileId, String sourceHash,
@@ -75,14 +95,22 @@ public class ManagedExtractionCache {
         if (sourceHash == null || !sourceHash.matches("[0-9a-fA-F]{64}")) {
             throw new IllegalArgumentException("sourceHash must be a SHA-256 hex digest");
         }
-        cleanupJournal.retryPending(8);
+        requireRecoveredKey(tenantId, fileId);
         try (KeyLease ignored = acquire(new CacheKey(tenantId, fileId))) {
-            return getOrExtractLocked(tenantId, fileId, sourceHash, source, suppliedType);
+            ExtractionOutcome outcome = transactionTemplate == null
+                    ? getOrExtractLocked(tenantId, fileId, sourceHash, source, suppliedType)
+                    : transactionTemplate.execute(status -> {
+                        requireDatabaseOwner(tenantId, fileId);
+                        return getOrExtractLocked(tenantId, fileId, sourceHash, source, suppliedType);
+                    });
+            if (outcome == null) throw new IllegalStateException("Extraction transaction returned no result");
+            finishCommittedOutcome(outcome, tenantId, fileId);
+            return outcome.extracted();
         }
     }
 
-    private ExtractedText getOrExtractLocked(long tenantId, long fileId, String sourceHash,
-                                             Path source, String suppliedType) {
+    private ExtractionOutcome getOrExtractLocked(long tenantId, long fileId, String sourceHash,
+                                                  Path source, String suppliedType) {
         ExtractionCapability capability = registry.probe(source, suppliedType);
         if (!capability.available()) {
             throw new DocumentTextExtractor.ExtractionException(
@@ -94,7 +122,7 @@ public class ManagedExtractionCache {
         }
         ExtractedText hit = readValid(existing, tenantId, fileId, sourceHash, capability);
         if (hit != null) {
-            return hit;
+            return new ExtractionOutcome(hit, null, null, null);
         }
 
         ExtractedText extracted = registry.extract(source, capability);
@@ -104,33 +132,77 @@ public class ManagedExtractionCache {
                 directory.resolve("text-" + generation + ".txt"), directory);
         Path mapPath = checkedManagedPath(
                 directory.resolve("source-map-" + generation + ".json"), directory);
-        writePairAtomically(directory, textPath, mapPath, extracted, sourceHash);
+        UUID generationObligation = cleanupJournal.prepareGeneration(tenantId, fileId, List.of(
+                cleanupJournal.cacheTarget(textPath), cleanupJournal.cacheTarget(mapPath)));
+        try {
+            writePairAtomically(directory, textPath, mapPath, extracted, sourceHash);
+        } catch (RuntimeException failure) {
+            cleanupNewPair(textPath, mapPath, generationObligation, failure);
+            throw failure;
+        }
 
         FileTextExtraction replacement = metadata(tenantId, fileId, sourceHash, extracted,
                 textPath, mapPath);
+        UUID replacedObligation = null;
         try {
+            if (existing != null) {
+                replacedObligation = cleanupJournal.prepareGeneration(tenantId, fileId, List.of(
+                        cleanupJournal.cacheTarget(Path.of(existing.getManagedTextPath())),
+                        cleanupJournal.cacheTarget(Path.of(existing.getSourceMapPath()))));
+            }
             int changed = existing == null ? mapper.insert(replacement) : mapper.updateScoped(replacement);
             if (changed != 1) {
                 throw new IllegalStateException("Extraction cache metadata was not saved");
             }
         } catch (RuntimeException failure) {
-            deleteNewPair(textPath, mapPath, tenantId, fileId, failure);
+            cleanupNewPair(textPath, mapPath, generationObligation, failure);
+            if (replacedObligation != null) {
+                try { cleanupJournal.complete(replacedObligation); }
+                catch (RuntimeException pending) { failure.addSuppressed(pending); }
+            }
             throw failure;
         }
-        if (existing != null) {
-            deleteExistingPair(existing, tenantId, fileId);
+        return new ExtractionOutcome(extracted, generationObligation, existing, replacedObligation);
+    }
+
+    private void requireDatabaseOwner(long tenantId, long fileId) {
+        if (fileMapper == null || fileMapper.selectScopedForUpdate(tenantId, fileId) == null) {
+            throw new DocumentTextExtractor.ExtractionException(
+                    DocumentTextExtractor.FailureReason.CORRUPT,
+                    "Source file is no longer available");
         }
-        return extracted;
+    }
+
+    private void finishCommittedOutcome(ExtractionOutcome outcome, long tenantId, long fileId) {
+        if (outcome.generationObligation() != null) {
+            try {
+                cleanupJournal.complete(outcome.generationObligation());
+            } catch (RuntimeException pending) {
+                log.warn("Cleanup obligation {} retained for tenant {} file {}",
+                        outcome.generationObligation(), tenantId, fileId);
+            }
+        }
+        if (outcome.replaced() != null) {
+            deleteExistingPair(outcome.replaced(), tenantId, fileId, outcome.replacedObligation());
+        }
     }
 
     public void deleteManagedFiles(long tenantId, long fileId) {
-        quarantineManagedFiles(tenantId, fileId).commit();
+        requireRecoveredKey(tenantId, fileId);
+        if (transactionTemplate == null) {
+            quarantineManagedFiles(tenantId, fileId).commit();
+            return;
+        }
+        ManagedFileQuarantine quarantine = transactionTemplate.execute(status -> {
+            requireDatabaseOwner(tenantId, fileId);
+            return quarantineManagedFiles(tenantId, fileId);
+        });
+        if (quarantine != null) quarantine.commit();
     }
 
     public ManagedFileQuarantine quarantineManagedFiles(long tenantId, long fileId) {
         requirePositive(tenantId, "tenantId");
         requirePositive(fileId, "fileId");
-        cleanupJournal.retryPending(8);
         KeyLease lease = acquire(new CacheKey(tenantId, fileId));
         List<QuarantinedFile> moved = new ArrayList<>();
         try {
@@ -141,9 +213,28 @@ public class ManagedExtractionCache {
             Path directory = scopedDirectory(tenantId, fileId, false);
             Path textPath = checkedManagedPath(Path.of(existing.getManagedTextPath()), directory);
             Path mapPath = checkedManagedPath(Path.of(existing.getSourceMapPath()), directory);
-            quarantineIfPresent(textPath, moved);
-            quarantineIfPresent(mapPath, moved);
-            return new Quarantine(List.copyOf(moved), tenantId, fileId, lease);
+            planQuarantineIfPresent(textPath, moved);
+            planQuarantineIfPresent(mapPath, moved);
+            UUID obligationId = moved.isEmpty() ? null : cleanupJournal.prepareFileDeletion(
+                    tenantId, fileId, moved.stream()
+                            .map(file -> cleanupJournal.cacheMove(file.original(), file.quarantined()))
+                            .toList());
+            try {
+                for (QuarantinedFile file : moved) {
+                    cleanupJournal.movePrepared(file.original(), file.quarantined(),
+                            DurableCleanupJournal.RootKind.CACHE);
+                    file.markMoved();
+                }
+            } catch (IOException failure) {
+                IllegalStateException wrapped = new IllegalStateException(
+                        "Managed extraction files could not be quarantined", failure);
+                restoreMoved(moved, wrapped);
+                if (obligationId != null && wrapped.getSuppressed().length == 0) {
+                    cleanupJournal.complete(obligationId);
+                }
+                throw wrapped;
+            }
+            return new Quarantine(List.copyOf(moved), tenantId, fileId, lease, obligationId);
         } catch (RuntimeException failure) {
             restoreMoved(moved, failure);
             lease.close();
@@ -154,6 +245,50 @@ public class ManagedExtractionCache {
     public UUID persistSourceCleanup(long tenantId, long fileId, Path sourceQuarantine) {
         return cleanupJournal.persist(tenantId, fileId,
                 List.of(cleanupJournal.sourceTarget(sourceQuarantine)));
+    }
+
+    private void requireRecoveredKey(long tenantId, long fileId) {
+        if (!cleanupJournal.recoverKey(tenantId, fileId)) {
+            throw new IllegalStateException("Managed cleanup for this file is still pending");
+        }
+    }
+
+    public PreparedSourceDeletion prepareSourceDeletion(long tenantId, long fileId,
+                                                        Path source, Path quarantine) {
+        DurableCleanupJournal.ManagedMove move = cleanupJournal.sourceMove(
+                source, quarantine, tenantId, fileId);
+        UUID obligationId = cleanupJournal.prepareFileDeletion(tenantId, fileId, List.of(move));
+        return new PreparedSourceDeletion(obligationId, source, quarantine);
+    }
+
+    public void movePreparedSource(PreparedSourceDeletion deletion) throws IOException {
+        cleanupJournal.movePrepared(deletion.source(), deletion.quarantine(),
+                DurableCleanupJournal.RootKind.UPLOAD);
+    }
+
+    public void restorePreparedSource(PreparedSourceDeletion deletion) throws IOException {
+        cleanupJournal.movePrepared(deletion.quarantine(), deletion.source(),
+                DurableCleanupJournal.RootKind.UPLOAD);
+    }
+
+    public void deletePreparedSource(PreparedSourceDeletion deletion) throws IOException {
+        cleanupJournal.deleteManaged(deletion.quarantine(), DurableCleanupJournal.RootKind.UPLOAD);
+    }
+
+    public void deletePreparedSourcePath(Path quarantine) throws IOException {
+        cleanupJournal.deleteManaged(quarantine, DurableCleanupJournal.RootKind.UPLOAD);
+    }
+
+    public void deleteUploadedSource(Path source) throws IOException {
+        cleanupJournal.deleteManaged(source, DurableCleanupJournal.RootKind.UPLOAD);
+    }
+
+    public void completeCleanup(UUID obligationId) {
+        cleanupJournal.complete(obligationId);
+    }
+
+    public void recoverManagedFiles(long tenantId, long fileId) {
+        requireRecoveredKey(tenantId, fileId);
     }
 
     private KeyLease acquire(CacheKey key) {
@@ -243,8 +378,8 @@ public class ManagedExtractionCache {
         } catch (IOException exception) {
             if (textCommitted || mapCommitted) {
                 try {
-                    Files.deleteIfExists(textPath);
-                    Files.deleteIfExists(mapPath);
+                    cleanupJournal.deleteManaged(textPath, DurableCleanupJournal.RootKind.CACHE);
+                    cleanupJournal.deleteManaged(mapPath, DurableCleanupJournal.RootKind.CACHE);
                 } catch (IOException cleanupFailure) {
                     exception.addSuppressed(cleanupFailure);
                 }
@@ -258,14 +393,14 @@ public class ManagedExtractionCache {
 
     private void moveAtomically(Path source, Path destination) throws IOException {
         try {
-            Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING);
+            Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException exception) {
             throw new IOException("Managed extraction storage does not support atomic replacement", exception);
         }
     }
 
-    private void deleteExistingPair(FileTextExtraction row, long tenantId, long fileId) {
+    private void deleteExistingPair(FileTextExtraction row, long tenantId, long fileId,
+                                    UUID obligationId) {
         Path directory = scopedDirectory(tenantId, fileId, false);
         Path textPath = checkedManagedPath(Path.of(row.getManagedTextPath()), directory);
         Path mapPath = checkedManagedPath(Path.of(row.getSourceMapPath()), directory);
@@ -281,15 +416,15 @@ public class ManagedExtractionCache {
             cleanupFailed = true;
         }
         if (cleanupFailed) {
-            UUID obligationId = cleanupJournal.persist(tenantId, fileId, List.of(
-                    cleanupJournal.cacheTarget(textPath), cleanupJournal.cacheTarget(mapPath)));
             log.warn("Cleanup obligation {} retained for tenant {} file {}",
                     obligationId, tenantId, fileId);
+        } else {
+            cleanupJournal.complete(obligationId);
         }
     }
 
     protected void deleteReplacedManagedFile(Path path) throws IOException {
-        Files.deleteIfExists(path);
+        cleanupJournal.deleteManaged(path, DurableCleanupJournal.RootKind.CACHE);
     }
 
     private void validateManagedPaths(FileTextExtraction row, long tenantId, long fileId) {
@@ -298,8 +433,8 @@ public class ManagedExtractionCache {
         checkedManagedPath(Path.of(row.getSourceMapPath()), directory);
     }
 
-    private void deleteNewPair(Path textPath, Path mapPath, long tenantId, long fileId,
-                               RuntimeException failure) {
+    private void cleanupNewPair(Path textPath, Path mapPath, UUID obligationId,
+                                RuntimeException failure) {
         boolean cleanupFailed = false;
         try {
             deleteNewManagedFile(textPath);
@@ -312,17 +447,19 @@ public class ManagedExtractionCache {
             cleanupFailed = true;
         }
         if (cleanupFailed) {
-            UUID obligationId = cleanupJournal.persist(tenantId, fileId, List.of(
-                    cleanupJournal.cacheTarget(textPath), cleanupJournal.cacheTarget(mapPath)));
             CleanupPendingException pending = new CleanupPendingException(obligationId);
             failure.addSuppressed(pending);
-            log.warn("Cleanup obligation {} retained for tenant {} file {}",
-                    obligationId, tenantId, fileId);
+        } else {
+            try {
+                cleanupJournal.complete(obligationId);
+            } catch (RuntimeException pending) {
+                failure.addSuppressed(new CleanupPendingException(obligationId));
+            }
         }
     }
 
     protected void deleteNewManagedFile(Path path) throws IOException {
-        Files.deleteIfExists(path);
+        cleanupJournal.deleteManaged(path, DurableCleanupJournal.RootKind.CACHE);
     }
 
     private void deleteTemporary(Path path) {
@@ -412,25 +549,22 @@ public class ManagedExtractionCache {
         return normalized;
     }
 
-    private void quarantineIfPresent(Path original, List<QuarantinedFile> moved) {
+    private void planQuarantineIfPresent(Path original, List<QuarantinedFile> moved) {
         if (!Files.exists(original, LinkOption.NOFOLLOW_LINKS)) {
             return;
         }
         Path quarantined = original.resolveSibling(original.getFileName()
                 + ".deleting-" + UUID.randomUUID());
-        try {
-            moveAtomically(original, quarantined);
-            moved.add(new QuarantinedFile(original, quarantined));
-        } catch (IOException exception) {
-            throw new IllegalStateException("Managed extraction files could not be quarantined", exception);
-        }
+        moved.add(new QuarantinedFile(original, quarantined));
     }
 
     private void restoreMoved(List<QuarantinedFile> moved, Throwable failure) {
         for (int index = moved.size() - 1; index >= 0; index--) {
             QuarantinedFile file = moved.get(index);
+            if (!file.moved()) continue;
             try {
-                moveAtomically(file.quarantined(), file.original());
+                cleanupJournal.movePrepared(file.quarantined(), file.original(),
+                        DurableCleanupJournal.RootKind.CACHE);
             } catch (IOException restoreFailure) {
                 failure.addSuppressed(restoreFailure);
             }
@@ -449,11 +583,19 @@ public class ManagedExtractionCache {
         private final KeyLease lease;
         private boolean completed;
 
+        private final UUID obligationId;
+
         private Quarantine(List<QuarantinedFile> files, long tenantId, long fileId, KeyLease lease) {
+            this(files, tenantId, fileId, lease, null);
+        }
+
+        private Quarantine(List<QuarantinedFile> files, long tenantId, long fileId, KeyLease lease,
+                           UUID obligationId) {
             this.files = files;
             this.tenantId = tenantId;
             this.fileId = fileId;
             this.lease = lease;
+            this.obligationId = obligationId;
         }
 
         @Override
@@ -467,23 +609,16 @@ public class ManagedExtractionCache {
                     } catch (IOException exception) {
                         if (failure == null) {
                             failure = new IllegalStateException(
-                                    "Managed extraction quarantine could not be removed: "
-                                            + file.quarantined(), exception);
+                                    "Managed extraction quarantine could not be removed", exception);
                         } else {
                             failure.addSuppressed(exception);
                         }
                     }
                 }
                 if (failure != null) {
-                    List<DurableCleanupJournal.CleanupTarget> targets = files.stream()
-                            .map(QuarantinedFile::quarantined)
-                            .filter(path -> Files.exists(path, LinkOption.NOFOLLOW_LINKS))
-                            .map(cleanupJournal::cacheTarget)
-                            .toList();
-                    if (!targets.isEmpty()) {
-                        UUID obligationId = cleanupJournal.persist(tenantId, fileId, targets);
-                        throw new CleanupPendingException(obligationId);
-                    }
+                    if (obligationId != null) throw new CleanupPendingException(obligationId);
+                } else if (obligationId != null) {
+                    cleanupJournal.complete(obligationId);
                 }
             } finally {
                 completed = true;
@@ -499,10 +634,11 @@ public class ManagedExtractionCache {
             try {
                 restoreMoved(new ArrayList<>(files), failure);
                 if (failure.getSuppressed().length > 0) {
-                    log.error("Unable to restore extraction cache deletion for tenant {} file {}",
-                            tenantId, fileId, failure);
+                    log.warn("Cleanup obligation {} remains pending for tenant {} file {}",
+                            obligationId, tenantId, fileId);
                     throw failure;
                 }
+                if (obligationId != null) cleanupJournal.complete(obligationId);
             } finally {
                 completed = true;
                 lease.close();
@@ -510,11 +646,27 @@ public class ManagedExtractionCache {
         }
     }
 
-    private record QuarantinedFile(Path original, Path quarantined) {
+    private static final class QuarantinedFile {
+        private final Path original;
+        private final Path quarantined;
+        private boolean moved;
+        private QuarantinedFile(Path original, Path quarantined) {
+            this.original = original;
+            this.quarantined = quarantined;
+        }
+        private Path original() { return original; }
+        private Path quarantined() { return quarantined; }
+        private boolean moved() { return moved; }
+        private void markMoved() { moved = true; }
     }
 
+    public record PreparedSourceDeletion(UUID obligationId, Path source, Path quarantine) {}
+
+    private record ExtractionOutcome(ExtractedText extracted, UUID generationObligation,
+                                     FileTextExtraction replaced, UUID replacedObligation) {}
+
     protected void deleteQuarantined(Path path) throws IOException {
-        Files.deleteIfExists(path);
+        cleanupJournal.deleteManaged(path, DurableCleanupJournal.RootKind.CACHE);
     }
 
     public static final class CleanupPendingException extends IllegalStateException {

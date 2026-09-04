@@ -21,6 +21,7 @@ import com.starsea.ai.chunking.general.GeneralChunkPlanningStrategy;
 import com.starsea.ai.chunking.general.GeneralTextCleaner;
 import com.starsea.ai.chunking.general.GeneralTextInputProvider;
 import com.starsea.ai.chunking.general.TextNormalizer;
+import com.starsea.ai.chunking.general.UnicodeText;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.indexing.ChunkVectorService;
 import com.starsea.ai.chunking.indexing.ChunkVectorWorker;
@@ -313,6 +314,36 @@ class GeneralChunkingWorkflowTest {
                     .map(DocumentChunk::getContent).reduce("", String::concat));
             assertEquals(0, repository.chunks.get(0).getSourceLocator().get("startOffset"));
             assertEquals(68, repository.chunks.get(1).getSourceLocator().get("endOffset"));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void preview_persists_unavoidable_whitespace_chunks_in_a_mixed_document_losslessly()
+            throws IOException {
+        AuthContext.set(businessContext(TENANT_ID));
+        String expected = " ".repeat(130) + "\nx\n" + "\u2007".repeat(130) + "\ny";
+        Path uploadedSource = tempDir.resolve("long-retained-whitespace.txt");
+        java.nio.file.Files.writeString(uploadedSource, expected);
+
+        try (ExactCounter exact = exactCounter()) {
+            WorkflowRepository repository = new WorkflowRepository(uploadedSource, "txt");
+            WorkflowServices services = workflowServices(repository, exact.counter(), "txt");
+
+            services.preview().startPreview(KNOWLEDGE_ID, FILE_ID, new PreviewRequest(
+                    "GENERAL", Map.of("delimiter", "\n", "delimiterMode", "LITERAL",
+                    "maxCharacters", 64, "collapseWhitespace", false,
+                    "removeUrls", false, "removeEmails", false),
+                    Map.of("enabled", false, "limit", 0), false, 0));
+
+            assertEquals(PipelineState.CHUNKED.code(), repository.processing.getPipelineState(),
+                    repository.processing.getLastError());
+            assertTrue(repository.chunks.stream()
+                    .anyMatch(chunk -> UnicodeText.isBlank(chunk.getContent())));
+            assertTrue(repository.chunks.stream()
+                    .allMatch(chunk -> UnicodeText.length(chunk.getContent()) <= 64));
+            assertEquals(expected, repository.chunks.stream()
+                    .sorted(Comparator.comparing(DocumentChunk::getPosition))
+                    .map(DocumentChunk::getContent).reduce("", String::concat));
         }
     }
 
