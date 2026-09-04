@@ -86,6 +86,47 @@ it('freezes real chunks, compares a query, marks changed input stale, and saves 
   })
   wrapper.unmount()
 })
+it('automatically freezes the current chunk when opened from the chunk comparison entry', async () => {
+  api.createSnapshot.mockResolvedValue({ ...snapshot, scope: 'SELECTED' })
+  const wrapper = mount(QuickComparison, {
+    props: {
+      knowledgeId: '11',
+      chunks,
+      models: [{ id: 'current', revision: 1 }],
+      datasets: [],
+      initialChunkId: 'c',
+    },
+  })
+
+  await flushPromises()
+
+  expect(api.createSnapshot).toHaveBeenCalledWith('11', {
+    scope: 'SELECTED',
+    chunkIds: ['c'],
+  })
+  expect(wrapper.get('[data-testid="start-quick"]').attributes('disabled')).toBeUndefined()
+  expect(wrapper.text()).toContain('候选集内对比 · 1 份文档 · 1 块')
+  wrapper.unmount()
+})
+it('explains why comparison is unavailable when the current chunk cannot be prepared', async () => {
+  api.createSnapshot.mockRejectedValue(new Error('当前分块尚未保存'))
+  const wrapper = mount(QuickComparison, {
+    props: {
+      knowledgeId: '11',
+      chunks,
+      models: [{ id: 'current', revision: 1 }],
+      datasets: [],
+      initialChunkId: 'c',
+    },
+  })
+
+  await flushPromises()
+
+  expect(wrapper.get('[role="alert"]').text()).toContain('无法准备当前分块：当前分块尚未保存')
+  expect(wrapper.get('[data-testid="start-disabled-reason"]').text()).toBe('请先在上方冻结语料快照。')
+  expect(wrapper.get('[data-testid="start-quick"]').attributes('disabled')).toBeDefined()
+  wrapper.unmount()
+})
 it('edits labels with revision checks and adds an unreviewed variant in the same intent group', async () => {
   const wrapper = mount(DatasetWorkspace, {
     props: { knowledgeId: '11', chunks, datasets: [dataset], selectedId: 'd' },

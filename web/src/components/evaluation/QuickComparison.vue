@@ -31,6 +31,8 @@ const datasetId = ref(''),
   datasetName = ref(''),
   loadedDataset = ref(null),
   busy = ref(false),
+  preparingSnapshot = ref(false),
+  preparedChunkId = ref(''),
   error = ref(''),
   savedInput = ref(''),
   savedMessage = ref(''),
@@ -66,6 +68,15 @@ const sourceChanged = computed(() =>
 )
 const stale = computed(() => !!run.value && (savedInput.value !== fingerprint.value || sourceChanged.value))
 const questionFingerprint = computed(() => JSON.stringify([snapshot.value?.id, question.value]))
+const interactionBusy = computed(() => busy.value || preparingSnapshot.value)
+const startDisabledReason = computed(() => {
+  if (preparingSnapshot.value) return '正在冻结当前分块，完成后即可开始对比。'
+  if (busy.value) return '正在处理，请稍候。'
+  if (!snapshot.value) return '请先在上方冻结语料快照。'
+  if (!modelIds.value.length) return '请至少选择一个向量模型。'
+  if (isActiveRun(run.value)) return '当前对比仍在运行，请等待完成或先取消。'
+  return ''
+})
 watch(
   () => snapshot.value?.id,
   (id, previous) => {
@@ -73,6 +84,24 @@ watch(
       question.value = { ...question.value, reviewed: false, labels: {}, hardNegativeIds: [] }
   },
 )
+async function prepareInitialChunk(id) {
+  if (!id || preparedChunkId.value === id) return
+  preparedChunkId.value = id
+  snapshot.value = null
+  preparingSnapshot.value = true
+  error.value = ''
+  try {
+    snapshot.value = await api.createSnapshot(props.knowledgeId, {
+      scope: 'SELECTED',
+      chunkIds: [id],
+    })
+  } catch (cause) {
+    error.value = `无法准备当前分块：${errorText(cause)}`
+  } finally {
+    preparingSnapshot.value = false
+  }
+}
+watch(() => props.initialChunkId, prepareInitialChunk, { immediate: true })
 async function chooseDataset() {
   error.value = ''
   snapshot.value = null
@@ -159,7 +188,7 @@ async function saveQuestion() {
     <section class="ev-panel ev-stack">
       <h3>固定语料，复现一个真实问题</h3>
       <label
-        >语料来源<select v-model="datasetId" :disabled="busy" @change="chooseDataset">
+        >语料来源<select v-model="datasetId" :disabled="interactionBusy" @change="chooseDataset">
           <option value="">新建语料快照</option>
           <option v-for="item in datasets" :key="item.id" :value="item.id">
             复用 {{ item.name }} · v{{ item.revision }} 的快照
@@ -172,24 +201,38 @@ async function saveQuestion() {
         :knowledge-id="knowledgeId"
         :chunks="chunks"
         :initial-chunk-id="initialChunkId"
-        :disabled="busy"
+        :disabled="interactionBusy"
       />
       <p v-else class="ev-notice">{{ snapshotDescription(snapshot) }}</p>
       <p v-if="sourceChanged" class="ev-notice ev-warning">
         当前语料已变化，此快照仍保留原始文本。测试最新文本请重建快照；旧问题集仍使用其冻结文本。
       </p>
-      <ModelPicker v-model="modelIds" v-model:baseline="baseline" :models="models" :disabled="busy" />
-      <QuestionEditor v-model="question" :chunks="snapshot?.chunks || []" :disabled="busy" compact />
+      <ModelPicker
+        v-model="modelIds"
+        v-model:baseline="baseline"
+        :models="models"
+        :disabled="interactionBusy"
+      />
+      <QuestionEditor
+        v-model="question"
+        :chunks="snapshot?.chunks || []"
+        :disabled="interactionBusy"
+        compact
+      />
       <p v-if="error" class="ev-notice ev-error" role="alert">{{ error }}</p>
       <div class="ev-actions">
         <button
           class="ev-button ev-primary"
           data-testid="start-quick"
-          :disabled="busy || !snapshot || !modelIds.length || isActiveRun(run)"
+          :disabled="!!startDisabledReason"
+          :title="startDisabledReason"
           @click="start"
         >
-          {{ busy ? '提交中…' : '开始对比' }}</button
-        ><span class="ev-muted">精确检索 · 不过滤分数 · 相似度不是正确率</span>
+          {{ preparingSnapshot ? '准备当前分块…' : busy ? '提交中…' : '开始对比' }}</button
+        ><span v-if="startDisabledReason" class="ev-muted" data-testid="start-disabled-reason">{{
+          startDisabledReason
+        }}</span
+        ><span v-else class="ev-muted">精确检索 · 不过滤分数 · 相似度不是正确率</span>
       </div>
     </section>
     <p v-if="stale" class="ev-notice ev-warning" data-testid="stale-results" role="status">
