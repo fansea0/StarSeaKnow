@@ -629,7 +629,7 @@ public class ChunkCommandService {
                 ? com.starsea.ai.chunking.model.OverlapUnit.TOKENS : chunk.getOverlapUnit();
         int bodyLength = unit == com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS
                 ? codePoints(chunk.getContent()) : value(chunk.getTokenCount());
-        int indexLength = chunk.getIndexContent() == null ? bodyLength
+        Integer indexLength = chunk.getIndexContent() == null ? null
                 : unit == com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS
                 ? codePoints(chunk.getIndexContent()) : tokenCounter.count(chunk.getIndexContent());
         int actualLength = unit == com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS

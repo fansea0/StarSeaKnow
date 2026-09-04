@@ -5,12 +5,16 @@ import java.util.Objects;
 /** Validated context settings after the server fixes the unit and enrichment mode. */
 public record ContextConfig(boolean enabled, int limit, OverlapUnit unit, ContextMode mode) {
 
+    public static final int MIN_LIMIT = 0;
+    public static final int MAX_TOKEN_LIMIT = 512;
+    public static final int MAX_CHARACTER_LIMIT = 1000;
+
     public ContextConfig {
         Objects.requireNonNull(unit, "unit: overlap unit is required");
         Objects.requireNonNull(mode, "mode: context mode is required");
-        int maximum = unit == OverlapUnit.TOKENS ? 512 : 1000;
-        if (limit < 0 || limit > maximum) {
-            throw new IllegalArgumentException("limit: context limit must be between 0 and " + maximum);
+        int maximum = maximumLimit(unit);
+        if (limit < MIN_LIMIT || limit > maximum) {
+            throw new IllegalArgumentException("limit: context limit must be between " + MIN_LIMIT + " and " + maximum);
         }
         if (enabled && limit == 0) {
             throw new IllegalArgumentException("limit: enabled context requires a positive limit");
@@ -26,5 +30,9 @@ public record ContextConfig(boolean enabled, int limit, OverlapUnit unit, Contex
 
     public static ContextConfig markdownDefaults() {
         return new ContextConfig(false, 40, OverlapUnit.TOKENS, ContextMode.COMPLETE_SENTENCE);
+    }
+
+    public static int maximumLimit(OverlapUnit unit) {
+        return unit == OverlapUnit.TOKENS ? MAX_TOKEN_LIMIT : MAX_CHARACTER_LIMIT;
     }
 }

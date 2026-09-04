@@ -69,14 +69,14 @@
           <span class="sr-only">补充上文字符上限</span>
           <el-input-number
             v-model="context.limit"
-            :min="0"
-            :max="1000"
+            :min="contextLimits.min"
+            :max="contextLimits.max"
             controls-position="right"
             :disabled="disabled || !context.enabled"
             @change="touch('limit')"
           />
         </label>
-        <small>0–1000 字符；0 表示停用</small>
+        <small>{{ contextLimits.min }}–{{ contextLimits.max }} 字符；0 表示停用</small>
         <small v-if="localErrors.limit" class="config-error" role="alert">{{ localErrors.limit }}</small>
         <small v-if="serverLimitError" class="config-error" role="alert">{{ serverLimitError }}</small>
       </div>
@@ -88,7 +88,10 @@
           <strong id="budget-title">长度预算</strong>
           <span>建议补充量为最大字符数的 15%</span>
         </div>
-        <el-button link type="primary" data-testid="apply-overlap-suggestion" :disabled="disabled" @click="applyRecommendation">应用建议值</el-button>
+        <div class="budget__actions">
+          <el-button link data-testid="reset-overlap-default" :disabled="disabled" @click="resetContextDefault">恢复默认值</el-button>
+          <el-button link type="primary" data-testid="apply-overlap-suggestion" :disabled="disabled" @click="applyRecommendation">应用建议值</el-button>
+        </div>
       </div>
       <div
         class="budget-rail"
@@ -125,6 +128,8 @@ const props = defineProps({
   configFields: { type: Array, default: () => [] },
   initialValues: { type: Object, default: () => ({}) },
   initialContextConfig: { type: Object, default: () => ({}) },
+  defaultContextConfig: { type: Object, default: () => ({}) },
+  contextConfigFields: { type: Array, default: () => [] },
   serverFieldErrors: { type: Object, default: () => ({}) },
   disabled: { type: Boolean, default: false },
 })
@@ -135,13 +140,28 @@ const context = reactive({ enabled: true, limit: 40 })
 const delimiterDisplay = ref('\\n')
 let hydrating = false
 let hydrationSignature = ''
+let hydratedDescriptorSignature = ''
+let lastPublishedStateSignature = ''
 
 const field = key => props.configFields.find(item => item?.key === key)
 const fieldDefault = (key, fallback) => field(key)?.defaultValue ?? fallback
+const contextField = key => props.contextConfigFields.find(item => item?.key === key)
+const integerOr = (value, fallback) => Number.isInteger(Number(value)) ? Number(value) : fallback
 const limits = computed(() => ({
   maxCharacters: { min: Number(field('maxCharacters')?.min) || 64, max: Number(field('maxCharacters')?.max) || 4000 },
 }))
 const actualDelimiter = computed(() => decodeDelimiter(delimiterDisplay.value))
+const contextLimits = computed(() => {
+  const minimum = integerOr(contextField('limit')?.min, 0)
+  const maximum = integerOr(contextField('limit')?.max, 1000)
+  return maximum >= minimum ? { min: minimum, max: maximum } : { min: 0, max: 1000 }
+})
+const defaultContext = computed(() => {
+  const source = props.defaultContextConfig || {}
+  const descriptorLimit = integerOr(contextField('limit')?.defaultValue, 40)
+  const limit = integerOr(source.limit, descriptorLimit)
+  return { enabled: Boolean(source.enabled ?? contextField('enabled')?.defaultValue ?? true) && limit > 0, limit }
+})
 const normalizedMax = computed(() => Number.isInteger(values.maxCharacters) ? values.maxCharacters : 0)
 const recommendedOverlap = computed(() => Math.round(normalizedMax.value * 0.15))
 const normalizedContext = computed(() => ({
@@ -160,7 +180,9 @@ const localErrors = computed(() => {
   if (!Number.isInteger(values.maxCharacters) || values.maxCharacters < limits.value.maxCharacters.min || values.maxCharacters > limits.value.maxCharacters.max) {
     errors.maxCharacters = `最大字符数必须是 ${limits.value.maxCharacters.min}–${limits.value.maxCharacters.max} 的整数`
   }
-  if (!Number.isInteger(context.limit) || context.limit < 0 || context.limit > 1000) errors.limit = '补充上限必须是 0–1000 的整数'
+  if (!Number.isInteger(context.limit) || context.limit < contextLimits.value.min || context.limit > contextLimits.value.max) {
+    errors.limit = `补充上限必须是 ${contextLimits.value.min}–${contextLimits.value.max} 的整数`
+  }
   else if (context.enabled && context.limit <= 0) errors.limit = '启用补充上文时，上限必须大于 0'
   else if (context.enabled && context.limit + 5 >= values.maxCharacters) errors.limit = '补充上限加 5 必须小于最大字符数'
   return errors
@@ -173,37 +195,57 @@ const delimiterMaximum = computed(() => {
 const valid = computed(() => Object.keys(localErrors.value).length === 0 && Object.keys(props.serverFieldErrors).length === 0)
 
 function hydrate() {
-  const signature = JSON.stringify([props.configFields, props.initialValues, props.initialContextConfig])
+  const signature = JSON.stringify([props.configFields, props.contextConfigFields, props.defaultContextConfig, props.initialValues, props.initialContextConfig])
   if (signature === hydrationSignature) return
   hydrationSignature = signature
-  hydrating = true
   const incoming = props.initialValues || {}
   const delimiter = incoming.delimiter ?? fieldDefault('delimiter', '\n')
-  delimiterDisplay.value = encodeDelimiter(delimiter)
-  values.delimiterMode = incoming.delimiterMode ?? fieldDefault('delimiterMode', 'LITERAL')
-  values.maxCharacters = incoming.maxCharacters ?? fieldDefault('maxCharacters', 500)
-  values.collapseWhitespace = incoming.collapseWhitespace ?? fieldDefault('collapseWhitespace', true)
-  values.removeUrls = incoming.removeUrls ?? fieldDefault('removeUrls', false)
-  values.removeEmails = incoming.removeEmails ?? fieldDefault('removeEmails', false)
   const initialContext = props.initialContextConfig || {}
-  context.limit = Number.isInteger(initialContext.limit) ? initialContext.limit : 40
-  context.enabled = Boolean(initialContext.enabled ?? true) && context.limit > 0
+  const incomingConfig = {
+    delimiter,
+    delimiterMode: incoming.delimiterMode ?? fieldDefault('delimiterMode', 'LITERAL'),
+    maxCharacters: incoming.maxCharacters ?? fieldDefault('maxCharacters', 500),
+    collapseWhitespace: incoming.collapseWhitespace ?? fieldDefault('collapseWhitespace', true),
+    removeUrls: incoming.removeUrls ?? fieldDefault('removeUrls', false),
+    removeEmails: incoming.removeEmails ?? fieldDefault('removeEmails', false),
+  }
+  const incomingLimit = Number.isInteger(initialContext.limit) ? initialContext.limit : defaultContext.value.limit
+  const incomingContext = {
+    enabled: Boolean(initialContext.enabled ?? defaultContext.value.enabled) && incomingLimit > 0,
+    limit: incomingLimit,
+  }
+  const descriptorSignature = JSON.stringify([props.configFields, props.contextConfigFields, props.defaultContextConfig])
+  const incomingStateSignature = stateSignature(incomingConfig, incomingContext)
+  if (descriptorSignature === hydratedDescriptorSignature && incomingStateSignature === lastPublishedStateSignature) return
+
+  hydrating = true
+  delimiterDisplay.value = encodeDelimiter(delimiter)
+  Object.assign(values, incomingConfig)
+  Object.assign(context, incomingContext)
+  hydratedDescriptorSignature = descriptorSignature
   hydrating = false
   publish()
 }
 
+function stateSignature(config, contextConfig) {
+  return JSON.stringify([config, contextConfig])
+}
+
 function publish() {
   if (hydrating) return
-  emit('validity-change', valid.value)
-  emit('config-change', {
+  const config = {
     delimiter: actualDelimiter.value,
     delimiterMode: values.delimiterMode,
     maxCharacters: values.maxCharacters,
     collapseWhitespace: Boolean(values.collapseWhitespace),
     removeUrls: Boolean(values.removeUrls),
     removeEmails: Boolean(values.removeEmails),
-  })
-  emit('context-change', normalizedContext.value)
+  }
+  const contextConfig = { ...normalizedContext.value }
+  lastPublishedStateSignature = stateSignature(config, contextConfig)
+  emit('validity-change', valid.value)
+  emit('config-change', config)
+  emit('context-change', contextConfig)
 }
 
 function touch(name) {
@@ -217,8 +259,14 @@ function setDelimiterMode(mode) {
 }
 
 function applyRecommendation() {
-  context.limit = Math.min(1000, Math.max(0, recommendedOverlap.value))
+  context.limit = Math.min(contextLimits.value.max, Math.max(contextLimits.value.min, recommendedOverlap.value))
   context.enabled = context.limit > 0
+  touch('limit')
+}
+
+function resetContextDefault() {
+  context.limit = Math.min(contextLimits.value.max, Math.max(contextLimits.value.min, defaultContext.value.limit))
+  context.enabled = defaultContext.value.enabled && context.limit > 0
   touch('limit')
 }
 
@@ -250,7 +298,8 @@ watch(() => props.serverFieldErrors, publish, { deep: true })
 .switch-line { display: flex; align-items: center; gap: 8px; min-height: 40px; font-weight: 500; }
 .budget { margin-top: 16px; padding: 13px; border: 1px solid color-mix(in srgb, var(--sea-signal) 18%, var(--sea-paper)); border-radius: 8px; background: color-mix(in srgb, var(--sea-mist) 62%, var(--sea-paper)); }
 .budget__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.budget__heading div { display: grid; gap: 2px; }
+.budget__heading > div:first-child { display: grid; gap: 2px; }
+.budget__actions { display: flex; align-items: center; }
 .budget__heading strong { color: var(--sea-deep); font-size: 12px; }
 .budget__heading span { color: var(--sea-muted); font-size: 10.5px; }
 .budget-rail { display: grid; gap: 7px; margin-top: 10px; }

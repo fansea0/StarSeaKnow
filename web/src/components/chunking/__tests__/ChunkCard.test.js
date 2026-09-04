@@ -27,12 +27,13 @@ const chunk = {
   overlapUnavailableReason: null,
 }
 
-function mountCard(overrides = {}) {
+function mountCard(overrides = {}, props = {}) {
   return mount(ChunkCard, {
     props: {
       knowledgeId: '11',
       fileId: '22',
       chunk: { ...chunk, ...overrides },
+      ...props,
     },
     global: { plugins: [ElementPlus] },
   })
@@ -294,5 +295,62 @@ describe('ChunkCard', () => {
     expect(updateChunk).toHaveBeenCalledWith('11', '22', 'chunk-1', {
       content: '原始正文', overlapEnabled: true, overlapLimit: 701, overlapUnit: 'CHARACTERS', lockVersion: 4,
     })
+  })
+
+  it('renders friendly source provenance and omits it when coordinates are unknown', () => {
+    const wrapper = mountCard({
+      sourceLocator: {
+        type: 'SHEET', startPage: 2, endPage: 4, startLine: 8, endLine: 12,
+        startOffset: 100, endOffset: 220,
+        regions: [{ sheet: '预算' }, { slide: 3 }, { document: 1 }],
+      },
+    })
+
+    const provenance = wrapper.get('[data-testid="source-locator"]').text()
+    expect(provenance).toContain('第 2–4 页')
+    expect(provenance).toContain('第 8–12 行')
+    expect(provenance).toContain('字符偏移 100–220')
+    expect(provenance).toContain('工作表 预算')
+    expect(provenance).toContain('幻灯片 3')
+    expect(provenance).toContain('文档 1')
+
+    expect(mountCard({
+      sourceLocator: { type: 'FUTURE', startPage: null, startLine: null, startOffset: null, regions: [] },
+    }).find('[data-testid="source-locator"]').exists()).toBe(false)
+  })
+
+  it('hides NONE, translates SOURCE_EMPTY, and never exposes raw reduction enums', () => {
+    const none = mountCard({ overlapEnabled: true, overlapReductionReason: 'NONE' })
+    expect(none.find('[data-testid="overlap-reduction-reason"]').exists()).toBe(false)
+    expect(none.text()).not.toContain('NONE')
+
+    const empty = mountCard({ overlapEnabled: true, overlapReductionReason: 'SOURCE_EMPTY' })
+    expect(empty.get('[data-testid="overlap-reduction-reason"]').text()).toContain('来源正文为空')
+    expect(empty.text()).not.toContain('SOURCE_EMPTY')
+
+    const future = mountCard({ overlapEnabled: true, overlapReductionReason: 'FUTURE_REASON' })
+    expect(future.get('[data-testid="overlap-reduction-reason"]').text()).toContain('其他缩减原因')
+    expect(future.text()).not.toContain('FUTURE_REASON')
+  })
+
+  it('uses descriptor bounds for per-card overlap editing', () => {
+    const wrapper = mountCard({ overlapEnabled: true, overlapLimit: 180 }, {
+      contextConfigFields: [
+        { key: 'enabled', type: 'boolean', defaultValue: true },
+        { key: 'limit', type: 'number', defaultValue: 24, min: 0, max: 240 },
+      ],
+    })
+    const input = wrapper.get('[data-testid="overlap-token-limit"] input')
+
+    expect(input.attributes('min')).toBe('1')
+    expect(input.attributes('max')).toBe('240')
+    expect(wrapper.text()).toContain('1–240 Token')
+  })
+
+  it('does not label an unknown final index length as exact', () => {
+    const wrapper = mountCard({ indexLength: null, bodyLength: 18 })
+
+    expect(wrapper.text()).toContain('正文 18 Token')
+    expect(wrapper.text()).not.toContain('最终索引')
   })
 })

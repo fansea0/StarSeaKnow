@@ -38,6 +38,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -87,14 +88,25 @@ class ChunkingControllerTest {
         when(markdownStrategy.plannerVersion()).thenReturn("markdown-adaptive-v1");
         when(markdownStrategy.descriptor()).thenReturn(new ChunkStrategyDescriptor(
                 "MARKDOWN_OPTIMIZED", "FILE_TYPE", Set.of("md", "markdown"),
-                "markdown-adaptive-v1", List.of()));
+                "markdown-adaptive-v1", List.of(),
+                List.of(new ChunkStrategyDescriptor.ConfigField(
+                        "enabled", "boolean", false, null, null, Map.of()),
+                        new ChunkStrategyDescriptor.ConfigField(
+                                "limit", "number", 40, 0, 512, Map.of("unit", "TOKENS"))),
+                ContextConfig.markdownDefaults()));
         ChunkPlanningStrategy generalStrategy = mock(ChunkPlanningStrategy.class);
         when(generalStrategy.code()).thenReturn("GENERAL");
         when(generalStrategy.supportedFileTypes()).thenReturn(Set.of("*"));
         when(generalStrategy.plannerVersion()).thenReturn("general-deterministic-v1");
         when(generalStrategy.descriptor()).thenReturn(new ChunkStrategyDescriptor(
                 "GENERAL", "GLOBAL", Set.of("*"), "general-deterministic-v1",
-                List.of(), ContextConfig.generalDefaults()));
+                List.of(),
+                List.of(new ChunkStrategyDescriptor.ConfigField(
+                        "enabled", "boolean", true, null, null, Map.of()),
+                        new ChunkStrategyDescriptor.ConfigField(
+                                "limit", "number", 40, 0, 1000,
+                                Map.of("unit", "CHARACTERS"))),
+                ContextConfig.generalDefaults()));
         DocumentStructureParser markdownParser = mock(DocumentStructureParser.class);
         when(markdownParser.supportedFileTypes()).thenReturn(Set.of("md", "markdown"));
         generalInput = mock(ChunkInputProvider.class);
@@ -146,8 +158,12 @@ class ChunkingControllerTest {
                 .andExpect(jsonPath("$.strategies[0].code").value("GENERAL"))
                 .andExpect(jsonPath("$.strategies[0].available").value(true))
                 .andExpect(jsonPath("$.strategies[0].defaultContextConfig.unit").value("CHARACTERS"))
+                .andExpect(jsonPath("$.strategies[0].contextConfigFields[1].key").value("limit"))
+                .andExpect(jsonPath("$.strategies[0].contextConfigFields[1].min").value(0))
+                .andExpect(jsonPath("$.strategies[0].contextConfigFields[1].max").value(1000))
                 .andExpect(jsonPath("$.strategies[1].code").value("MARKDOWN_OPTIMIZED"))
-                .andExpect(jsonPath("$.strategies[1].available").value(true));
+                .andExpect(jsonPath("$.strategies[1].available").value(true))
+                .andExpect(jsonPath("$.strategies[1].contextConfigFields[1].max").value(512));
     }
 
     @Test

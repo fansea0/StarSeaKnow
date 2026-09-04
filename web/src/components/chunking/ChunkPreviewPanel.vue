@@ -33,11 +33,13 @@
         :show-reindex="canReindex(chunk)"
         :reindex-disabled="reindexDisabled"
         :reload-epoch="reloadEpochs[chunk.publicId] || 0"
+        :context-config-fields="contextConfigFields"
         @updated="$emit('updated', $event)"
         @deleted="$emit('deleted', $event)"
         @reload="$emit('reload', $event)"
         @reindex="$emit('reindex', $event)"
         @save-state="$emit('save-state', $event)"
+        @delete-state="$emit('delete-state', $event)"
       />
     </div>
 
@@ -77,9 +79,10 @@ const props = defineProps({
   reindexingIds: { type: Set, default: () => new Set() },
   reloadEpochs: { type: Object, default: () => ({}) },
   summary: { type: Object, default: null },
+  contextConfigFields: { type: Array, default: () => [] },
 })
 
-defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm', 'save-state'])
+defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm', 'save-state', 'delete-state'])
 
 function canReindex(chunk) {
   return [3, 6].includes(Number(props.fileState))

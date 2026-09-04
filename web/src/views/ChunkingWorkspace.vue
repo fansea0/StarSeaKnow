@@ -94,11 +94,13 @@
           :reindexing-ids="reindexingChunkIds"
           :reload-epochs="chunkReloadEpochs"
           :summary="previewSummary"
+          :context-config-fields="processingContextConfigFields"
           @updated="handleChunkUpdated"
           @deleted="handleChunkDeleted"
           @reload="reloadChunks"
           @reindex="handleReindex"
           @save-state="handleChunkSaveState"
+          @delete-state="handleChunkDeleteState"
           @confirm="openConfirmDialog"
         />
       </div>
@@ -249,6 +251,7 @@ export default {
       chunkSaveStates: {},
       chunkRefreshPending: false,
       chunkSaveRefreshRequest: null,
+      deletingChunkIds: new Set(),
     }
   },
   computed: {
@@ -285,7 +288,8 @@ export default {
         || !(mutableChunkStates.has(Number(this.processing.state)) || isMutableDraftFailure(this.processing))
     },
     fileMutationInProgress() {
-      return this.previewSubmitting || this.confirmSubmitting || this.reindexingChunkIds.size > 0
+      return this.previewSubmitting || this.confirmSubmitting
+        || this.reindexingChunkIds.size > 0 || this.deletingChunkIds.size > 0
     },
     processingLabel() {
       return Number(this.processing.state) === 1 ? '正在生成分块' : '正在建立索引'
@@ -313,6 +317,7 @@ export default {
         || source.forcedSplitCount != null || source.tokenLimitedSplitCount != null
       if (!present) return null
       return {
+        strategyCode: source.strategyCode,
         preprocessingSummary: source.preprocessingSummary,
         delimiterMatched: source.delimiterMatched,
         forcedSplitCount: source.forcedSplitCount,
@@ -324,6 +329,9 @@ export default {
     },
     strategyConfig() { return this.currentStrategyState?.strategyConfig || {} },
     contextConfig() { return this.currentStrategyState?.contextConfig || { enabled: false, limit: 40 } },
+    processingContextConfigFields() {
+      return this.strategies.find(strategy => strategy.code === this.processing.strategyCode)?.contextConfigFields || []
+    },
     strategyConfigHydrated() { return Boolean(this.currentStrategyState) && this.processingLoaded },
     configValid() { return this.currentStrategyState?.valid !== false },
     hasBlockingChunkSaves() {
@@ -387,6 +395,7 @@ export default {
       this.chunkSaveStates = {}
       this.chunkRefreshPending = false
       this.chunkSaveRefreshRequest = null
+      this.deletingChunkIds = new Set()
       const context = this.currentContext()
       this.initialize(context)
     },
@@ -727,6 +736,13 @@ export default {
         return this.flushChunkSaveRefresh()
       }
     },
+    handleChunkDeleteState(state) {
+      if (!state?.publicId) return
+      const deleting = new Set(this.deletingChunkIds)
+      if (state.blocking) deleting.add(state.publicId)
+      else deleting.delete(state.publicId)
+      this.deletingChunkIds = deleting
+    },
     async flushChunkSaveRefresh() {
       if (this.hasBlockingChunkSaves || !this.chunkRefreshPending) return false
       if (this.chunkSaveRefreshRequest) return this.chunkSaveRefreshRequest
@@ -747,14 +763,18 @@ export default {
         }
       }
     },
-    handleChunkDeleted(publicId) {
+    async handleChunkDeleted(publicId) {
       this.chunks = this.chunks.filter(chunk => chunk.publicId !== publicId)
       const states = { ...this.chunkSaveStates }
       delete states[publicId]
       this.chunkSaveStates = states
       this.chunkRefreshPending = true
-      if (!this.hasBlockingChunkSaves) return this.flushChunkSaveRefresh()
-      return false
+      try {
+        if (!this.hasBlockingChunkSaves) return await this.flushChunkSaveRefresh()
+        return false
+      } finally {
+        this.handleChunkDeleteState({ publicId, blocking: false })
+      }
     },
     async handleReindex(chunk) {
       if (

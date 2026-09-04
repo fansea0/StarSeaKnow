@@ -44,6 +44,8 @@
       :config-fields="selectedStrategy?.configFields"
       :initial-values="strategyConfig"
       :initial-context-config="contextConfig"
+      :default-context-config="selectedStrategy?.defaultContextConfig"
+      :context-config-fields="selectedStrategy?.contextConfigFields"
       :server-field-errors="serverFieldErrors"
       :disabled="configDisabled"
       @config-change="$emit('config-change', $event)"

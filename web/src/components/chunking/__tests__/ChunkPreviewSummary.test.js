@@ -6,6 +6,7 @@ describe('ChunkPreviewSummary', () => {
     const wrapper = mount(ChunkPreviewSummary, {
       props: {
         summary: {
+          strategyCode: 'GENERAL',
           preprocessingSummary: {
             whitespaceMatches: 0, whitespaceCharactersRemoved: 0,
             urlMatches: 0, urlCharactersReplaced: 0,
@@ -27,5 +28,26 @@ describe('ChunkPreviewSummary', () => {
 
   it('renders nothing for a legacy response without persisted summary fields', () => {
     expect(mount(ChunkPreviewSummary, { props: { summary: null } }).html()).toBe('<!--v-if-->')
+  })
+
+  it('shows only strategy-neutral split counters for Markdown', () => {
+    const wrapper = mount(ChunkPreviewSummary, {
+      props: {
+        summary: {
+          strategyCode: 'MARKDOWN_OPTIMIZED',
+          preprocessingSummary: { urlMatches: 9, emailMatches: 4 },
+          delimiterMatched: false,
+          forcedSplitCount: 2,
+          tokenLimitedSplitCount: 1,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('强制切分 2')
+    expect(wrapper.text()).not.toContain('分隔符')
+    expect(wrapper.text()).not.toContain('空白处理')
+    expect(wrapper.text()).not.toContain('URL')
+    expect(wrapper.text()).not.toContain('邮箱')
+    expect(wrapper.text()).not.toContain('控制字符')
   })
 })

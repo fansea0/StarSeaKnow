@@ -6,6 +6,7 @@ import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPlanningRequest;
 import com.starsea.ai.chunking.model.ChunkPlanningResult;
 import com.starsea.ai.chunking.model.ChunkPolicy;
+import com.starsea.ai.chunking.model.ContextConfig;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.SemanticUnit;
 import com.starsea.ai.chunking.model.SourceLocator;
@@ -73,7 +74,9 @@ public final class MarkdownChunkPlanningStrategy implements ChunkPlanningStrateg
                 List.of(
                         integerField("minTokens", ChunkPolicy.defaults().minTokens(), 1, ChunkPolicy.MAX_ALLOWED_TOKENS),
                         integerField("targetTokens", ChunkPolicy.defaults().targetTokens(), 1, ChunkPolicy.MAX_ALLOWED_TOKENS),
-                        integerField("maxTokens", ChunkPolicy.defaults().maxTokens(), 1, ChunkPolicy.MAX_ALLOWED_TOKENS)));
+                        integerField("maxTokens", ChunkPolicy.defaults().maxTokens(), 1, ChunkPolicy.MAX_ALLOWED_TOKENS)),
+                ChunkStrategyDescriptor.contextConfigFields(ContextConfig.markdownDefaults()),
+                ContextConfig.markdownDefaults());
     }
 
     @Override

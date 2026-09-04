@@ -52,6 +52,7 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
                         field("collapseWhitespace", "boolean", defaults.collapseWhitespace(), null, null, Map.of()),
                         field("removeUrls", "boolean", defaults.removeUrls(), null, null, Map.of()),
                         field("removeEmails", "boolean", defaults.removeEmails(), null, null, Map.of())),
+                ChunkStrategyDescriptor.contextConfigFields(ContextConfig.generalDefaults()),
                 ContextConfig.generalDefaults());
     }
 

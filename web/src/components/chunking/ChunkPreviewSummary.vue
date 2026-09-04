@@ -2,14 +2,14 @@
   <section v-if="summary" class="preview-summary" aria-labelledby="preview-summary-title">
     <div class="preview-summary__heading">
       <strong id="preview-summary-title">本次分块摘要</strong>
-      <span>{{ summary.delimiterMatched === false ? '分隔符未匹配，已按长度回退' : '分隔符已匹配' }}</span>
+      <span v-if="isGeneral">{{ summary.delimiterMatched === false ? '分隔符未匹配，已按长度回退' : '分隔符已匹配' }}</span>
     </div>
     <dl>
-      <div><dt>空白处理</dt><dd>{{ preprocessing.whitespaceMatches }} 处 / 减少 {{ preprocessing.whitespaceCharactersRemoved }} 字符</dd></div>
-      <div><dt>URL</dt><dd>{{ preprocessing.urlMatches }} 处 / 替换 {{ preprocessing.urlCharactersReplaced }} 字符</dd></div>
-      <div><dt>邮箱</dt><dd>{{ preprocessing.emailMatches }} 处 / 替换 {{ preprocessing.emailCharactersReplaced }} 字符</dd></div>
-      <div><dt>控制字符</dt><dd>移除 {{ preprocessing.controlCharactersRemoved }} 字符</dd></div>
-      <div><dt>空片段</dt><dd>移除 {{ preprocessing.emptySegmentsRemoved }} 个</dd></div>
+      <div v-if="isGeneral"><dt>空白处理</dt><dd>{{ preprocessing.whitespaceMatches }} 处 / 减少 {{ preprocessing.whitespaceCharactersRemoved }} 字符</dd></div>
+      <div v-if="isGeneral"><dt>URL</dt><dd>{{ preprocessing.urlMatches }} 处 / 替换 {{ preprocessing.urlCharactersReplaced }} 字符</dd></div>
+      <div v-if="isGeneral"><dt>邮箱</dt><dd>{{ preprocessing.emailMatches }} 处 / 替换 {{ preprocessing.emailCharactersReplaced }} 字符</dd></div>
+      <div v-if="isGeneral"><dt>控制字符</dt><dd>移除 {{ preprocessing.controlCharactersRemoved }} 字符</dd></div>
+      <div v-if="isGeneral"><dt>空片段</dt><dd>移除 {{ preprocessing.emptySegmentsRemoved }} 个</dd></div>
       <div><dt>边界回退</dt><dd>强制切分 {{ number(summary.forcedSplitCount) }} / Token 限制切分 {{ number(summary.tokenLimitedSplitCount) }}</dd></div>
     </dl>
   </section>
@@ -19,6 +19,7 @@
 import { computed } from 'vue'
 const props = defineProps({ summary: { type: Object, default: null } })
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0
+const isGeneral = computed(() => String(props.summary?.strategyCode || '').toUpperCase() === 'GENERAL')
 const preprocessing = computed(() => ({
   whitespaceMatches: number(props.summary?.preprocessingSummary?.whitespaceMatches),
   whitespaceCharactersRemoved: number(props.summary?.preprocessingSummary?.whitespaceCharactersRemoved),

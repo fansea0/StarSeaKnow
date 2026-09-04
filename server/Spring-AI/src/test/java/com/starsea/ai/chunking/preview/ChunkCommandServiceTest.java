@@ -130,6 +130,18 @@ class ChunkCommandServiceTest {
     }
 
     @Test
+    void list_keeps_final_index_length_unknown_until_index_content_exists() {
+        DocumentChunk chunk = chunk(31L, CHUNK_ID, 0, ChunkStatus.DRAFT, 2, "Body");
+        chunk.setIndexContent(null);
+        when(chunkMapper.findByFile(FILE_ID, TENANT_ID, KNOWLEDGE_ID)).thenReturn(List.of(chunk));
+
+        var response = service.list(KNOWLEDGE_ID, FILE_ID).get(0);
+
+        assertEquals((Integer) null, response.indexLength());
+        assertEquals(4, response.bodyLength());
+    }
+
+    @Test
     void edit_persists_body_and_per_chunk_settings_with_fresh_read_only_overlap() {
         DocumentChunk previous = chunk(30L, UUID.randomUUID(), 3,
                 ChunkStatus.ACTIVE, 1, "Source sentence.");

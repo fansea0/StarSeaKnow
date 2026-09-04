@@ -76,14 +76,14 @@ public final class ChunkingApiModels {
                                 String overlapContent, int overlapTokenCount,
                                 int overlapCharacterCount, String overlapReductionReason,
                                 String overlapUnavailableReason, String lengthUnit,
-                                int bodyLength, int indexLength, int overlapActualLength,
+                                int bodyLength, Integer indexLength, int overlapActualLength,
                                 Map<String, Object> boundaryReason) {
         public ChunkResponse(UUID publicId, int position, String content,
                              List<String> sectionPath, Map<String, Object> sourceLocator,
                              int tokenCount, int status, boolean isModified, int lockVersion) {
             this(publicId, position, content, sectionPath, sourceLocator, tokenCount,
                     status, isModified, lockVersion, false, 40, OverlapUnit.TOKENS,
-                    null, 0, 0, null, null, "TOKENS", tokenCount, tokenCount, 0, Map.of());
+                    null, 0, 0, null, null, "TOKENS", tokenCount, null, 0, Map.of());
         }
 
         /** Legacy token-only response constructor. */
@@ -97,7 +97,7 @@ public final class ChunkingApiModels {
                     status, isModified, lockVersion, overlapEnabled, overlapTokenLimit,
                     OverlapUnit.TOKENS, overlapContent, overlapTokenCount,
                     overlapContent == null ? 0 : overlapContent.codePointCount(0, overlapContent.length()),
-                    null, overlapUnavailableReason, "TOKENS", tokenCount, tokenCount,
+                    null, overlapUnavailableReason, "TOKENS", tokenCount, null,
                     overlapTokenCount, Map.of());
         }
 

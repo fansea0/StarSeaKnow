@@ -37,8 +37,19 @@ const strategyResponse = {
           { key: 'removeEmails', defaultValue: false },
         ],
         defaultContextConfig: { enabled: true, limit: 40, unit: 'CHARACTERS', mode: 'CHARACTER_TAIL' },
+        contextConfigFields: [
+          { key: 'enabled', type: 'boolean', defaultValue: true },
+          { key: 'limit', type: 'number', defaultValue: 40, min: 0, max: 1000 },
+        ],
       },
-      { code: 'MARKDOWN_OPTIMIZED', available: true, supportedFileTypes: ['md', 'markdown'], plannerVersion: 'v1', defaultContextConfig: { enabled: false, limit: 40 } },
+      {
+        code: 'MARKDOWN_OPTIMIZED', available: true, supportedFileTypes: ['md', 'markdown'], plannerVersion: 'v1',
+        defaultContextConfig: { enabled: false, limit: 40 },
+        contextConfigFields: [
+          { key: 'enabled', type: 'boolean', defaultValue: false },
+          { key: 'limit', type: 'number', defaultValue: 40, min: 0, max: 512 },
+        ],
+      },
     ],
   },
 }
@@ -352,7 +363,7 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('renders only persisted processing summary values, including zero counts', async () => {
+  it('does not render GENERAL-only cleaning and delimiter statistics for Markdown', async () => {
     getProcessing.mockResolvedValue(processing(2, {
       preprocessingSummary: { whitespaceMatches: 0, whitespaceCharactersRemoved: 0, urlMatches: 0, urlCharactersReplaced: 0, emailMatches: 0, emailCharactersReplaced: 0, controlCharactersRemoved: 0, emptySegmentsRemoved: 0 },
       delimiterMatched: false,
@@ -362,8 +373,9 @@ describe('ChunkingWorkspace', () => {
     getChunks.mockResolvedValue({ data: [draftChunk] })
     const wrapper = mountWorkspace()
     await flushPromises()
-    expect(wrapper.text()).toContain('分隔符未匹配，已按长度回退')
     expect(wrapper.text()).toContain('强制切分 0')
+    expect(wrapper.text()).not.toContain('分隔符未匹配')
+    expect(wrapper.text()).not.toContain('空白处理')
   })
 
   it('keeps file submission disabled until the initial processing lockVersion is loaded', async () => {
@@ -927,6 +939,64 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.vm.hasBlockingChunkSaves).toBe(false)
     expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('false')
     expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('owns the workspace mutation barrier from delete confirmation through refresh', async () => {
+    const confirmation = deferred()
+    const deletion = deferred()
+    const refresh = deferred()
+    const secondChunk = {
+      ...draftChunk,
+      publicId: 'chunk-2',
+      position: 1,
+      content: '第二块正文',
+      lockVersion: 8,
+    }
+    getProcessing
+      .mockResolvedValueOnce(processing(3))
+      .mockReturnValueOnce(refresh.promise)
+    getChunks
+      .mockResolvedValueOnce({ data: [draftChunk, secondChunk] })
+      .mockResolvedValueOnce({ data: [secondChunk] })
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmation.promise)
+    deleteChunk.mockReturnValue(deletion.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.findAll('[data-testid="delete-chunk"]')[0].trigger('click')
+    await nextTick()
+
+    expect(wrapper.vm.fileMutationInProgress).toBe(true)
+    expect(wrapper.findAll('.chunk-card').every(card => card.attributes('aria-disabled') === 'true')).toBe(true)
+    expect(wrapper.get('[data-strategy="GENERAL"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="open-confirm"]').attributes('disabled')).toBeDefined()
+
+    wrapper.vm.selectStrategy('GENERAL')
+    await wrapper.vm.submitPreview()
+    wrapper.vm.openConfirmDialog()
+    await wrapper.vm.submitVectorization()
+    await wrapper.vm.handleReindex(secondChunk)
+    expect(wrapper.vm.selectedStrategy).toBe('MARKDOWN_OPTIMIZED')
+    expect(createPreview).not.toHaveBeenCalled()
+    expect(confirmVectorization).not.toHaveBeenCalled()
+    expect(reindexChunk).not.toHaveBeenCalled()
+
+    confirmation.resolve('confirm')
+    await flushPromises()
+    expect(deleteChunk).toHaveBeenCalledWith('11', '22', 'chunk-1', 5)
+    expect(wrapper.vm.fileMutationInProgress).toBe(true)
+
+    deletion.resolve({ status: 204 })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('人工修改后的正文')
+    expect(wrapper.vm.fileMutationInProgress).toBe(true)
+
+    refresh.resolve(processing(3))
+    await flushPromises()
+    expect(getChunks).toHaveBeenCalledTimes(2)
+    expect(wrapper.vm.fileMutationInProgress).toBe(false)
+    expect(wrapper.get('[data-testid="edit-chunk"]').attributes('disabled')).toBeUndefined()
   })
 
   it('blocks failed-vectorization retry while a recovered draft has an unsaved change', async () => {

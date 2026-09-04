@@ -32,6 +32,10 @@
       />
       <p v-else data-testid="chunk-body" class="chunk-content">{{ localChunk.content }}</p>
 
+      <p v-if="sourceLocatorText" class="source-locator" data-testid="source-locator">
+        <strong>来源</strong>{{ sourceLocatorText }}
+      </p>
+
       <div v-if="errorMessage" class="chunk-error" role="alert">
         <span>{{ errorMessage }}</span>
         <el-button v-if="conflict" link data-testid="reload-chunk" @click="$emit('reload', localChunk.publicId)">重新加载</el-button>
@@ -77,7 +81,7 @@
           <dl class="overlap-readonly" aria-label="补充上文只读详情">
             <div><dt>实际长度</dt><dd>{{ overlapActualText }}</dd></div>
             <div v-if="hasBothActualCounts"><dt>双单位计数</dt><dd>{{ actualCountsText }}</dd></div>
-            <div v-if="localChunk.overlapReductionReason"><dt>缩减原因</dt><dd data-testid="overlap-reduction-reason">{{ reductionReasonText }}</dd></div>
+            <div v-if="reductionReasonText"><dt>缩减原因</dt><dd data-testid="overlap-reduction-reason">{{ reductionReasonText }}</dd></div>
           </dl>
         </div>
       </div>
@@ -109,7 +113,7 @@
           link
           type="danger"
           data-testid="delete-chunk"
-          :disabled="actionsDisabled"
+          :disabled="actionsDisabled || saveBlocking"
           @click="requestDelete"
         >删除</el-button>
       </div>
@@ -130,18 +134,20 @@ const props = defineProps({
   showReindex: { type: Boolean, default: false },
   reindexDisabled: { type: Boolean, default: false },
   reloadEpoch: { type: Number, default: 0 },
+  contextConfigFields: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['updated', 'deleted', 'reload', 'reindex', 'save-state'])
+const emit = defineEmits(['updated', 'deleted', 'reload', 'reindex', 'save-state', 'delete-state'])
 const localChunk = reactive({ ...props.chunk })
 const editing = ref(false)
 const editorValue = ref(props.chunk.content || '')
 const overlapEnabled = ref(Boolean(props.chunk.overlapEnabled))
 const initialOverlapLimit = chunk => chunk.overlapLimit ?? chunk.overlapTokenLimit
-const overlapLimit = ref(normalizeOverlapLimit(initialOverlapLimit(props.chunk)))
+const overlapLimit = ref(initialOverlapLimit(props.chunk))
 const saveStatus = ref('')
 const errorMessage = ref('')
 const conflict = ref(false)
+const deleteInProgress = ref(false)
 let saveTimer = null
 let requestGeneration = 0
 let saveInFlight = false
@@ -160,6 +166,8 @@ const reductionMessages = Object.freeze({
   NO_ADJACENT_SOURCE: '没有相邻来源',
   FIRST_CHUNK: '首块无前文',
   DISABLED: '补充上文已停用',
+  SOURCE_EMPTY: '来源正文为空，无法生成补充上文',
+  NONE: '',
 })
 const boundaryMessages = Object.freeze({
   DOCUMENT_START: '文档开始', DOCUMENT_END: '文档结束', USER_DELIMITER: '用户分隔符',
@@ -170,8 +178,9 @@ const boundaryMessages = Object.freeze({
 })
 
 const chunkNumber = computed(() => String((Number(localChunk.position) || 0) + 1).padStart(2, '0'))
-const actionsDisabled = computed(() => props.disabled || Number(localChunk.status) === 1)
+const actionsDisabled = computed(() => props.disabled || deleteInProgress.value || Number(localChunk.status) === 1)
 const sectionPathText = computed(() => localChunk.sectionPath?.length ? localChunk.sectionPath.join(' / ') : '文档正文')
+const sourceLocatorText = computed(() => formatSourceLocator(localChunk.sourceLocator))
 const overlapUnavailableText = computed(() => {
   const code = String(localChunk.overlapUnavailableReason || '').trim()
   if (!code) return '暂无可补充的上文。'
@@ -179,10 +188,23 @@ const overlapUnavailableText = computed(() => {
 })
 const overlapUnit = computed(() => String(localChunk.overlapUnit || 'TOKENS').toUpperCase())
 const overlapUnitLabel = computed(() => overlapUnit.value === 'CHARACTERS' ? '字符' : 'Token')
-const overlapMaximum = computed(() => overlapUnit.value === 'CHARACTERS' ? 1000 : 512)
+const contextLimitField = computed(() => props.contextConfigFields.find(item => item?.key === 'limit'))
+const defensiveMaximum = computed(() => overlapUnit.value === 'CHARACTERS' ? 1000 : 512)
+const overlapMinimum = computed(() => {
+  const value = Number(contextLimitField.value?.min)
+  return Number.isInteger(value) ? Math.max(1, value) : 1
+})
+const overlapMaximum = computed(() => {
+  const value = Number(contextLimitField.value?.max)
+  return Number.isInteger(value) && value >= overlapMinimum.value ? value : defensiveMaximum.value
+})
+const overlapDefault = computed(() => {
+  const value = Number(contextLimitField.value?.defaultValue)
+  return Number.isInteger(value) && value >= overlapMinimum.value && value <= overlapMaximum.value ? value : 40
+})
 const lengthUnitLabel = computed(() => String(localChunk.lengthUnit || 'TOKENS').toUpperCase() === 'CHARACTERS' ? '字符' : 'Token')
 const bodyLength = computed(() => Number.isFinite(Number(localChunk.bodyLength)) ? Number(localChunk.bodyLength) : Number(localChunk.tokenCount) || 0)
-const hasIndexLength = computed(() => Number.isFinite(Number(localChunk.indexLength)))
+const hasIndexLength = computed(() => localChunk.indexLength != null && Number.isFinite(Number(localChunk.indexLength)))
 const overlapActualLength = computed(() => Number.isFinite(Number(localChunk.overlapActualLength))
   ? Number(localChunk.overlapActualLength)
   : overlapUnit.value === 'CHARACTERS' ? Number(localChunk.overlapCharacterCount) || 0 : Number(localChunk.overlapTokenCount) || 0)
@@ -190,7 +212,13 @@ const overlapActualText = computed(() => `${overlapActualLength.value} ${overlap
 const hasBothActualCounts = computed(() => Number.isFinite(Number(localChunk.overlapCharacterCount)) && Number.isFinite(Number(localChunk.overlapTokenCount)))
 const actualCountsText = computed(() => `${Number(localChunk.overlapCharacterCount) || 0} 字符 / ${Number(localChunk.overlapTokenCount) || 0} Token`)
 const readableCode = code => boundaryMessages[code] || String(code || '').trim()
-const reductionReasonText = computed(() => reductionMessages[localChunk.overlapReductionReason] || String(localChunk.overlapReductionReason || '').trim())
+const reductionReasonText = computed(() => {
+  const code = String(localChunk.overlapReductionReason || '').trim()
+  if (!code) return ''
+  return Object.prototype.hasOwnProperty.call(reductionMessages, code)
+    ? reductionMessages[code]
+    : '其他缩减原因'
+})
 const boundaryText = computed(() => {
   const boundary = localChunk.boundaryReason || {}
   const parts = []
@@ -201,8 +229,42 @@ const boundaryText = computed(() => {
 })
 
 function normalizeOverlapLimit(value) {
-  const maximum = String(localChunk.overlapUnit || 'TOKENS').toUpperCase() === 'CHARACTERS' ? 1000 : 512
-  return Number.isInteger(value) && value >= 1 && value <= maximum ? value : 40
+  return Number.isInteger(value) && value >= overlapMinimum.value && value <= overlapMaximum.value
+    ? value
+    : Math.min(overlapMaximum.value, Math.max(overlapMinimum.value, overlapDefault.value))
+}
+
+overlapLimit.value = normalizeOverlapLimit(overlapLimit.value)
+
+function formatRange(label, start, end, suffix = '') {
+  if (start == null || !Number.isFinite(Number(start))) return ''
+  const first = Number(start)
+  const last = end != null && Number.isFinite(Number(end)) ? Number(end) : first
+  return `${label}${first === last ? first : `${first}–${last}`}${suffix}`
+}
+
+function formatSourceLocator(locator) {
+  if (!locator || typeof locator !== 'object') return ''
+  const parts = []
+  const pages = formatRange('第 ', locator.startPage, locator.endPage, ' 页')
+  const lines = formatRange('第 ', locator.startLine, locator.endLine, ' 行')
+  const offsets = formatRange('字符偏移 ', locator.startOffset, locator.endOffset)
+  if (pages) parts.push(pages)
+  if (lines) parts.push(lines)
+  if (offsets) parts.push(offsets)
+  const seen = new Set()
+  for (const region of Array.isArray(locator.regions) ? locator.regions : []) {
+    for (const [key, label] of [['sheet', '工作表'], ['slide', '幻灯片'], ['document', '文档']]) {
+      const value = region?.[key]
+      if (value == null || String(value).trim() === '') continue
+      const text = `${label} ${value}`
+      if (!seen.has(text)) {
+        seen.add(text)
+        parts.push(text)
+      }
+    }
+  }
+  return parts.join(' · ')
 }
 
 function currentSnapshot() {
@@ -222,7 +284,7 @@ function matchesServer(snapshot = currentSnapshot()) {
 function reportSaveState() {
   if (destroyed) return
   const dirty = !matchesServer()
-  const pending = Boolean(saveTimer || saveInFlight || queuedSave)
+const pending = Boolean(saveTimer || saveInFlight || queuedSave)
   emit('save-state', {
     publicId: localChunk.publicId,
     dirty,
@@ -231,6 +293,8 @@ function reportSaveState() {
     blocking: dirty || pending || saveError,
   })
 }
+
+const saveBlocking = computed(() => !matchesServer() || Boolean(saveTimer || saveInFlight || queuedSave) || saveError)
 
 watch(
   () => props.chunk,
@@ -394,6 +458,8 @@ function requestReindex() {
 
 async function requestDelete() {
   if (actionsDisabled.value) return
+  deleteInProgress.value = true
+  emit('delete-state', { publicId: localChunk.publicId, blocking: true })
   try {
     await ElMessageBox.confirm(
       '删除后该原始分块将不再参与索引，此操作不能撤销。',
@@ -401,20 +467,20 @@ async function requestDelete() {
       { confirmButtonText: '删除分块', cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
+    finishDelete()
     return
   }
 
-  if (actionsDisabled.value) return
-
   errorMessage.value = ''
   conflict.value = false
-  const generation = requestGeneration
+  let succeeded = false
   try {
     await deleteChunk(props.knowledgeId, props.fileId, localChunk.publicId, localChunk.lockVersion)
-    if (generation !== requestGeneration) return
+    if (destroyed) return
+    succeeded = true
     emit('deleted', localChunk.publicId)
   } catch (cause) {
-    if (generation !== requestGeneration) return
+    if (destroyed) return
     const status = cause?.response?.status
     conflict.value = status === 409
     if (status === 409) {
@@ -424,7 +490,14 @@ async function requestDelete() {
     } else {
       errorMessage.value = cause?.response?.data?.msg || '删除失败，请稍后重试。'
     }
+  } finally {
+    if (!succeeded) finishDelete()
   }
+}
+
+function finishDelete() {
+  deleteInProgress.value = false
+  emit('delete-state', { publicId: localChunk.publicId, blocking: false })
 }
 
 onBeforeUnmount(() => {
@@ -480,6 +553,8 @@ onBeforeUnmount(() => {
 
 .chunk-card__body { padding: 17px 18px 13px; }
 .chunk-content { margin: 0; color: var(--sea-ink); font-size: 14px; line-height: 1.78; white-space: pre-wrap; }
+.source-locator { display: flex; flex-wrap: wrap; gap: 5px; margin: 9px 0 0; color: var(--sea-muted); font-size: 11px; line-height: 1.5; }
+.source-locator strong { color: var(--sea-deep); font-weight: 600; }
 
 .overlap-setting {
   display: flex;

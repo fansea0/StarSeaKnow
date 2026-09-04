@@ -13,6 +13,7 @@ public record StrategyCapabilityResponse(
         Set<String> supportedFileTypes,
         String plannerVersion,
         List<ChunkStrategyDescriptor.ConfigField> configFields,
+        List<ChunkStrategyDescriptor.ConfigField> contextConfigFields,
         ContextConfig defaultContextConfig,
         boolean available,
         String reason) {
@@ -21,6 +22,7 @@ public record StrategyCapabilityResponse(
                                       boolean available, String reason) {
         this(descriptor.code(), descriptor.scope(), descriptor.supportedFileTypes(),
                 descriptor.plannerVersion(), descriptor.configFields(),
+                descriptor.contextConfigFields(),
                 descriptor.defaultContextConfig(), available, reason);
     }
 }
