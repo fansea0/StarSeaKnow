@@ -96,9 +96,22 @@
           AND vector_id IN
           <foreach collection="vectorIds" item="vectorId"
                    open="(" separator="," close=")">
-              #{vectorId}
+              #{vectorId,jdbcType=OTHER,typeHandler=com.starsea.ai.auth.UuidTypeHandler}
           </foreach>
     </update>
+
+    <select id="lockWriters" resultMap="CleanupResultMap">
+        SELECT q.*
+        FROM chunk_vector_cleanup q
+        WHERE q.writer_owner = #{writerOwner}
+          AND q.vector_id IN
+          <foreach collection="vectorIds" item="vectorId"
+                   open="(" separator="," close=")">
+              #{vectorId,jdbcType=OTHER,typeHandler=com.starsea.ai.auth.UuidTypeHandler}
+          </foreach>
+        ORDER BY q.vector_id
+        FOR UPDATE
+    </select>
 
     <insert id="enqueuePendingByOwner">
         INSERT INTO chunk_vector_cleanup

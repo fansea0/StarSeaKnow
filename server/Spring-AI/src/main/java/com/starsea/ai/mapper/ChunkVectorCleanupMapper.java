@@ -39,6 +39,10 @@ public interface ChunkVectorCleanupMapper extends BaseMapper<ChunkVectorCleanup>
                           @Param("vectorIds") Set<UUID> vectorIds,
                           @Param("leaseSeconds") int leaseSeconds);
 
+    @InterceptorIgnore(tenantLine = "true")
+    List<ChunkVectorCleanup> lockWriters(@Param("writerOwner") UUID writerOwner,
+                                         @Param("vectorIds") Set<UUID> vectorIds);
+
     int enqueuePendingByOwner(@Param("fileId") long fileId,
                               @Param("tenantId") long tenantId,
                               @Param("knowledgeId") long knowledgeId,

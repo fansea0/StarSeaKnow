@@ -67,6 +67,17 @@ ALTER TABLE chunk_vector_cleanup
 CREATE INDEX idx_chunk_vector_cleanup_pending
     ON chunk_vector_cleanup(state, next_attempt_at, id);
 
+INSERT INTO chunk_vector_cleanup
+    (vector_id, tenant_id, knowledge_id, file_id, chunk_public_id)
+SELECT vector_id, tenant_id, knowledge_id, file_id, public_id
+FROM document_chunk
+WHERE vector_id IS NOT NULL
+UNION ALL
+SELECT pending_vector_id, tenant_id, knowledge_id, file_id, public_id
+FROM document_chunk
+WHERE pending_vector_id IS NOT NULL
+ON CONFLICT (vector_id) DO NOTHING;
+
 COMMENT ON COLUMN document_chunk.vector_id IS
     'Physical vector-store document ID of the currently active chunk generation';
 COMMENT ON COLUMN document_chunk.pending_vector_id IS

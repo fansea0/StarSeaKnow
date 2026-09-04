@@ -30,6 +30,8 @@ class V18VectorGenerationMigrationPostgresIT {
                 CREATE TABLE document_chunk (
                     id BIGSERIAL PRIMARY KEY,
                     public_id UUID NOT NULL UNIQUE,
+                    tenant_id BIGINT NOT NULL DEFAULT 1,
+                    knowledge_id BIGINT NOT NULL DEFAULT 10,
                     file_id BIGINT NOT NULL,
                     status SMALLINT NOT NULL
                 );
@@ -56,6 +58,8 @@ class V18VectorGenerationMigrationPostgresIT {
                 WHERE table_schema = current_schema()
                   AND table_name = 'chunk_vector_cleanup'
                   AND column_name = 'next_attempt_at';
+                SELECT vector_id, tenant_id, knowledge_id, file_id, chunk_public_id
+                FROM chunk_vector_cleanup ORDER BY vector_id;
                 SELECT rejected($q$INSERT INTO document_chunk
                     (public_id, file_id, status, pending_vector_id)
                     VALUES ('44444444-4444-4444-4444-444444444444', 20, 1,
@@ -79,9 +83,13 @@ class V18VectorGenerationMigrationPostgresIT {
                 SELECT rejected($q$UPDATE chunk_vector_cleanup
                     SET writer_owner = '66666666-6666-6666-6666-666666666666'
                     WHERE vector_id = '55555555-5555-5555-5555-555555555555'$q$);
+                DELETE FROM document_chunk;
+                SELECT COUNT(*) FROM chunk_vector_cleanup
+                WHERE vector_id IN (
+                    '%s', '22222222-2222-2222-2222-222222222222');
                 ROLLBACK;
                 """.formatted(schema, schema, activePublicId, readMigration(),
-                activePublicId, activePublicId);
+                activePublicId, activePublicId, activePublicId);
         Process process = new ProcessBuilder(
                 "psql", "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1", "-d", "postgres")
                 .redirectErrorStream(true).start();
@@ -96,7 +104,11 @@ class V18VectorGenerationMigrationPostgresIT {
                 "22222222-2222-2222-2222-222222222222||"
                         + "22222222-2222-2222-2222-222222222222|12",
                 "33333333-3333-3333-3333-333333333333|||",
-                "YES", "NO", "t", "t", "t", "t", "t", "t", "t"),
+                "YES", "NO",
+                activePublicId + "|1|10|20|" + activePublicId,
+                "22222222-2222-2222-2222-222222222222|1|10|21|"
+                        + "22222222-2222-2222-2222-222222222222",
+                "t", "t", "t", "t", "t", "t", "t", "2"),
                 output.lines().toList());
     }
 
@@ -315,6 +327,87 @@ class V18VectorGenerationMigrationPostgresIT {
             if (cleaner != null && cleaner.isAlive()) {
                 cleaner.destroyForcibly();
                 cleaner.waitFor(5, TimeUnit.SECONDS);
+            }
+            PsqlResult teardown = runPsql("DROP SCHEMA IF EXISTS " + schema + " CASCADE;");
+            assertEquals(0, teardown.exitCode(), teardown.output());
+        }
+    }
+
+    @Test
+    void expired_writer_lease_cannot_be_claimed_while_writer_holds_durable_io_fence()
+            throws Exception {
+        String schema = "starseaknow_v18_io_fence_it_"
+                + UUID.randomUUID().toString().replace("-", "");
+        UUID chunkId = UUID.fromString("12121212-1212-1212-1212-121212121212");
+        UUID vectorId = UUID.fromString("34343434-3434-3434-3434-343434343434");
+        UUID writerOwner = UUID.fromString("56565656-5656-5656-5656-565656565656");
+        PsqlResult setup = runPsql(setupSql(schema) + """
+                SET search_path TO %s;
+                INSERT INTO chunk_vector_cleanup
+                    (vector_id, tenant_id, knowledge_id, file_id, chunk_public_id,
+                     writer_owner, writer_lease_until)
+                VALUES ('%s', 1, 10, 20, '%s', '%s',
+                        CURRENT_TIMESTAMP - INTERVAL '1 minute');
+                """.formatted(schema, vectorId, chunkId, writerOwner));
+        assertEquals(0, setup.exitCode(), setup.output());
+
+        Process writer = null;
+        try {
+            writer = startPsql("""
+                    SET search_path TO %s;
+                    BEGIN;
+                    SELECT vector_id FROM chunk_vector_cleanup
+                    WHERE vector_id = '%s' AND writer_owner = '%s'
+                    FOR UPDATE;
+                    SELECT 'external-add-running';
+                    SELECT pg_sleep(3);
+                    UPDATE chunk_vector_cleanup
+                    SET writer_lease_until = CURRENT_TIMESTAMP + INTERVAL '1 minute'
+                    WHERE vector_id = '%s' AND writer_owner = '%s';
+                    COMMIT;
+                    """.formatted(schema, vectorId, writerOwner, vectorId, writerOwner));
+            BufferedReader writerOutput = new BufferedReader(new InputStreamReader(
+                    writer.getInputStream(), StandardCharsets.UTF_8));
+            assertEquals(vectorId.toString(), writerOutput.readLine());
+            assertEquals("external-add-running", writerOutput.readLine());
+
+            PsqlResult claim = runPsql("""
+                    SET search_path TO %s;
+                    WITH due AS (
+                        SELECT candidate.id
+                        FROM chunk_vector_cleanup candidate
+                        WHERE candidate.state = 0
+                          AND candidate.next_attempt_at <= CURRENT_TIMESTAMP
+                          AND (candidate.writer_owner IS NULL
+                               OR candidate.writer_lease_until <= CURRENT_TIMESTAMP)
+                        ORDER BY candidate.next_attempt_at, candidate.id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                    )
+                    UPDATE chunk_vector_cleanup q
+                    SET state = 1,
+                        claim_owner = '78787878-7878-7878-7878-787878787878',
+                        claim_lease_until = CURRENT_TIMESTAMP + INTERVAL '2 minutes'
+                    FROM due WHERE q.id = due.id
+                    RETURNING q.vector_id;
+                    """.formatted(schema));
+
+            assertEquals(0, claim.exitCode(), claim.output());
+            assertEquals("", claim.output());
+            assertTrue(writer.waitFor(8, TimeUnit.SECONDS));
+            assertEquals(0, writer.exitValue(), readRemaining(writerOutput));
+            PsqlResult persisted = runPsql("""
+                    SET search_path TO %s;
+                    SELECT state, claim_owner IS NULL,
+                           writer_lease_until > CURRENT_TIMESTAMP
+                    FROM chunk_vector_cleanup WHERE vector_id = '%s';
+                    """.formatted(schema, vectorId));
+            assertEquals(0, persisted.exitCode(), persisted.output());
+            assertEquals("0|t|t", persisted.output());
+        } finally {
+            if (writer != null && writer.isAlive()) {
+                writer.destroyForcibly();
+                writer.waitFor(5, TimeUnit.SECONDS);
             }
             PsqlResult teardown = runPsql("DROP SCHEMA IF EXISTS " + schema + " CASCADE;");
             assertEquals(0, teardown.exitCode(), teardown.output());

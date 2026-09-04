@@ -29,12 +29,14 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -197,7 +199,112 @@ class PgVectorRagServiceImplTest {
 
         ArgumentCaptor<SearchRequest> request = ArgumentCaptor.forClass(SearchRequest.class);
         verify(fixture.vectorStore).similaritySearch(request.capture());
-        assertEquals(Integer.MAX_VALUE, request.getValue().getTopK());
+        assertEquals(PgVectorRagServiceImpl.MAX_SEARCH_CANDIDATES,
+                request.getValue().getTopK());
+    }
+
+    @Test
+    void retries_when_a_generation_appears_between_count_and_search() {
+        Fixture fixture = fixture();
+        UUID staleVectorId = UUID.fromString("88888888-8888-8888-8888-888888888888");
+        UUID currentVectorId = UUID.fromString("99999999-9999-9999-9999-999999999999");
+        when(fixture.cleanupMapper.countUnprotectedStale(
+                TENANT_ID, Set.of(KNOWLEDGE_ID))).thenReturn(0L);
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(candidate(staleVectorId, FIRST_CHUNK_ID,
+                                "new stale generation", 0.99)),
+                        List.of(candidate(staleVectorId, FIRST_CHUNK_ID,
+                                        "new stale generation", 0.99),
+                                candidate(currentVectorId, FIRST_CHUNK_ID,
+                                        "current generation", 0.90)));
+        DocumentChunk current = chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                ChunkStatus.ACTIVE, 0, "database current");
+        current.setVectorId(currentVectorId);
+        when(fixture.chunkMapper.findActiveByPublicIds(
+                eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any())).thenReturn(List.of(current));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0));
+
+        assertEquals(List.of(FIRST_CHUNK_ID),
+                result.stream().map(RetrievedChunk::chunkId).toList());
+        ArgumentCaptor<SearchRequest> requests = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore, times(2)).similaritySearch(requests.capture());
+        assertEquals(List.of(1, 2), requests.getAllValues().stream()
+                .map(SearchRequest::getTopK).toList());
+    }
+
+    @Test
+    void adaptive_retry_never_returns_active_rows_cached_from_an_older_iteration() {
+        Fixture fixture = fixture();
+        List<UUID> oldIds = java.util.stream.IntStream.range(0, 5)
+                .mapToObj(index -> UUID.nameUUIDFromBytes(("old-" + index).getBytes()))
+                .toList();
+        List<UUID> newIds = java.util.stream.IntStream.range(0, 4)
+                .mapToObj(index -> UUID.nameUUIDFromBytes(("new-" + index).getBytes()))
+                .toList();
+        UUID staleId = UUID.nameUUIDFromBytes("stale".getBytes());
+        List<Document> firstWindow = new ArrayList<>();
+        oldIds.forEach(id -> firstWindow.add(candidate(id, "old", 0.99)));
+        firstWindow.add(candidate(staleId, "stale", 0.90));
+        List<Document> secondWindow = newIds.stream()
+                .map(id -> candidate(id, "new", 0.80)).toList();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(firstWindow, secondWindow);
+        when(fixture.chunkMapper.findActiveByPublicIds(
+                eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(oldIds.stream()
+                                .map(id -> chunk(id, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                        ChunkStatus.ACTIVE, 0, "old active"))
+                                .toList(),
+                        newIds.stream()
+                                .map(id -> chunk(id, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                        ChunkStatus.ACTIVE, 0, "new active"))
+                                .toList());
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 6, 0.0));
+
+        assertEquals(newIds, result.stream().map(RetrievedChunk::chunkId).toList());
+        ArgumentCaptor<SearchRequest> requests = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore, times(2)).similaritySearch(requests.capture());
+        assertEquals(List.of(6, 12), requests.getAllValues().stream()
+                .map(SearchRequest::getTopK).toList());
+    }
+
+    @Test
+    void fails_boundedly_when_stale_candidates_fill_the_maximum_window() {
+        Fixture fixture = fixture();
+        UUID staleVectorId = UUID.fromString("88888888-8888-8888-8888-888888888888");
+        when(fixture.cleanupMapper.countUnprotectedStale(
+                TENANT_ID, Set.of(KNOWLEDGE_ID))).thenReturn(Long.MAX_VALUE);
+        Document stale = candidate(staleVectorId, FIRST_CHUNK_ID, "stale", 0.99);
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(java.util.Collections.nCopies(
+                        PgVectorRagServiceImpl.MAX_SEARCH_CANDIDATES, stale));
+        DocumentChunk current = chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                ChunkStatus.ACTIVE, 0, "database current");
+        current.setVectorId(FIRST_CHUNK_ID);
+        when(fixture.chunkMapper.findActiveByPublicIds(
+                eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any())).thenReturn(List.of(current));
+
+        assertThrows(IllegalStateException.class, () -> fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0)));
+    }
+
+    @Test
+    void drops_unicode_blank_body_even_when_title_makes_index_content_nonblank() {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(candidate(FIRST_CHUNK_ID, "title and blank body", 0.99)));
+        DocumentChunk blank = chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                ChunkStatus.ACTIVE, 0, "Title\n\n\u00a0\u3000");
+        blank.setContent("\u00a0\u3000\n");
+        when(fixture.chunkMapper.findActiveByPublicIds(
+                eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any())).thenReturn(List.of(blank));
+
+        assertTrue(fixture.service.retrieve(new RetrievalQuery(
+                "stars", Set.of(KNOWLEDGE_ID), 1, 0.0)).isEmpty());
     }
 
     @Test
@@ -461,6 +568,8 @@ class PgVectorRagServiceImplTest {
         assertTrue(sql.contains("dc.public_id in"));
         assertTrue(sql.contains("dc.status = 2"));
         assertTrue(sql.contains("f.status = 1"));
+        assertTrue(sql.contains("dc.content is not null"));
+        assertTrue(sql.contains("dc.content ~ u&'[^\\0009-\\000d"));
         assertTrue(sql.contains("dc.index_content is not null"));
         assertTrue(sql.contains("dc.index_content ~ '[^[:space:]]'"));
         assertTrue(sql.contains("f.public_id as source_document_public_id"));
@@ -553,6 +662,7 @@ class PgVectorRagServiceImplTest {
         chunk.setFileId(fileId);
         chunk.setStatus(status.code());
         chunk.setPosition(position);
+        chunk.setContent("body");
         chunk.setIndexContent(indexContent);
         chunk.setSectionPath(List.of("Guide", "Details"));
         chunk.setSourceLocator(Map.of("startLine", 7, "endLine", 11, "blockIds", List.of("b-1")));

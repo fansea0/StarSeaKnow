@@ -171,8 +171,8 @@ public class ChunkCommandService {
     @Transactional
     public ChunkResponse edit(long knowledgeId, long fileId, UUID chunkPublicId,
                               EditChunkRequest request) {
-        if (request == null || request.content() == null || request.content().isBlank()) {
-            throw ChunkingException.unprocessable("Chunk content must not be blank");
+        if (request == null || request.content() == null || request.content().isEmpty()) {
+            throw ChunkingException.unprocessable("Chunk content must not be empty");
         }
         if (request.lockVersion() == null) {
             throw ChunkingException.unprocessable("Chunk lockVersion is required");

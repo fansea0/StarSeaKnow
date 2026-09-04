@@ -150,9 +150,11 @@ public class ChunkVectorWorker {
             validatePrepared(prepared);
             validateBatchBeforeIo(job);
             validateSourceBytes(job.file(), job.sourceHash(), job.processing());
-            writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
-            validateSourceBytes(job.file(), job.sourceHash(), job.processing());
-            transactions.executeWithoutResult(status -> completeBatch(job, prepared));
+            vectorLifecycle.withWriterFence(job.obligations(), () -> {
+                writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
+                validateSourceBytes(job.file(), job.sourceHash(), job.processing());
+                transactions.executeWithoutResult(status -> completeBatch(job, prepared));
+            });
             vectorLifecycle.drain();
         } catch (RuntimeException failure) {
             if (!vectorMutationStarted.get()
@@ -175,9 +177,11 @@ public class ChunkVectorWorker {
             validatePrepared(prepared);
             validateSingleBeforeIo(job);
             validateSourceBytes(job.file(), job.sourceHash(), job.processing());
-            writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
-            validateSourceBytes(job.file(), job.sourceHash(), job.processing());
-            transactions.executeWithoutResult(status -> completeSingle(job, prepared));
+            vectorLifecycle.withWriterFence(job.obligations(), () -> {
+                writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
+                validateSourceBytes(job.file(), job.sourceHash(), job.processing());
+                transactions.executeWithoutResult(status -> completeSingle(job, prepared));
+            });
             vectorLifecycle.drain();
         } catch (RuntimeException failure) {
             if (!vectorMutationStarted.get()

@@ -158,6 +158,31 @@ public class DurableChunkVectorLifecycle implements ChunkVectorLifecycle {
     }
 
     @Override
+    public void withWriterFence(Collection<CleanupObligation> obligations, Runnable action) {
+        Objects.requireNonNull(action, "action");
+        List<CleanupObligation> normalized = normalized(obligations);
+        java.util.Set<UUID> vectorIds = normalized.stream()
+                .map(CleanupObligation::vectorId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (vectorIds.isEmpty()) {
+            action.run();
+            return;
+        }
+        inNewTransaction(() -> {
+            List<ChunkVectorCleanup> locked = cleanupMapper.lockWriters(instanceId, vectorIds);
+            if (locked == null || locked.size() != vectorIds.size()
+                    || !locked.stream().map(ChunkVectorCleanup::getVectorId)
+                    .collect(java.util.stream.Collectors.toSet()).equals(vectorIds)) {
+                throw new IllegalStateException("Vector writer fence ownership was lost");
+            }
+            cleanupMapper.renewWriterLeases(instanceId, vectorIds, WRITER_LEASE_SECONDS);
+            action.run();
+            cleanupMapper.renewWriterLeases(instanceId, vectorIds, WRITER_LEASE_SECONDS);
+            return null;
+        });
+    }
+
+    @Override
     public void resetAbandonedClaims() {
         inNewTransaction(cleanupMapper::resetAbandonedClaims);
     }

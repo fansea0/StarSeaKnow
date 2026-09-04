@@ -3,6 +3,7 @@ package com.starsea.ai.service.impl;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.auth.AuthErrorCode;
 import com.starsea.ai.auth.AuthException;
+import com.starsea.ai.chunking.general.UnicodeText;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
@@ -39,6 +40,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class PgVectorRagServiceImpl implements RagService {
+
+    static final int MAX_SEARCH_CANDIDATES = 10_000;
 
     private final VectorStore vectorStore;
     @Lazy
@@ -95,14 +98,33 @@ public class PgVectorRagServiceImpl implements RagService {
         long staleGenerations = cleanupMapper == null ? 0L
                 : Math.max(0L, cleanupMapper.countUnprotectedStale(
                 tenantId, query.knowledgeIds()));
-        SearchRequest request = SearchRequest.builder()
-                .query(query.query())
-                .topK(searchTopK(query.topK(), staleGenerations))
-                .similarityThreshold(query.scoreThreshold())
-                .filterExpression(filter)
-                .build();
+        int searchLimit = initialSearchLimit(query.topK(), staleGenerations);
+        while (true) {
+            SearchRequest request = SearchRequest.builder()
+                    .query(query.query())
+                    .topK(searchLimit)
+                    .similarityThreshold(query.scoreThreshold())
+                    .filterExpression(filter)
+                    .build();
+            List<Document> documents = safeDocuments(vectorStore.similaritySearch(request));
+            List<RetrievedChunk> current = resolveCurrent(
+                    documents, query, tenantId, enabledFiles.keySet());
+            if (current.size() >= query.topK() || documents.size() != searchLimit) {
+                return current;
+            }
+            if (searchLimit == MAX_SEARCH_CANDIDATES) {
+                throw new IllegalStateException(
+                        "Vector candidate limit exhausted before current generations were resolved");
+            }
+            searchLimit = nextSearchLimit(searchLimit);
+        }
+    }
 
-        List<ScoredCandidate> candidates = safeDocuments(vectorStore.similaritySearch(request)).stream()
+    private List<RetrievedChunk> resolveCurrent(List<Document> documents,
+                                                 RetrievalQuery query,
+                                                 long tenantId,
+                                                 Set<Long> enabledFileIds) {
+        List<ScoredCandidate> candidates = documents.stream()
                 .map(this::candidate)
                 .filter(candidate -> candidate.publicId() != null)
                 .filter(candidate -> candidate.score() >= query.scoreThreshold())
@@ -110,19 +132,15 @@ public class PgVectorRagServiceImpl implements RagService {
         if (candidates.isEmpty()) {
             return List.of();
         }
-
         List<UUID> publicIds = new ArrayList<>(new LinkedHashSet<>(candidates.stream()
                 .map(ScoredCandidate::publicId)
                 .toList()));
         Map<UUID, DocumentChunk> activeChunks = safeChunks(chunkMapper.findActiveByPublicIds(
                 tenantId, query.knowledgeIds(), publicIds)).stream()
-                .filter(chunk -> isPermittedActive(chunk, tenantId, query.knowledgeIds(), enabledFiles.keySet()))
+                .filter(chunk -> isPermittedActive(
+                        chunk, tenantId, query.knowledgeIds(), enabledFileIds))
                 .collect(Collectors.toMap(DocumentChunk::getPublicId, Function.identity(),
                         (first, ignored) -> first, LinkedHashMap::new));
-        if (activeChunks.isEmpty()) {
-            return List.of();
-        }
-
         Set<UUID> emitted = new LinkedHashSet<>();
         return candidates.stream()
                 .filter(candidate -> currentGeneration(
@@ -177,21 +195,29 @@ public class PgVectorRagServiceImpl implements RagService {
                 && knowledgeIds.contains(chunk.getKnowledgeId())
                 && permittedFileIds.contains(chunk.getFileId())
                 && Integer.valueOf(ChunkStatus.ACTIVE.code()).equals(chunk.getStatus())
+                && !UnicodeText.isBlank(chunk.getContent())
                 && chunk.getIndexContent() != null
-                && !chunk.getIndexContent().isBlank()
+                && !UnicodeText.isBlank(chunk.getIndexContent())
                 && chunk.getSourceDocumentPublicId() != null
                 && chunk.getSourceFileName() != null
                 && chunk.getSourceFileType() != null;
     }
 
-    private static int searchTopK(int topK, long staleGenerations) {
-        if (topK < 1) {
-            throw new IllegalArgumentException("topK must be positive");
+    private static int initialSearchLimit(int topK, long staleGenerations) {
+        if (topK < 1 || topK > MAX_SEARCH_CANDIDATES) {
+            throw new IllegalArgumentException(
+                    "topK must be between 1 and " + MAX_SEARCH_CANDIDATES);
         }
-        if (staleGenerations >= Integer.MAX_VALUE - (long) topK) {
-            return Integer.MAX_VALUE;
+        long stale = Math.max(0L, staleGenerations);
+        if (stale >= MAX_SEARCH_CANDIDATES - (long) topK) {
+            return MAX_SEARCH_CANDIDATES;
         }
-        return topK + (int) staleGenerations;
+        return topK + (int) stale;
+    }
+
+    private static int nextSearchLimit(int current) {
+        return current >= MAX_SEARCH_CANDIDATES / 2
+                ? MAX_SEARCH_CANDIDATES : current * 2;
     }
 
     private static double normalizeScore(Double score) {

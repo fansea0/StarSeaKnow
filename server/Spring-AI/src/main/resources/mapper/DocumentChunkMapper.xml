@@ -85,6 +85,8 @@
           AND kf.tenant_id = #{tenantId}
           AND dc.status = 2
           AND f.status = 1
+          AND dc.content IS NOT NULL
+          AND dc.content ~ U&amp;'[^\0009-\000D\001C-\0020\00A0\1680\2000-\200A\2028\2029\202F\205F\3000]'
           AND dc.index_content IS NOT NULL
           AND dc.index_content ~ '[^[:space:]]'
           AND dc.knowledge_id IN

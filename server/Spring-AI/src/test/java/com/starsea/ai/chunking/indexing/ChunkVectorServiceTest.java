@@ -244,6 +244,70 @@ class ChunkVectorServiceTest {
     }
 
     @Test
+    void confirmation_preserves_a_retained_whitespace_chunk_for_non_embedding_activation()
+            throws Exception {
+        String whitespace = "\u00a0\u3000\n";
+        DocumentChunk blank = chunk(
+                1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, whitespace);
+        blank.setOverlapEnabled(false);
+        blank.setOverlapLimit(0);
+        blank.setOverlapUnit(com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS);
+        Fixture fixture = fixture(PipelineState.CHUNKED, 3, sourceHash(), List.of(blank));
+        fixture.processing.setStrategyCode("GENERAL");
+        fixture.processing.setPolicySnapshot(Map.of(
+                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 500,
+                "collapseWhitespace", false, "removeUrls", false, "removeEmails", false));
+        fixture.processing.setExecutionMetadata(Map.of("tokenHardLimit", 512));
+        when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.CHUNKED,
+                PipelineState.CONFIRMED, 3)).thenReturn(new FileProcessingService.Transition(
+                KNOWLEDGE_ID, FILE_ID, PipelineState.CHUNKED, PipelineState.CONFIRMED,
+                4, 100, null, null));
+        when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.CONFIRMED,
+                PipelineState.VECTORIZING, 4)).thenReturn(new FileProcessingService.Transition(
+                KNOWLEDGE_ID, FILE_ID, PipelineState.CONFIRMED, PipelineState.VECTORIZING,
+                5, 0, null, null));
+
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
+        fixture.dispatched.get().run();
+
+        var job = org.mockito.ArgumentCaptor.forClass(ChunkVectorWorker.BatchJob.class);
+        verify(fixture.worker).vectorizeBatch(job.capture());
+        assertEquals(whitespace, job.getValue().chunks().get(0).content());
+        assertTrue(com.starsea.ai.chunking.general.UnicodeText.isBlank(
+                job.getValue().prepared().get(0).indexContent()));
+    }
+
+    @Test
+    void single_reindex_preserves_a_retained_whitespace_chunk_for_non_embedding_activation()
+            throws Exception {
+        String whitespace = "\u00a0\u3000\n";
+        DocumentChunk blank = chunk(
+                1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, whitespace);
+        blank.setOverlapEnabled(false);
+        blank.setOverlapLimit(0);
+        blank.setOverlapUnit(com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS);
+        Fixture fixture = fixture(PipelineState.ADJUSTING, 3, sourceHash(), List.of(blank));
+        fixture.processing.setStrategyCode("GENERAL");
+        fixture.processing.setPolicySnapshot(Map.of(
+                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 500,
+                "collapseWhitespace", false, "removeUrls", false, "removeEmails", false));
+        fixture.processing.setExecutionMetadata(Map.of("tokenHardLimit", 512));
+        when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.ADJUSTING,
+                PipelineState.VECTORIZING, 3)).thenReturn(new FileProcessingService.Transition(
+                KNOWLEDGE_ID, FILE_ID, PipelineState.ADJUSTING, PipelineState.VECTORIZING,
+                4, 0, null, null));
+
+        fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID);
+        fixture.dispatched.get().run();
+
+        var job = org.mockito.ArgumentCaptor.forClass(ChunkVectorWorker.SingleJob.class);
+        verify(fixture.worker).vectorizeSingle(job.capture());
+        assertEquals(whitespace, job.getValue().chunk().content());
+        assertTrue(com.starsea.ai.chunking.general.UnicodeText.isBlank(
+                job.getValue().prepared().get(0).indexContent()));
+    }
+
+    @Test
     void confirmation_commits_indexing_without_mutating_legacy_context_policy() throws Exception {
         DocumentChunk first = chunk(1L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "first edited body");
         DocumentChunk second = chunk(2L, SECOND_PUBLIC_ID, ChunkStatus.ACTIVE, 4, "second body");

@@ -107,6 +107,28 @@ class ChunkVectorWorkerDurabilityTest {
         assertEquals(Set.of(), fixture.lifecycle.queued);
     }
 
+    @Test
+    void whitespace_body_single_reindex_activates_without_embedding_and_cleans_old_vector() {
+        Fixture fixture = fixture(false, false, "\u00a0\u3000\n", "Title\n\n\u00a0\u3000\n");
+        ChunkVectorWorker.BatchJob batch = fixture.job;
+        ChunkVectorWorker.ChunkSnapshot target = batch.chunks().get(0);
+        ChunkVectorWorker.SingleJob single = new ChunkVectorWorker.SingleJob(
+                batch.tenantId(), batch.knowledgeId(), batch.fileId(),
+                batch.fileLockVersion(), batch.sourceHash(), batch.maxTokens(), batch.file(),
+                batch.allChunks(), target, batch.processing(), batch.prepared());
+        UUID reserved = single.vectorId(target.id());
+
+        fixture.worker.vectorizeSingle(single);
+
+        assertEquals(PipelineState.COMPLETED.code(), fixture.processing.getPipelineState());
+        assertEquals(ChunkStatus.ACTIVE.code(), fixture.chunk.getStatus());
+        assertEquals(reserved, fixture.chunk.getVectorId());
+        assertEquals("Title\n\n\u00a0\u3000\n", fixture.chunk.getIndexContent());
+        assertEquals(Map.of(), fixture.gateway.values);
+        assertEquals(0, fixture.gateway.addInvocations.get());
+        assertEquals(Set.of(), fixture.lifecycle.queued);
+    }
+
     private Fixture fixture(boolean uncertainCommit, boolean crashAfterAdd) {
         return fixture(uncertainCommit, crashAfterAdd, "body", "new index");
     }

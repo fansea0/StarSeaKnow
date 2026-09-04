@@ -21,6 +21,7 @@ import com.starsea.ai.mapper.FileProcessingMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.apache.ibatis.builder.xml.XMLMapperBuilder;
 import org.apache.ibatis.mapping.BoundSql;
 import org.apache.ibatis.mapping.MappedStatement;
@@ -312,13 +313,42 @@ class ChunkCommandServiceTest {
     }
 
     @Test
-    void edit_rejects_blank_content_before_any_mutation() {
+    void edit_allows_a_retained_unicode_whitespace_chunk() {
+        DocumentChunk target = chunk(31L, CHUNK_ID, 0, ChunkStatus.ACTIVE, 2, "Old");
+        target.setIndexContent("Old");
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+
+        service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                new EditChunkRequest(" \u00a0\u3000\n", 2));
+
+        ArgumentCaptor<DocumentChunk> patch = ArgumentCaptor.forClass(DocumentChunk.class);
+        verify(chunkMapper).update(patch.capture(), any());
+        assertEquals(" \u00a0\u3000\n", patch.getValue().getContent());
+        assertEquals(ChunkStatus.DRAFT.code(), patch.getValue().getStatus());
+    }
+
+    @Test
+    void edit_still_rejects_null_content_before_any_mutation() {
         ChunkingException failure = assertThrows(ChunkingException.class,
                 () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
-                        new EditChunkRequest("  \n", 2)));
+                        new EditChunkRequest(null, 2)));
 
         assertEquals(422, failure.status().value());
-        verify(processingMapper, never()).findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID);
+        verify(processingMapper, never()).findScopedForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID);
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
+    }
+
+    @Test
+    void edit_rejects_empty_content_before_any_mutation() {
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                        new EditChunkRequest("", 2)));
+
+        assertEquals(422, failure.status().value());
+        verify(processingMapper, never()).findScopedForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID);
         verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
     }
 
@@ -615,6 +645,14 @@ class ChunkCommandServiceTest {
 
         assertEquals(422, failure.status().value());
         assertTrue(failure.getMessage().contains("at least one chunk"));
+    }
+
+    @Test
+    void retained_whitespace_chunk_is_confirmable() {
+        when(chunkMapper.findByFile(FILE_ID, TENANT_ID, KNOWLEDGE_ID)).thenReturn(List.of(
+                chunk(31L, CHUNK_ID, 0, ChunkStatus.DRAFT, 2, "\u00a0\u3000\n")));
+
+        assertDoesNotThrow(() -> service.requireConfirmable(KNOWLEDGE_ID, FILE_ID));
     }
 
     @Test

@@ -23,6 +23,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -256,6 +257,50 @@ class DurableChunkVectorLifecycleTest {
         assertTrue(start.contains("claim_owner = null"), start);
         assertTrue(finish.contains("writer_owner = null"), finish);
         assertTrue(finish.contains("where chunk_vector_cleanup.writer_owner ="), finish);
+    }
+
+    @Test
+    void writer_fence_locks_every_owned_generation_while_external_io_runs()
+            throws Exception {
+        ChunkVectorCleanupMapper mapper = mock(ChunkVectorCleanupMapper.class);
+        ChunkVectorCleanup owned = cleanup();
+        owned.setWriterOwner(INSTANCE_ID);
+        when(mapper.lockWriters(INSTANCE_ID, Set.of(VECTOR_ID)))
+                .thenReturn(List.of(owned));
+        DurableChunkVectorLifecycle lifecycle = new DurableChunkVectorLifecycle(
+                mapper, mock(ChunkVectorGateway.class),
+                new ImmediateTransactions(), INSTANCE_ID);
+        AtomicBoolean externalIoRan = new AtomicBoolean();
+
+        lifecycle.withWriterFence(List.of(obligation()), () -> externalIoRan.set(true));
+
+        assertTrue(externalIoRan.get());
+        verify(mapper).lockWriters(INSTANCE_ID, Set.of(VECTOR_ID));
+        verify(mapper, times(2)).renewWriterLeases(
+                INSTANCE_ID, Set.of(VECTOR_ID), 60);
+        String lock = sql(mapperConfiguration(), "lockWriters", Map.of(
+                "writerOwner", INSTANCE_ID, "vectorIds", Set.of(VECTOR_ID)));
+        assertTrue(lock.contains("writer_owner = ?"), lock);
+        assertTrue(lock.contains("order by q.vector_id"), lock);
+        assertTrue(lock.endsWith("for update"), lock);
+    }
+
+    @Test
+    void writer_fence_refuses_external_io_after_tombstone_ownership_is_lost() {
+        ChunkVectorCleanupMapper mapper = mock(ChunkVectorCleanupMapper.class);
+        when(mapper.lockWriters(INSTANCE_ID, Set.of(VECTOR_ID))).thenReturn(List.of());
+        DurableChunkVectorLifecycle lifecycle = new DurableChunkVectorLifecycle(
+                mapper, mock(ChunkVectorGateway.class),
+                new ImmediateTransactions(), INSTANCE_ID);
+        AtomicBoolean externalIoRan = new AtomicBoolean();
+
+        RuntimeException failure = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> lifecycle.withWriterFence(
+                        List.of(obligation()), () -> externalIoRan.set(true)));
+
+        assertFalse(externalIoRan.get());
+        assertTrue(failure.getMessage().contains("ownership was lost"));
     }
 
     @Test

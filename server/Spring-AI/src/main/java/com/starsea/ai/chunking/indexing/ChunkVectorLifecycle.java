@@ -35,6 +35,10 @@ public interface ChunkVectorLifecycle {
     default void writerFinished(Collection<CleanupObligation> obligations) {
     }
 
+    default void withWriterFence(Collection<CleanupObligation> obligations, Runnable action) {
+        action.run();
+    }
+
     void resetAbandonedClaims();
 
     void drain();
