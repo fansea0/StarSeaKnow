@@ -11,6 +11,9 @@
         <result property="knowledgeId" column="knowledge_id" jdbcType="BIGINT"/>
         <result property="fileId" column="file_id" jdbcType="BIGINT"/>
         <result property="position" column="position" jdbcType="INTEGER"/>
+        <result property="chunkType" column="chunk_type" jdbcType="SMALLINT"/>
+        <result property="parentChunkId" column="parent_chunk_id" jdbcType="BIGINT"/>
+        <result property="siblingPosition" column="sibling_position" jdbcType="INTEGER"/>
         <result property="content" column="content" jdbcType="LONGVARCHAR"/>
         <result property="overlapEnabled" column="overlap_enabled" jdbcType="BOOLEAN"/>
         <result property="overlapTokenLimit" column="overlap_token_limit" jdbcType="INTEGER"/>
@@ -34,6 +37,7 @@
         <result property="sourceFileType" column="source_file_type" jdbcType="VARCHAR"/>
         <result property="sourceKnowledgePublicId" column="source_knowledge_public_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
         <result property="sourceKnowledgeName" column="source_knowledge_name" jdbcType="VARCHAR"/>
+        <result property="parentPublicId" column="parent_public_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
     </resultMap>
 
     <update id="restoreIndexingByFile">
@@ -91,12 +95,17 @@
     </select>
 
     <select id="findByFile" resultMap="DocumentChunkResultMap">
-        SELECT *
-        FROM document_chunk
-        WHERE file_id = #{fileId}
-          AND tenant_id = #{tenantId}
-          AND knowledge_id = #{knowledgeId}
-        ORDER BY position
+        SELECT dc.*, parent.public_id AS parent_public_id
+        FROM document_chunk dc
+        LEFT JOIN document_chunk parent
+          ON parent.id = dc.parent_chunk_id
+         AND parent.tenant_id = dc.tenant_id
+         AND parent.knowledge_id = dc.knowledge_id
+         AND parent.file_id = dc.file_id
+        WHERE dc.file_id = #{fileId}
+          AND dc.tenant_id = #{tenantId}
+          AND dc.knowledge_id = #{knowledgeId}
+        ORDER BY dc.position
     </select>
 
     <select id="findByFileForUpdate" resultMap="DocumentChunkResultMap">

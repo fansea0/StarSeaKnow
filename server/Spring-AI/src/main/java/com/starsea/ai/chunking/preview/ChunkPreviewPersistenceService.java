@@ -4,7 +4,10 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkDraft;
+import com.starsea.ai.chunking.model.ChunkPlan;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
+import com.starsea.ai.chunking.model.PlannedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.model.SourceLocator;
 import com.starsea.ai.chunking.processing.FileProcessingService;
@@ -19,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +45,7 @@ public class ChunkPreviewPersistenceService {
 
     @Transactional
     public void replace(ChunkPreviewWorker.Job job, String sourceHash, String plannerVersion,
-                        Map<String, Object> policySnapshot, List<ChunkDraft> drafts) {
+                        Map<String, Object> policySnapshot, ChunkPlan plan) {
         long tenantId = requireTenantId();
         FileProcessing lockedProcessing = processingMapper.findScopedForUpdate(
                 job.fileId(), tenantId, job.knowledgeId());
@@ -73,9 +77,25 @@ public class ChunkPreviewPersistenceService {
             throw ChunkingException.conflict("The current DRAFT set changed during replacement");
         }
 
-        for (int position = 0; position < drafts.size(); position++) {
-            if (chunkMapper.insert(toEntity(tenantId, job, position, drafts.get(position))) != 1) {
+        Map<String, DocumentChunk> parentsByKey = new HashMap<>();
+        int position = 0;
+        for (PlannedChunk planned : plan.chunks()) {
+            DocumentChunk parent = null;
+            if (planned.type() == ChunkType.CHILD) {
+                parent = parentsByKey.get(planned.parentKey());
+                if (parent == null || parent.getId() == null) {
+                    throw new IllegalArgumentException("The planned child references an unknown parent");
+                }
+            }
+            DocumentChunk chunk = toEntity(tenantId, job, position++, planned, parent);
+            if (chunkMapper.insert(chunk) != 1) {
                 throw new IllegalStateException("Unable to persist the complete DRAFT set");
+            }
+            if (planned.type() == ChunkType.PARENT) {
+                if (chunk.getId() == null) {
+                    throw new IllegalStateException("The persisted parent has no database identifier");
+                }
+                parentsByKey.put(planned.key(), chunk);
             }
         }
 
@@ -97,17 +117,21 @@ public class ChunkPreviewPersistenceService {
                 PipelineState.CHUNKED, job.lockVersion());
     }
 
-    private DocumentChunk toEntity(long tenantId, ChunkPreviewWorker.Job job,
-                                   int position, ChunkDraft draft) {
+    private DocumentChunk toEntity(long tenantId, ChunkPreviewWorker.Job job, int position,
+                                   PlannedChunk planned, DocumentChunk parent) {
+        ChunkDraft draft = planned.draft();
         DocumentChunk chunk = new DocumentChunk();
         chunk.setPublicId(UUID.randomUUID());
         chunk.setTenantId(tenantId);
         chunk.setKnowledgeId(job.knowledgeId());
         chunk.setFileId(job.fileId());
         chunk.setPosition(position);
+        chunk.setChunkType(planned.type().code());
+        chunk.setParentChunkId(parent == null ? null : parent.getId());
+        chunk.setSiblingPosition(planned.siblingPosition());
         chunk.setContent(draft.content());
-        chunk.setOverlapEnabled(false);
-        chunk.setOverlapTokenLimit(40);
+        chunk.setOverlapEnabled(planned.overlapEnabled());
+        chunk.setOverlapTokenLimit(planned.overlapTokenLimit() <= 0 ? 40 : planned.overlapTokenLimit());
         chunk.setOverlapContent(null);
         chunk.setOverlapSourceChunkId(null);
         chunk.setOverlapTokenCount(0);

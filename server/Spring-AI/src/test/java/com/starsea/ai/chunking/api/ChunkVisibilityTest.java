@@ -66,6 +66,28 @@ class ChunkVisibilityTest {
     }
 
     @Test
+    void chunk_listing_serializes_parent_child_identity_without_internal_parent_ids() throws Exception {
+        ChunkPreviewService previewService = mock(ChunkPreviewService.class);
+        ChunkCommandService commandService = mock(ChunkCommandService.class);
+        UUID childId = UUID.fromString("10000000-0000-0000-0000-000000000022");
+        UUID parentId = UUID.fromString("10000000-0000-0000-0000-000000000021");
+        when(commandService.list(10L, 20L)).thenReturn(List.of(new ChunkResponse(
+                childId, 1, "Child body", List.of("Guide"), Map.of(), 2, 0,
+                false, 0, true, 32, null, 0, null, "CHILD", parentId, 0)));
+        MockMvc mockMvc = MockMvcBuilders
+                .standaloneSetup(new ChunkingController(previewService, commandService))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .build();
+
+        mockMvc.perform(get("/knowledge/{knowledgeId}/files/{fileId}/chunks", 10L, 20L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].chunkType").value("CHILD"))
+                .andExpect(jsonPath("$[0].parentPublicId").value(parentId.toString()))
+                .andExpect(jsonPath("$[0].siblingPosition").value(0))
+                .andExpect(jsonPath("$[0].parentChunkId").doesNotExist());
+    }
+
+    @Test
     void patch_and_delete_routes_forward_the_stable_public_id_and_lock_version() throws Exception {
         ChunkPreviewService previewService = mock(ChunkPreviewService.class);
         ChunkCommandService commandService = mock(ChunkCommandService.class);

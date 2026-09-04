@@ -9,6 +9,8 @@ import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPlan;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
+import com.starsea.ai.chunking.model.PlannedChunk;
 import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.PipelineState;
@@ -151,7 +153,7 @@ class ChunkPreviewWorkerTest {
                         "targetTokens", 400,
                         "maxTokens", 512,
                         "tokenizer", "BAAI/bge-base-zh-v1.5@test-sha")),
-                eq(List.of(draft("Body", 4))));
+                eq(ChunkPlan.flat(List.of(draft("Body", 4)), 512)));
     }
 
     @Test
@@ -173,6 +175,22 @@ class ChunkPreviewWorkerTest {
         verify(persistence, never()).replace(any(), any(), any(), any(), any());
         verify(processingService).fail(eq(10L), eq(20L), eq(PipelineState.CHUNKING),
                 eq(1), eq(0), org.mockito.ArgumentMatchers.contains("token budget"));
+    }
+
+    @Test
+    void rejects_a_child_that_does_not_reference_an_earlier_parent() {
+        ParsedStructure structure = new ParsedStructure(
+                new FileResource(1L, 10L, 20L, null, "source.md", "md", source), List.of());
+        when(parser.parse(any(FileResource.class))).thenReturn(structure);
+        when(planner.planConfigured(eq(structure), any())).thenReturn(new ChunkPlan(List.of(
+                new PlannedChunk("child", "missing-parent", ChunkType.CHILD, 0,
+                        draft("Child", 2), true, 32)), 512));
+
+        worker.generate(job());
+
+        verify(persistence, never()).replace(any(), any(), any(), any(), any());
+        verify(processingService).fail(eq(10L), eq(20L), eq(PipelineState.CHUNKING),
+                eq(1), eq(0), org.mockito.ArgumentMatchers.contains("parent-child relationship"));
     }
 
     @Test
@@ -256,7 +274,8 @@ class ChunkPreviewWorkerTest {
                 chunkMapper, processingMapper, realProcessingService);
 
         service.replace(job(), "source-hash", "planner-v1",
-                Map.of("tokenizer", "exact-tokenizer"), List.of(draft("First", 2), draft("Second", 3)));
+                Map.of("tokenizer", "exact-tokenizer"),
+                ChunkPlan.flat(List.of(draft("First", 2), draft("Second", 3)), 512));
 
         var captor = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
         verify(chunkMapper, org.mockito.Mockito.times(2)).insert(captor.capture());
@@ -282,6 +301,40 @@ class ChunkPreviewWorkerTest {
     }
 
     @Test
+    void planned_parent_and_children_keep_hierarchy_when_persisted() {
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        when(processingMapper.findScopedForUpdate(20L, 1L, 10L)).thenReturn(processing());
+        when(chunkMapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(List.of());
+        when(processingMapper.update(any(FileProcessing.class), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        when(chunkMapper.insert(any(DocumentChunk.class))).thenAnswer(invocation -> {
+            DocumentChunk chunk = invocation.getArgument(0);
+            chunk.setId((long) (100 + invocation.getMock().hashCode()));
+            return 1;
+        });
+        ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
+                chunkMapper, processingMapper, stateService);
+
+        ChunkPlan plan = new ChunkPlan(List.of(
+                new PlannedChunk("parent", null, ChunkType.PARENT, 0, draft("Parent", 6), false, 40),
+                new PlannedChunk("child-0", "parent", ChunkType.CHILD, 0, draft("Child zero", 3), true, 32),
+                new PlannedChunk("child-1", "parent", ChunkType.CHILD, 1, draft("Child one", 3), true, 32)), 512);
+
+        service.replace(job(), "source-hash", "planner-v1", Map.of("tokenizer", "exact"), plan);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
+        verify(chunkMapper, times(3)).insert(captor.capture());
+        List<DocumentChunk> saved = captor.getAllValues();
+        assertEquals(List.of(0, 1, 2), saved.stream().map(DocumentChunk::getPosition).toList());
+        assertEquals(List.of(0, 0, 1), saved.stream().map(DocumentChunk::getSiblingPosition).toList());
+        assertEquals(List.of(ChunkType.PARENT.code(), ChunkType.CHILD.code(), ChunkType.CHILD.code()),
+                saved.stream().map(DocumentChunk::getChunkType).toList());
+        assertNull(saved.get(0).getParentChunkId());
+        assertEquals(saved.get(0).getId(), saved.get(1).getParentChunkId());
+        assertEquals(saved.get(0).getId(), saved.get(2).getParentChunkId());
+    }
+
+    @Test
     void conditional_delete_count_mismatch_rejects_a_concurrent_status_or_edit_race() {
         DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
         FileProcessingService stateService = mock(FileProcessingService.class);
@@ -295,7 +348,7 @@ class ChunkPreviewWorkerTest {
         assertThrows(ChunkingException.class, () -> service.replace(
                 job(List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(oldDraft))),
                 "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
-                List.of(draft("Replacement", 3))));
+                ChunkPlan.flat(List.of(draft("Replacement", 3)), 512)));
 
         verify(chunkMapper, never()).insert(any(DocumentChunk.class));
         verify(processingMapper, never()).update(any(FileProcessing.class), any(LambdaUpdateWrapper.class));
@@ -333,7 +386,7 @@ class ChunkPreviewWorkerTest {
         assertThrows(IllegalStateException.class, () -> proxy.replace(
                 job(List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(database.get(0)))),
                 "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
-                List.of(draft("Replacement", 3))));
+                ChunkPlan.flat(List.of(draft("Replacement", 3)), 512)));
 
         assertEquals(1, transactionManager.rollbacks());
         assertEquals(1, database.size());
@@ -341,6 +394,52 @@ class ChunkPreviewWorkerTest {
         assertEquals("Old draft", database.get(0).getContent());
         verify(chunkMapper).deleteReplaceableDrafts(20L, 1L, 10L, false);
         verify(chunkMapper, times(1)).insert(any(DocumentChunk.class));
+        verify(processingMapper, never()).update(any(FileProcessing.class), any(LambdaUpdateWrapper.class));
+        verify(stateService, never()).transition(anyLong(), anyLong(), any(), any(), anyInt());
+    }
+
+    @Test
+    void transaction_rolls_back_parent_and_first_child_when_second_child_insert_fails() {
+        List<DocumentChunk> database = new java.util.ArrayList<>();
+        database.add(persistedChunk(99L, ChunkStatus.DRAFT, false, "Old draft"));
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        when(processingMapper.findScopedForUpdate(20L, 1L, 10L)).thenReturn(processing());
+        when(chunkMapper.findByFileForUpdate(20L, 1L, 10L))
+                .thenAnswer(invocation -> List.copyOf(database));
+        when(chunkMapper.deleteReplaceableDrafts(20L, 1L, 10L, false)).thenAnswer(invocation -> {
+            int before = database.size();
+            database.removeIf(chunk -> chunk.getStatus() == ChunkStatus.DRAFT.code());
+            return before - database.size();
+        });
+        java.util.concurrent.atomic.AtomicInteger inserts = new java.util.concurrent.atomic.AtomicInteger();
+        when(chunkMapper.insert(any(DocumentChunk.class))).thenAnswer(invocation -> {
+            DocumentChunk inserted = invocation.getArgument(0);
+            int attempt = inserts.incrementAndGet();
+            inserted.setId(100L + attempt);
+            database.add(inserted);
+            if (attempt == 3) {
+                throw new IllegalStateException("second child insert failed");
+            }
+            return 1;
+        });
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkPreviewPersistenceService target = new ChunkPreviewPersistenceService(
+                chunkMapper, processingMapper, stateService);
+        StateTransactionManager transactionManager = new StateTransactionManager(database);
+        ChunkPreviewPersistenceService proxy = transactionalProxy(target, transactionManager);
+        ChunkPlan plan = new ChunkPlan(List.of(
+                new PlannedChunk("parent", null, ChunkType.PARENT, 0, draft("Parent", 6), false, 40),
+                new PlannedChunk("child-0", "parent", ChunkType.CHILD, 0, draft("Child zero", 3), true, 32),
+                new PlannedChunk("child-1", "parent", ChunkType.CHILD, 1, draft("Child one", 3), true, 32)), 512);
+
+        assertThrows(IllegalStateException.class, () -> proxy.replace(
+                job(List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(database.get(0)))),
+                "source-hash", "planner-v1", Map.of("tokenizer", "exact"), plan));
+
+        assertEquals(1, transactionManager.rollbacks());
+        assertEquals(1, database.size());
+        assertEquals(99L, database.get(0).getId());
+        verify(chunkMapper, times(3)).insert(any(DocumentChunk.class));
         verify(processingMapper, never()).update(any(FileProcessing.class), any(LambdaUpdateWrapper.class));
         verify(stateService, never()).transition(anyLong(), anyLong(), any(), any(), anyInt());
     }
@@ -386,7 +485,7 @@ class ChunkPreviewWorkerTest {
         assertThrows(ChunkingException.class, () -> service.replace(
                 job(true, List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(confirmed))),
                 "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
-                List.of(draft("Replacement", 3))));
+                ChunkPlan.flat(List.of(draft("Replacement", 3)), 512)));
 
         assertNoReplacementWrites(chunkMapper, stateService);
     }
@@ -403,7 +502,7 @@ class ChunkPreviewWorkerTest {
         assertThrows(ChunkingException.class, () -> service.replace(
                 job(List.of(ChunkPreviewWorker.ExistingChunkSnapshot.from(confirmed))),
                 "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
-                List.of(draft("Replacement", 3))));
+                ChunkPlan.flat(List.of(draft("Replacement", 3)), 512)));
 
         assertNoReplacementWrites(chunkMapper, stateService);
     }
@@ -418,7 +517,7 @@ class ChunkPreviewWorkerTest {
 
         assertThrows(ChunkingException.class, () -> service.replace(
                 job(List.of()), "source-hash", "planner-v1", Map.of("tokenizer", "exact"),
-                List.of(draft("Replacement", 3))));
+                ChunkPlan.flat(List.of(draft("Replacement", 3)), 512)));
 
         assertNoReplacementWrites(chunkMapper, stateService);
     }

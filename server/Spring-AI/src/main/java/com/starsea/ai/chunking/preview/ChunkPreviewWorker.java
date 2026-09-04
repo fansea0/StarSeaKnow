@@ -90,9 +90,9 @@ public class ChunkPreviewWorker {
                     snapshotPath);
             ParsedStructure structure = parser.parse(resource);
             ChunkPlan plan = planner.planConfigured(structure, job.strategyConfig());
-            List<ChunkDraft> drafts = validateDrafts(plan);
+            ChunkPlan normalizedPlan = validateDrafts(plan);
             persistence.replace(job, sourceHash, planner.plannerVersion(),
-                    policySnapshot(job.strategyConfig()), drafts);
+                    policySnapshot(job.strategyConfig()), normalizedPlan);
         } catch (Exception exception) {
             markFailed(job, exception);
         } finally {
@@ -147,12 +147,13 @@ public class ChunkPreviewWorker {
         return new ScopedSource(processing, file, Path.of(file.getPath()));
     }
 
-    private List<ChunkDraft> validateDrafts(ChunkPlan plan) {
+    private ChunkPlan validateDrafts(ChunkPlan plan) {
         if (plan == null || plan.chunks().isEmpty()) {
             throw new IllegalArgumentException("The source document produced no chunks");
         }
         boolean hasVectorizableChunk = false;
-        List<ChunkDraft> normalized = new java.util.ArrayList<>(plan.chunks().size());
+        List<PlannedChunk> normalized = new java.util.ArrayList<>(plan.chunks().size());
+        Map<String, PlannedChunk> preceding = new LinkedHashMap<>();
         for (PlannedChunk planned : plan.chunks()) {
             ChunkDraft draft = planned.draft();
             if (draft == null || draft.content() == null || draft.content().isBlank()) {
@@ -169,14 +170,25 @@ public class ChunkPreviewWorker {
                 throw new IllegalArgumentException(
                         "The planner produced a chunk that exceeds the token budget");
             }
+            if (planned.type() == ChunkType.CHILD) {
+                PlannedChunk parent = preceding.get(planned.parentKey());
+                if (parent == null || parent.type() != ChunkType.PARENT) {
+                    throw new IllegalArgumentException("The planner produced an invalid parent-child relationship");
+                }
+            }
             hasVectorizableChunk |= planned.type() == ChunkType.SINGLE || planned.type() == ChunkType.CHILD;
-            normalized.add(new ChunkDraft(draft.sectionPath(), draft.content(),
-                    draft.sourceLocator(), bodyTokens, draft.boundaryReason()));
+            ChunkDraft normalizedDraft = new ChunkDraft(draft.sectionPath(), draft.content(),
+                    draft.sourceLocator(), bodyTokens, draft.boundaryReason());
+            PlannedChunk normalizedChunk = new PlannedChunk(planned.key(), planned.parentKey(), planned.type(),
+                    planned.siblingPosition(), normalizedDraft, planned.overlapEnabled(),
+                    planned.overlapTokenLimit());
+            normalized.add(normalizedChunk);
+            preceding.put(normalizedChunk.key(), normalizedChunk);
         }
         if (!hasVectorizableChunk) {
             throw new IllegalArgumentException("The source document produced no vectorizable chunks");
         }
-        return List.copyOf(normalized);
+        return new ChunkPlan(normalized, plan.indexMaxTokens());
     }
 
     private Map<String, Object> policySnapshot(Map<String, Object> strategyConfig) {

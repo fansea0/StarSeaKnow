@@ -10,6 +10,7 @@ import com.starsea.ai.chunking.context.DefaultChunkContextEnricher;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
@@ -563,7 +564,18 @@ public class ChunkCommandService {
                 value(chunk.getStatus()), Boolean.TRUE.equals(chunk.getIsModified()),
                 value(chunk.getLockVersion()), Boolean.TRUE.equals(chunk.getOverlapEnabled()),
                 overlapTokenLimit(chunk), chunk.getOverlapContent(),
-                value(chunk.getOverlapTokenCount()), overlapUnavailableReason(chunk));
+                value(chunk.getOverlapTokenCount()), overlapUnavailableReason(chunk),
+                chunkType(chunk).name(), chunk.getParentPublicId(), siblingPosition(chunk));
+    }
+
+    private ChunkType chunkType(DocumentChunk chunk) {
+        Integer code = chunk.getChunkType();
+        return code == null ? ChunkType.SINGLE : ChunkType.fromCode(code);
+    }
+
+    private int siblingPosition(DocumentChunk chunk) {
+        Integer siblingPosition = chunk.getSiblingPosition();
+        return siblingPosition == null ? value(chunk.getPosition()) : siblingPosition;
     }
 
     private int overlapTokenLimit(DocumentChunk chunk) {

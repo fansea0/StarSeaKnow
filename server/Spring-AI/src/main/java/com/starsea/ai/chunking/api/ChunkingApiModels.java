@@ -43,17 +43,31 @@ public final class ChunkingApiModels {
                                 int tokenCount, int status, boolean isModified, int lockVersion,
                                 boolean overlapEnabled, int overlapTokenLimit,
                                 String overlapContent, int overlapTokenCount,
-                                String overlapUnavailableReason) {
+                                String overlapUnavailableReason, String chunkType,
+                                UUID parentPublicId, int siblingPosition) {
+        public ChunkResponse(UUID publicId, int position, String content,
+                             List<String> sectionPath, Map<String, Object> sourceLocator,
+                             int tokenCount, int status, boolean isModified, int lockVersion,
+                             boolean overlapEnabled, int overlapTokenLimit,
+                             String overlapContent, int overlapTokenCount,
+                             String overlapUnavailableReason) {
+            this(publicId, position, content, sectionPath, sourceLocator, tokenCount, status,
+                    isModified, lockVersion, overlapEnabled, overlapTokenLimit, overlapContent,
+                    overlapTokenCount, overlapUnavailableReason, "SINGLE", null, position);
+        }
+
         public ChunkResponse(UUID publicId, int position, String content,
                              List<String> sectionPath, Map<String, Object> sourceLocator,
                              int tokenCount, int status, boolean isModified, int lockVersion) {
             this(publicId, position, content, sectionPath, sourceLocator, tokenCount,
-                    status, isModified, lockVersion, false, 40, null, 0, null);
+                    status, isModified, lockVersion, false, 40, null, 0, null,
+                    "SINGLE", null, position);
         }
 
         public ChunkResponse {
             sectionPath = sectionPath == null ? List.of() : List.copyOf(sectionPath);
             sourceLocator = sourceLocator == null ? Map.of() : Map.copyOf(sourceLocator);
+            chunkType = chunkType == null ? "SINGLE" : chunkType;
         }
     }
 
