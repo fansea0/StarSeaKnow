@@ -390,8 +390,6 @@ public class ManagedExtractionCache {
                 }
             }
             if (failure != null) {
-                log.error("Unable to finalize extraction cache deletion for tenant {} file {}",
-                        tenantId, fileId, failure);
                 throw failure;
             }
             completed = true;

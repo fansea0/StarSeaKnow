@@ -90,7 +90,7 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
         requireSourceLimit(path);
         long deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
         ExtractionBudget budget = new ExtractionBudget();
-        if (isOoxml(capability.detectedMediaType())) {
+        if (isSupportedZipContainer(capability.detectedMediaType())) {
             validateArchiveExpansion(path, deadline, budget);
         }
         Metadata metadata = new Metadata();
@@ -177,9 +177,10 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
         }
     }
 
-    private boolean isOoxml(String mediaType) {
-        return mediaType != null && mediaType.startsWith(
-                "application/vnd.openxmlformats-officedocument.");
+    private boolean isSupportedZipContainer(String mediaType) {
+        return "application/epub+zip".equals(mediaType)
+                || mediaType != null && mediaType.startsWith(
+                        "application/vnd.openxmlformats-officedocument.");
     }
 
     private void validateArchiveExpansion(Path path, long deadline, ExtractionBudget budget) {
@@ -208,6 +209,9 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
             }
         } catch (ExtractionException exception) {
             throw exception;
+        } catch (DecompressionLimitException exception) {
+            throw new ExtractionException(FailureReason.LIMIT_EXCEEDED,
+                    "Expanded document data exceeds the extraction limit", exception);
         } catch (IOException exception) {
             throw new ExtractionException(FailureReason.CORRUPT,
                     "The document archive is damaged or cannot be parsed", exception);

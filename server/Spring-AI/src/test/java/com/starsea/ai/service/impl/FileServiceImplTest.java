@@ -3,6 +3,8 @@ package com.starsea.ai.service.impl;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.extraction.ManagedExtractionCache;
+import com.starsea.ai.controller.FileController;
+import com.starsea.ai.domain.dto.AjaxResult;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.domain.Knowledge;
 import com.starsea.ai.domain.KnowledgeFile;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionSystemException;
@@ -43,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -330,6 +334,31 @@ class FileServiceImplTest {
         assertFalse(Files.exists(quarantinedCache));
         verify(quarantine).restore();
         verify(quarantine, never()).commit();
+    }
+
+    @Test
+    void post_commit_cache_cleanup_failure_still_removes_source_and_vectors() throws Exception {
+        Path source = uploadDirectory.resolve("1/10/source.txt");
+        Files.createDirectories(source.getParent());
+        Files.writeString(source, "source");
+        com.starsea.ai.domain.File row = new com.starsea.ai.domain.File();
+        row.setId(20L);
+        row.setPath(source.toString());
+        when(fileMapper.selectById(20L)).thenReturn(row);
+        when(fileMapper.deleteById(20L)).thenReturn(1);
+        ManagedExtractionCache.ManagedFileQuarantine quarantine =
+                mock(ManagedExtractionCache.ManagedFileQuarantine.class);
+        when(extractionCache.quarantineManagedFiles(1L, 20L)).thenReturn(quarantine);
+        doThrow(new IllegalStateException("cache cleanup failed")).when(quarantine).commit();
+        VectorStore vectorStore = mock(VectorStore.class);
+        FileController controller = new FileController(service, vectorStore);
+
+        AjaxResult result = controller.deleteFile(20L);
+
+        assertTrue(result.isSuccess());
+        assertFalse(Files.exists(source));
+        verify(quarantine).commit();
+        verify(vectorStore).delete("(fileId == 20) && tenantId == 1");
     }
 
     @Test

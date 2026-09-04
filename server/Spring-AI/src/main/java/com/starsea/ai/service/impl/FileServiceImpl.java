@@ -154,8 +154,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
             restoreCache(cacheQuarantine, databaseFailure);
             throw databaseFailure;
         }
-        cacheQuarantine.commit();
-        deleteQuarantinedSource(sourceQuarantine);
+        finalizeCommittedDeletion(cacheQuarantine, sourceQuarantine, tenantId, fileId);
         return true;
     }
 
@@ -184,11 +183,23 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
         }
     }
 
-    private void deleteQuarantinedSource(Path quarantine) {
+    private void finalizeCommittedDeletion(
+            ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine,
+            Path sourceQuarantine, long tenantId, long fileId) {
+        int failureCount = 0;
         try {
-            Files.delete(quarantine);
-        } catch (IOException exception) {
-            throw new IllegalStateException("隔离源文件删除失败", exception);
+            cacheQuarantine.commit();
+        } catch (RuntimeException cleanupFailure) {
+            failureCount++;
+        }
+        try {
+            Files.deleteIfExists(sourceQuarantine);
+        } catch (IOException | RuntimeException cleanupFailure) {
+            failureCount++;
+        }
+        if (failureCount > 0) {
+            log.warn("Post-commit file cleanup incomplete for tenant {} file {}; failures={}",
+                    tenantId, fileId, failureCount);
         }
     }
 

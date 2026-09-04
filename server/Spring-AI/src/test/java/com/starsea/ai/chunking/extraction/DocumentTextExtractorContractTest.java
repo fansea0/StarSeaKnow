@@ -171,6 +171,22 @@ class DocumentTextExtractorContractTest {
                         () -> limited.extract(archive, capability)).reason());
     }
 
+    @Test
+    void epub_main_pages_share_the_total_archive_expansion_limit() {
+        Path epub = tempDir.resolve("high-compression.epub");
+        writeEpubPages(epub, List.of(
+                "a".repeat(40_000), "b".repeat(40_000), "c".repeat(40_000)));
+        TikaDocumentTextExtractor limited = new TikaDocumentTextExtractor(
+                100_000, 500_000, 5_000, 4, 50_000);
+        ExtractionCapability capability = limited.probe(epub, "application/epub+zip");
+
+        assertTrue(capability.available(), capability.toString());
+        assertEquals("application/epub+zip", capability.detectedMediaType());
+        assertEquals(DocumentTextExtractor.FailureReason.LIMIT_EXCEEDED,
+                assertThrows(DocumentTextExtractor.ExtractionException.class,
+                        () -> limited.extract(epub, capability)).reason());
+    }
+
     @ParameterizedTest(name = "encrypted {0} reports ENCRYPTED")
     @MethodSource("encryptedOfficeFormats")
     void password_protected_ooxml_is_routed_to_tika_and_reports_encrypted(
