@@ -101,6 +101,19 @@ class DocumentTextExtractorContractTest {
     }
 
     @Test
+    void rejects_short_legacy_bytes_when_detector_confidence_cannot_disambiguate_them() throws Exception {
+        Path source = tempDir.resolve("ambiguous-legacy.txt");
+        Files.write(source, new byte[]{(byte) 0xe9, (byte) 0xe9, (byte) 0xe9, (byte) 0xe9});
+        PlainTextExtractor extractor = new PlainTextExtractor(10_000, 10_000);
+
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> extractor.extract(source, extractor.probe(source, "text/plain")));
+
+        assertEquals(DocumentTextExtractor.FailureReason.UNRELIABLE_ENCODING, failure.reason());
+    }
+
+    @Test
     void rejects_binary_content_even_when_it_starts_with_a_valid_text_bom() throws Exception {
         Path source = tempDir.resolve("bom-binary.txt");
         Files.write(source, new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF, 0, 1, 2});
@@ -117,6 +130,19 @@ class DocumentTextExtractorContractTest {
     void all_whitespace_plain_text_is_explicitly_a_no_text_failure() throws Exception {
         Path source = tempDir.resolve("whitespace.txt");
         Files.writeString(source, " \t\r\n  ");
+        PlainTextExtractor extractor = new PlainTextExtractor(10_000, 10_000);
+
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> extractor.extract(source, extractor.probe(source, "text/plain")));
+
+        assertEquals(DocumentTextExtractor.FailureReason.NO_TEXT, failure.reason());
+    }
+
+    @Test
+    void unicode_space_separators_are_explicitly_a_no_text_failure() throws Exception {
+        Path source = tempDir.resolve("unicode-whitespace.txt");
+        Files.writeString(source, "\u00a0\u2007\u202f");
         PlainTextExtractor extractor = new PlainTextExtractor(10_000, 10_000);
 
         DocumentTextExtractor.ExtractionException failure = assertThrows(
@@ -189,6 +215,46 @@ class DocumentTextExtractorContractTest {
         assertEquals(DocumentTextExtractor.FailureReason.OUTPUT_TOO_LARGE,
                 assertThrows(DocumentTextExtractor.ExtractionException.class,
                         () -> outputLimited.extract(html, htmlCapability)).reason());
+    }
+
+    @Test
+    void plain_text_growth_after_stat_reads_at_most_the_limit_plus_one_byte() throws Exception {
+        Path source = tempDir.resolve("growing.txt");
+        Files.writeString(source, "stub");
+        byte[] grown = "01234567890".getBytes(StandardCharsets.US_ASCII);
+        AtomicInteger bytesRead = new AtomicInteger();
+        PlainTextExtractor extractor = new PlainTextExtractor(10, 100) {
+            @Override protected long sourceSize(Path ignored) { return 4; }
+            @Override protected java.io.InputStream openSource(Path ignored) {
+                return new java.io.ByteArrayInputStream(grown) {
+                    @Override public synchronized int read(byte[] target, int offset, int length) {
+                        int read = super.read(target, offset, length);
+                        if (read > 0) bytesRead.addAndGet(read);
+                        return read;
+                    }
+                };
+            }
+        };
+
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> extractor.extract(source, extractor.probe(source, "text/plain")));
+
+        assertEquals(DocumentTextExtractor.FailureReason.SOURCE_TOO_LARGE, failure.reason());
+        assertEquals(11, bytesRead.get());
+    }
+
+    @Test
+    void plain_text_enforces_the_code_point_limit_for_a_multibyte_candidate() throws Exception {
+        Path source = tempDir.resolve("near-output-limit.txt");
+        Files.writeString(source, "😀".repeat(5));
+        PlainTextExtractor extractor = new PlainTextExtractor(100, 4);
+
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> extractor.extract(source, extractor.probe(source, "text/plain")));
+
+        assertEquals(DocumentTextExtractor.FailureReason.OUTPUT_TOO_LARGE, failure.reason());
     }
 
     @Test
@@ -361,6 +427,21 @@ class DocumentTextExtractorContractTest {
     }
 
     @Test
+    void pdf_shutdown_releases_the_bounded_executor_and_rejects_later_work() {
+        Path source = tempDir.resolve("shutdown.pdf");
+        writePdf(source, "shutdown");
+        PdfTextExtractor extractor = new PdfTextExtractor(100_000, 10_000, 5_000, 100_000);
+        ExtractionCapability capability = extractor.probe(source, "application/pdf");
+
+        extractor.shutdown();
+
+        assertTrue(extractor.executorIsShutdown());
+        assertEquals(DocumentTextExtractor.FailureReason.TIMEOUT,
+                assertThrows(DocumentTextExtractor.ExtractionException.class,
+                        () -> extractor.extract(source, capability)).reason());
+    }
+
+    @Test
     void tika_rejects_nested_content_instead_of_returning_partial_text_at_depth_limit() {
         Path source = tempDir.resolve("nested.zip");
         writeZipBytes(source, Map.of("nested.zip", zipBytes(Map.of(
@@ -424,7 +505,13 @@ class DocumentTextExtractorContractTest {
                 Arguments.of("GB18030", java.nio.charset.Charset.forName("GBK"),
                         "GBK 中文兼容测试"),
                 Arguments.of("windows-1252", java.nio.charset.Charset.forName("windows-1252"),
-                        "Windows résumé — café €"));
+                        "Windows résumé — café €"),
+                Arguments.of("windows-1252", java.nio.charset.Charset.forName("windows-1252"),
+                        "éclair"),
+                Arguments.of("windows-1252", java.nio.charset.Charset.forName("windows-1252"),
+                        "éé"),
+                Arguments.of("windows-1252", java.nio.charset.Charset.forName("windows-1252"),
+                        "“smart quotes”"));
     }
 
     private static ExtractionCapability directTikaCapability(

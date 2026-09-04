@@ -53,7 +53,7 @@ public final class GeneralBoundaryScanner {
             int codePoint = codePoints[index];
             if (codePoint == '\n') line = index + 1;
             if (isSentenceEnd(codePoint)) sentence = index + 1;
-            if (Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint)) {
+            if (UnicodeText.isWhitespace(codePoint)) {
                 whitespace = index + 1;
             }
         }

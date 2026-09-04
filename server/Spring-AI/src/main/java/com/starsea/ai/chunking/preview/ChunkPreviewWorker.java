@@ -2,6 +2,7 @@ package com.starsea.ai.chunking.preview;
 
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
+import com.starsea.ai.chunking.general.UnicodeText;
 import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkInputResult;
@@ -263,7 +264,7 @@ public class ChunkPreviewWorker {
         }
         List<ChunkDraft> normalized = new java.util.ArrayList<>(drafts.size());
         for (ChunkDraft draft : drafts) {
-            if (draft == null || draft.content() == null || draft.content().isBlank()) {
+            if (draft == null || draft.content() == null || UnicodeText.isBlank(draft.content())) {
                 throw new IllegalArgumentException("The planner produced an invalid chunk");
             }
             int bodyTokens = tokenCounter.count(draft.content());

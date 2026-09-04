@@ -166,6 +166,63 @@ class GeneralChunkPlanningStrategyTest {
     }
 
     @Test
+    void seeds_a_leading_sixty_space_fragment_from_the_following_text_within_the_budget() {
+        List<StructuredBlock> blocks = List.of(
+                mappedBlock("spaces", " ".repeat(60), 0, 60, true),
+                mappedBlock("letters", "x".repeat(10), 63, 73, false));
+
+        List<ChunkDraft> drafts = planMapped(blocks, 64);
+
+        assertEquals(List.of(" ".repeat(60) + "\n" + "x".repeat(3), "x".repeat(7)),
+                drafts.stream().map(ChunkDraft::content).toList());
+        assertTrue(drafts.stream().noneMatch(draft -> UnicodeText.isBlank(draft.content())));
+        assertEquals(List.of("spaces", "letters"), drafts.get(0).sourceLocator().blockIds());
+        assertEquals(0, drafts.get(0).sourceLocator().startOffset());
+        assertEquals(66, drafts.get(0).sourceLocator().endOffset());
+        assertEquals(66, drafts.get(1).sourceLocator().startOffset());
+        assertEquals(73, drafts.get(1).sourceLocator().endOffset());
+    }
+
+    @Test
+    void rebalances_mapped_fragments_at_the_original_offset_without_leaking_regions() {
+        List<StructuredBlock> blocks = List.of(
+                mappedBlock("a", "a".repeat(20), 0, 20, true),
+                mappedBlock("b", "b".repeat(43), 23, 66, true),
+                mappedBlock("spaces", " ".repeat(3), 69, 72, false));
+
+        List<ChunkDraft> drafts = planMapped(blocks, 64);
+
+        assertEquals(List.of("a".repeat(20) + "\n" + "b".repeat(42), "b\n   "),
+                drafts.stream().map(ChunkDraft::content).toList());
+        assertEquals(65, drafts.get(0).sourceLocator().endOffset());
+        assertEquals(65, drafts.get(1).sourceLocator().startOffset());
+        assertEquals(72, drafts.get(1).sourceLocator().endOffset());
+        assertEquals(List.of("a", "b"), drafts.get(0).sourceLocator().blockIds());
+        assertEquals(List.of("b", "spaces"), drafts.get(1).sourceLocator().blockIds());
+        assertEquals(List.of(Map.of("fragment", "a"), Map.of("fragment", "b")),
+                drafts.get(0).sourceLocator().regions());
+        assertEquals(List.of(Map.of("fragment", "b"), Map.of("fragment", "spaces")),
+                drafts.get(1).sourceLocator().regions());
+    }
+
+    @Test
+    void repairs_consecutive_long_whitespace_fragments_when_two_adjacent_seeds_make_it_feasible() {
+        List<StructuredBlock> blocks = List.of(
+                mappedBlock("left", "a".repeat(64), 0, 64, true),
+                mappedBlock("white-1", " ".repeat(30), 67, 97, true),
+                mappedBlock("white-2", "\u00a0".repeat(30), 100, 130, true),
+                mappedBlock("right", "b".repeat(64), 133, 197, false));
+
+        List<ChunkDraft> drafts = planMapped(blocks, 64);
+
+        assertEquals("a".repeat(64) + "\n" + " ".repeat(30) + "\n"
+                        + "\u00a0".repeat(30) + "\n" + "b".repeat(64),
+                drafts.stream().map(ChunkDraft::content).reduce("", String::concat));
+        assertTrue(drafts.stream().noneMatch(draft -> UnicodeText.isBlank(draft.content())));
+        assertTrue(drafts.stream().allMatch(draft -> UnicodeText.length(draft.content()) <= 64));
+    }
+
+    @Test
     void indexed_planning_work_grows_linearly_for_ten_times_more_input() {
         AtomicInteger smallCalls = new AtomicInteger();
         AtomicInteger largeCalls = new AtomicInteger();
@@ -205,6 +262,24 @@ class GeneralChunkPlanningStrategyTest {
                 new SourceLocator("TEXT", List.of("g" + index), 0, text.length(), null, null,
                         null, null, List.of()),
                 Map.of("boundaryAfter", hasDelimiterAfter ? "USER_DELIMITER" : "DOCUMENT_END"));
+    }
+
+    private StructuredBlock mappedBlock(String id, String text, int sourceStart, int sourceEnd,
+                                         boolean hasDelimiterAfter) {
+        SourceLocator locator = new SourceLocator("TEXT", List.of(id), sourceStart, sourceEnd,
+                null, null, null, null, List.of(Map.of("fragment", id)));
+        return new StructuredBlock(id, BlockType.PARAGRAPH, text, text, null, List.of(),
+                UnicodeText.length(text), locator,
+                Map.of("boundaryAfter", hasDelimiterAfter ? "USER_DELIMITER" : "DOCUMENT_END",
+                        CleanedSegment.OFFSET_MAP_ATTRIBUTE,
+                        CleanedOffsetMap.identity(text, sourceStart)));
+    }
+
+    private List<ChunkDraft> planMapped(List<StructuredBlock> blocks, int maxCharacters) {
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL,
+                maxCharacters, false, false, false);
+        return new GeneralChunkPlanningStrategy(codePointCounter()).plan(new ChunkPlanningRequest(
+                new ParsedStructure(null, blocks), config, disabledContext(), 512)).drafts();
     }
 
     private ContextConfig disabledContext() {

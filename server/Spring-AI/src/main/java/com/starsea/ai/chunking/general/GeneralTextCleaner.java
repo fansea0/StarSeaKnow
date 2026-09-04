@@ -35,7 +35,8 @@ public final class GeneralTextCleaner {
             if (config.removeUrls()) text = replace(text, URL, true, stats);
             if (config.removeEmails()) text = replace(text, EMAIL, false, stats);
             if (config.collapseWhitespace()) text = collapseWhitespace(text, stats);
-            if (text.value().isEmpty() || config.collapseWhitespace() && text.value().isBlank()) {
+            if (text.value().isEmpty()
+                    || config.collapseWhitespace() && UnicodeText.isBlank(text.value())) {
                 stats.empty++;
                 continue;
             }
@@ -100,7 +101,7 @@ public final class GeneralTextCleaner {
         while (cursor < input.value().length()) {
             int codePoint = input.value().codePointAt(cursor);
             int width = Character.charCount(codePoint);
-            if (!isWhitespace(codePoint)) {
+            if (!UnicodeText.isWhitespace(codePoint)) {
                 output.copy(input, cursor, cursor + width);
                 cursor += width;
                 continue;
@@ -111,7 +112,7 @@ public final class GeneralTextCleaner {
             List<Integer> lineFeedOffsets = new ArrayList<>(2);
             while (cursor < input.value().length()) {
                 int current = input.value().codePointAt(cursor);
-                if (!isWhitespace(current)) break;
+                if (!UnicodeText.isWhitespace(current)) break;
                 if (current == '\n' && lineFeedOffsets.size() < 2) lineFeedOffsets.add(cursor);
                 runCodePoints++;
                 cursor += Character.charCount(current);
@@ -131,10 +132,6 @@ public final class GeneralTextCleaner {
             stats.whitespaceRemoved += runCodePoints - emitted;
         }
         return output.freeze();
-    }
-
-    private boolean isWhitespace(int codePoint) {
-        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
     private SourceLocator locatorFromMapping(SourceLocator source, MappedText text) {

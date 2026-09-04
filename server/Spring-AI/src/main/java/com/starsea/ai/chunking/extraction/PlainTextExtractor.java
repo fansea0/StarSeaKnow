@@ -1,12 +1,20 @@
 package com.starsea.ai.chunking.extraction;
 
+import com.starsea.ai.chunking.general.UnicodeText;
+import org.apache.tika.parser.txt.CharsetDetector;
+import org.apache.tika.parser.txt.CharsetMatch;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
+import java.nio.CharBuffer;
 import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
+import java.nio.charset.CoderResult;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,28 +36,31 @@ public class PlainTextExtractor implements DocumentTextExtractor {
     public PlainTextExtractor(
             @Value("${chunking.extraction.max-source-bytes:52428800}") long maxSourceBytes,
             @Value("${chunking.extraction.max-output-characters:10000000}") int maxOutputCharacters) {
+        if (maxSourceBytes < 1 || maxSourceBytes > Integer.MAX_VALUE - 8L) {
+            throw new IllegalArgumentException("maxSourceBytes is outside the supported byte-array range");
+        }
+        if (maxOutputCharacters < 1) {
+            throw new IllegalArgumentException("maxOutputCharacters must be positive");
+        }
         this.maxSourceBytes = maxSourceBytes;
         this.maxOutputCharacters = maxOutputCharacters;
     }
 
     @Override public String id() { return "plain-text"; }
-    @Override public String version() { return "2"; }
+    @Override public String version() { return "3"; }
     @Override public int priority() { return 300; }
     @Override public Set<String> supportedMediaTypes() { return MEDIA_TYPES; }
 
     @Override
     public ExtractedText extract(Path path, ExtractionCapability capability) {
         try {
-            long size = Files.size(path);
+            long size = sourceSize(path);
             if (size > maxSourceBytes) {
                 throw failure(FailureReason.SOURCE_TOO_LARGE, "Source document exceeds the extraction size limit");
             }
-            byte[] bytes = Files.readAllBytes(path);
+            byte[] bytes = readBounded(path, size);
             Decoded decoded = decode(bytes);
-            if (decoded.text().codePointCount(0, decoded.text().length()) > maxOutputCharacters) {
-                throw failure(FailureReason.OUTPUT_TOO_LARGE, "Extracted text exceeds the output limit");
-            }
-            if (decoded.text().isBlank()) {
+            if (UnicodeText.isBlank(decoded.text())) {
                 throw failure(FailureReason.NO_TEXT, "No chunkable text was extracted");
             }
             return new ExtractedText(decoded.text(), capability.detectedMediaType(), id(), version(),
@@ -61,6 +72,38 @@ public class PlainTextExtractor implements DocumentTextExtractor {
             throw new ExtractionException(FailureReason.CORRUPT,
                     "Plain text source cannot be read", exception);
         }
+    }
+
+    protected long sourceSize(Path path) throws IOException {
+        return Files.size(path);
+    }
+
+    protected InputStream openSource(Path path) throws IOException {
+        return Files.newInputStream(path);
+    }
+
+    private byte[] readBounded(Path path, long observedSize) throws IOException {
+        int initialCapacity = Math.toIntExact(Math.min(observedSize, maxSourceBytes));
+        ByteArrayOutputStream output = new ByteArrayOutputStream(initialCapacity);
+        byte[] buffer = new byte[8192];
+        long copied = 0;
+        try (InputStream input = openSource(path)) {
+            while (true) {
+                long remaining = maxSourceBytes - copied;
+                int requested = remaining >= buffer.length
+                        ? buffer.length : Math.toIntExact(remaining + 1);
+                int read = input.read(buffer, 0, requested);
+                if (read < 0) break;
+                if (read == 0) continue;
+                if (read > remaining) {
+                    throw failure(FailureReason.SOURCE_TOO_LARGE,
+                            "Source document exceeds the extraction size limit");
+                }
+                output.write(buffer, 0, read);
+                copied += read;
+            }
+        }
+        return output.toByteArray();
     }
 
     private Decoded decode(byte[] original) {
@@ -82,84 +125,146 @@ public class PlainTextExtractor implements DocumentTextExtractor {
             offset = 2;
         }
         if (offset > 0) {
-            Decoded decoded = decodedStrict(original, offset, charset);
-            if (plausibleText(decoded.text())) return decoded;
-            throw new ExtractionException(FailureReason.UNRELIABLE_ENCODING,
-                    "Text encoding could not be decoded reliably");
+            return requireDecoded(original, offset, charset);
         }
-        Decoded utf8 = tryDecodedStrict(original, StandardCharsets.UTF_8);
-        if (utf8 != null && plausibleText(utf8.text())) return utf8;
+        Attempt utf8 = decodeAttempt(original, 0, StandardCharsets.UTF_8, true);
+        if (utf8 != null) {
+            requireWithinLimit(utf8, StandardCharsets.UTF_8);
+            return utf8.decoded();
+        }
 
-        List<Decoded> candidates = java.util.stream.Stream.of(
-                        tryDecodedStrict(original, Charset.forName("GB18030")),
-                        tryDecodedStrict(original, Charset.forName("windows-1252")))
-                .filter(java.util.Objects::nonNull)
-                .filter(candidate -> plausibleText(candidate.text()))
-                .sorted(java.util.Comparator.comparingInt(
-                        (Decoded candidate) -> textScore(candidate.text())).reversed())
-                .toList();
-        if (candidates.isEmpty()) {
-            throw new ExtractionException(FailureReason.UNRELIABLE_ENCODING,
-                    "Text encoding could not be decoded reliably");
-        }
-        return candidates.get(0);
+        Charset gb18030 = Charset.forName("GB18030");
+        Charset windows1252 = Charset.forName("windows-1252");
+        Attempt gb = decodeAttempt(original, 0, gb18030, false);
+        Attempt western = decodeAttempt(original, 0, windows1252, false);
+        Charset selected = selectLegacyCharset(original, gb, western, gb18030, windows1252);
+        return requireDecoded(original, 0, selected);
     }
 
-    private Decoded tryDecodedStrict(byte[] original, Charset charset) {
-        try {
-            return decodedStrict(original, 0, charset);
-        } catch (ExtractionException ignored) {
-            return null;
+    private Charset selectLegacyCharset(byte[] original, Attempt gb, Attempt western,
+                                        Charset gb18030, Charset windows1252) {
+        if (gb == null && western == null) throw unreliableEncoding();
+        if (gb == null) return requireWithinLimit(western, windows1252);
+        if (western == null) return requireWithinLimit(gb, gb18030);
+
+        DetectorConfidence confidence = detectorConfidence(original);
+        Analysis gbAnalysis = gb.analysis();
+        Analysis westernAnalysis = western.analysis();
+        if (gbAnalysis.cjkCodePoints() >= 2
+                && gbAnalysis.cjkCodePoints() * 2 >= gbAnalysis.letterCodePoints()
+                && confidence.gb18030() >= confidence.windows1252()) {
+            if (confidence.gb18030() <= 10
+                    && westernAnalysis.latinCodePoints() == westernAnalysis.codePoints()) {
+                throw unreliableEncoding();
+            }
+            return requireWithinLimit(gb, gb18030);
         }
+        if (confidence.windows1252() >= 20
+                || gbAnalysis.cjkCodePoints() < 2
+                && westernAnalysis.latinCodePoints() > 0) {
+            return requireWithinLimit(western, windows1252);
+        }
+        throw unreliableEncoding();
     }
 
-    private Decoded decodedStrict(byte[] original, int offset, Charset charset) {
-        try {
-            String text = charset.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(original, offset, original.length - offset)).toString();
-            return new Decoded(text, charset.name());
-        } catch (CharacterCodingException exception) {
-            throw new ExtractionException(FailureReason.UNRELIABLE_ENCODING,
-                    "Text encoding could not be decoded reliably", exception);
+    private Charset requireWithinLimit(Attempt attempt, Charset charset) {
+        if (attempt.tooLarge()) {
+            throw failure(FailureReason.OUTPUT_TOO_LARGE,
+                    "Extracted text exceeds the output limit");
         }
+        return charset;
     }
 
-    private boolean plausibleText(String text) {
-        if (text.isEmpty()) return true;
-        int acceptable = 0;
-        int total = 0;
-        for (int offset = 0; offset < text.length();) {
-            int codePoint = text.codePointAt(offset);
-            int type = Character.getType(codePoint);
-            if (codePoint == 0 || type == Character.UNASSIGNED
-                    || type == Character.PRIVATE_USE || type == Character.SURROGATE) {
+    private DetectorConfidence detectorConfidence(byte[] original) {
+        byte[] sample = original.length <= 12_000
+                ? original : Arrays.copyOf(original, 12_000);
+        int gb18030 = 0;
+        int windows1252 = 0;
+        for (CharsetMatch match : new CharsetDetector().setText(sample).detectAll()) {
+            String name = match.getName().toUpperCase(java.util.Locale.ROOT);
+            if (name.equals("GB18030")) gb18030 = Math.max(gb18030, match.getConfidence());
+            if (name.equals("WINDOWS-1252") || name.equals("ISO-8859-1")
+                    || name.equals("ISO-8859-9")) {
+                windows1252 = Math.max(windows1252, match.getConfidence());
+            }
+        }
+        return new DetectorConfidence(gb18030, windows1252);
+    }
+
+    private Decoded requireDecoded(byte[] original, int offset, Charset charset) {
+        Attempt attempt = decodeAttempt(original, offset, charset, true);
+        if (attempt == null) throw unreliableEncoding();
+        requireWithinLimit(attempt, charset);
+        return attempt.decoded();
+    }
+
+    private Attempt decodeAttempt(byte[] original, int offset, Charset charset, boolean retainText) {
+        CharsetDecoder decoder = charset.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        ByteBuffer input = ByteBuffer.wrap(original, offset, original.length - offset);
+        CharBuffer output = CharBuffer.allocate(2048);
+        int retainedCapacity = (int) Math.min(original.length - offset,
+                Math.min((long) maxOutputCharacters * 2L, Integer.MAX_VALUE - 8L));
+        StringBuilder text = retainText ? new StringBuilder(retainedCapacity) : null;
+        MutableAnalysis analysis = new MutableAnalysis();
+        boolean endOfInput = false;
+        while (!endOfInput) {
+            CoderResult result = decoder.decode(input, output, true);
+            if (!consume(output, text, analysis)) return null;
+            if (analysis.codePoints > maxOutputCharacters) {
+                return new Attempt(analysis.freeze(), null, true);
+            }
+            if (result.isError()) return null;
+            endOfInput = result.isUnderflow();
+        }
+        while (true) {
+            CoderResult result = decoder.flush(output);
+            if (!consume(output, text, analysis)) return null;
+            if (analysis.codePoints > maxOutputCharacters) {
+                return new Attempt(analysis.freeze(), null, true);
+            }
+            if (result.isError()) return null;
+            if (result.isUnderflow()) break;
+        }
+        if (analysis.pendingHighSurrogate != 0) return null;
+        Decoded decoded = retainText ? new Decoded(text.toString(), charset.name()) : null;
+        return new Attempt(analysis.freeze(), decoded, false);
+    }
+
+    private boolean consume(CharBuffer buffer, StringBuilder text, MutableAnalysis analysis) {
+        buffer.flip();
+        if (text != null) text.append(buffer);
+        while (buffer.hasRemaining()) {
+            char current = buffer.get();
+            if (analysis.pendingHighSurrogate != 0) {
+                if (!Character.isLowSurrogate(current)) return false;
+                int codePoint = Character.toCodePoint(analysis.pendingHighSurrogate, current);
+                analysis.pendingHighSurrogate = 0;
+                if (!accept(codePoint, analysis)) return false;
+            } else if (Character.isHighSurrogate(current)) {
+                analysis.pendingHighSurrogate = current;
+            } else if (Character.isLowSurrogate(current) || !accept(current, analysis)) {
                 return false;
             }
-            if (type == Character.CONTROL && codePoint != '\n' && codePoint != '\r'
-                    && codePoint != '\t' && codePoint != '\f') {
-                return false;
-            }
-            if (!Character.isISOControl(codePoint)
-                    || codePoint == '\n' || codePoint == '\r' || codePoint == '\t' || codePoint == '\f') {
-                acceptable++;
-            }
-            total++;
-            offset += Character.charCount(codePoint);
         }
-        return acceptable * 100 >= total * 85;
+        buffer.clear();
+        return true;
     }
 
-    private int textScore(String text) {
-        int score = 0;
-        for (int codePoint : text.codePoints().toArray()) {
-            if (isCjk(codePoint)) score += 6;
-            else if (Character.isLetterOrDigit(codePoint)) score += 2;
-            else if (Character.isWhitespace(codePoint)) score += 2;
-            else score++;
+    private boolean accept(int codePoint, MutableAnalysis analysis) {
+        int type = Character.getType(codePoint);
+        if (codePoint == 0 || type == Character.UNASSIGNED
+                || type == Character.PRIVATE_USE || type == Character.SURROGATE) return false;
+        if (type == Character.CONTROL && codePoint != '\n' && codePoint != '\r'
+                && codePoint != '\t' && codePoint != '\f') return false;
+        analysis.codePoints++;
+        if (isCjk(codePoint)) analysis.cjkCodePoints++;
+        if (Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.LATIN) {
+            analysis.latinCodePoints++;
         }
-        return score;
+        if (Character.isLetter(codePoint)) analysis.letterCodePoints++;
+        return true;
     }
 
     private boolean isCjk(int codePoint) {
@@ -179,5 +284,26 @@ public class PlainTextExtractor implements DocumentTextExtractor {
         return new ExtractionException(reason, message);
     }
 
+    private ExtractionException unreliableEncoding() {
+        return failure(FailureReason.UNRELIABLE_ENCODING,
+                "Text encoding could not be decoded reliably");
+    }
+
     private record Decoded(String text, String charset) {}
+    private record DetectorConfidence(int gb18030, int windows1252) {}
+    private record Analysis(int codePoints, int cjkCodePoints,
+                            int latinCodePoints, int letterCodePoints) {}
+    private record Attempt(Analysis analysis, Decoded decoded, boolean tooLarge) {}
+
+    private static final class MutableAnalysis {
+        private int codePoints;
+        private int cjkCodePoints;
+        private int latinCodePoints;
+        private int letterCodePoints;
+        private char pendingHighSurrogate;
+
+        private Analysis freeze() {
+            return new Analysis(codePoints, cjkCodePoints, latinCodePoints, letterCodePoints);
+        }
+    }
 }

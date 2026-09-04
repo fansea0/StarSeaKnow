@@ -1,5 +1,7 @@
 package com.starsea.ai.chunking.extraction;
 
+import com.starsea.ai.chunking.general.UnicodeText;
+import jakarta.annotation.PreDestroy;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.MemoryUsageSetting;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -135,7 +137,7 @@ public class PdfTextExtractor implements DocumentTextExtractor {
                 }
             }
             checkDeadline(deadline);
-            if (text.toString().isBlank()) {
+            if (UnicodeText.isBlank(text)) {
                 throw new ExtractionException(FailureReason.NO_TEXT,
                         "No text was extracted from the PDF; OCR may be required");
             }
@@ -158,6 +160,15 @@ public class PdfTextExtractor implements DocumentTextExtractor {
 
     protected long nanoTime() {
         return System.nanoTime();
+    }
+
+    @PreDestroy
+    void shutdown() {
+        blockingExecutor.shutdownNow();
+    }
+
+    boolean executorIsShutdown() {
+        return blockingExecutor.isShutdown();
     }
 
     private void checkDeadline(long deadline) {

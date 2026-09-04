@@ -69,7 +69,7 @@ class GeneralChunkingPropertyTest {
                     "whitespace-only segment branch, sample " + sample);
             assertEquals(expected, reconstruct(first.drafts()), "sample " + sample);
             assertEquals(first, second, "sample " + sample);
-            assertTrue(first.drafts().stream().noneMatch(draft -> draft.content().isBlank()),
+            assertTrue(first.drafts().stream().noneMatch(draft -> UnicodeText.isBlank(draft.content())),
                     "planner must never emit a persistence-invalid blank chunk, sample " + sample);
             for (int index = 0; index < first.drafts().size(); index++) {
                 ChunkDraft draft = first.drafts().get(index);

@@ -58,7 +58,7 @@ public final class GeneralTextInputProvider implements ChunkInputProvider {
         }
         ExtractedText extracted = extractionCache.getOrExtract(resource.tenantId(), resource.fileId(),
                 sourceHash, resource.path(), resource.fileType());
-        if (extracted.text().isBlank()) {
+        if (UnicodeText.isBlank(extracted.text())) {
             throw new IllegalArgumentException("未提取到可分块文字");
         }
         NormalizedText normalized = normalizer.normalize(extracted);

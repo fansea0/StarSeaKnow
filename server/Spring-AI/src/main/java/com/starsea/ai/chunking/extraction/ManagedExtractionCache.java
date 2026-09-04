@@ -36,24 +36,36 @@ public class ManagedExtractionCache {
     private final DocumentTextExtractorRegistry registry;
     private final ObjectMapper objectMapper;
     private final Path root;
+    private final DurableCleanupJournal cleanupJournal;
     private final ConcurrentHashMap<CacheKey, LockEntry> keyLocks = new ConcurrentHashMap<>();
 
     @Autowired
     public ManagedExtractionCache(FileTextExtractionMapper mapper,
                                   DocumentTextExtractorRegistry registry,
                                   ObjectMapper objectMapper,
-                                  @Value("${chunking.extraction.cache-root:${user.dir}/data/extraction-cache}") String root) {
-        this(mapper, registry, objectMapper, Path.of(root));
+                                  @Value("${chunking.extraction.cache-root:${user.dir}/data/extraction-cache}") String root,
+                                  DurableCleanupJournal cleanupJournal) {
+        this(mapper, registry, objectMapper, Path.of(root), cleanupJournal);
     }
 
     public ManagedExtractionCache(FileTextExtractionMapper mapper,
                                   DocumentTextExtractorRegistry registry,
                                   ObjectMapper objectMapper,
                                   Path root) {
+        this(mapper, registry, objectMapper, root,
+                new DurableCleanupJournal(objectMapper, root, root));
+    }
+
+    ManagedExtractionCache(FileTextExtractionMapper mapper,
+                           DocumentTextExtractorRegistry registry,
+                           ObjectMapper objectMapper,
+                           Path root,
+                           DurableCleanupJournal cleanupJournal) {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.registry = Objects.requireNonNull(registry, "registry");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.root = Objects.requireNonNull(root, "root").toAbsolutePath().normalize();
+        this.cleanupJournal = Objects.requireNonNull(cleanupJournal, "cleanupJournal");
     }
 
     public ExtractedText getOrExtract(long tenantId, long fileId, String sourceHash,
@@ -63,6 +75,7 @@ public class ManagedExtractionCache {
         if (sourceHash == null || !sourceHash.matches("[0-9a-fA-F]{64}")) {
             throw new IllegalArgumentException("sourceHash must be a SHA-256 hex digest");
         }
+        cleanupJournal.retryPending(8);
         try (KeyLease ignored = acquire(new CacheKey(tenantId, fileId))) {
             return getOrExtractLocked(tenantId, fileId, sourceHash, source, suppliedType);
         }
@@ -117,6 +130,7 @@ public class ManagedExtractionCache {
     public ManagedFileQuarantine quarantineManagedFiles(long tenantId, long fileId) {
         requirePositive(tenantId, "tenantId");
         requirePositive(fileId, "fileId");
+        cleanupJournal.retryPending(8);
         KeyLease lease = acquire(new CacheKey(tenantId, fileId));
         List<QuarantinedFile> moved = new ArrayList<>();
         try {
@@ -135,6 +149,11 @@ public class ManagedExtractionCache {
             lease.close();
             throw failure;
         }
+    }
+
+    public UUID persistSourceCleanup(long tenantId, long fileId, Path sourceQuarantine) {
+        return cleanupJournal.persist(tenantId, fileId,
+                List.of(cleanupJournal.sourceTarget(sourceQuarantine)));
     }
 
     private KeyLease acquire(CacheKey key) {
@@ -250,12 +269,27 @@ public class ManagedExtractionCache {
         Path directory = scopedDirectory(tenantId, fileId, false);
         Path textPath = checkedManagedPath(Path.of(row.getManagedTextPath()), directory);
         Path mapPath = checkedManagedPath(Path.of(row.getSourceMapPath()), directory);
+        boolean cleanupFailed = false;
         try {
-            Files.deleteIfExists(textPath);
-            Files.deleteIfExists(mapPath);
-        } catch (IOException exception) {
-            throw new IllegalStateException("Managed extraction files could not be removed", exception);
+            deleteReplacedManagedFile(textPath);
+        } catch (IOException ignored) {
+            cleanupFailed = true;
         }
+        try {
+            deleteReplacedManagedFile(mapPath);
+        } catch (IOException ignored) {
+            cleanupFailed = true;
+        }
+        if (cleanupFailed) {
+            UUID obligationId = cleanupJournal.persist(tenantId, fileId, List.of(
+                    cleanupJournal.cacheTarget(textPath), cleanupJournal.cacheTarget(mapPath)));
+            log.warn("Cleanup obligation {} retained for tenant {} file {}",
+                    obligationId, tenantId, fileId);
+        }
+    }
+
+    protected void deleteReplacedManagedFile(Path path) throws IOException {
+        Files.deleteIfExists(path);
     }
 
     private void validateManagedPaths(FileTextExtraction row, long tenantId, long fileId) {
@@ -266,14 +300,29 @@ public class ManagedExtractionCache {
 
     private void deleteNewPair(Path textPath, Path mapPath, long tenantId, long fileId,
                                RuntimeException failure) {
+        boolean cleanupFailed = false;
         try {
-            Files.deleteIfExists(textPath);
-            Files.deleteIfExists(mapPath);
-        } catch (IOException cleanupFailure) {
-            failure.addSuppressed(cleanupFailure);
-            log.error("Unable to clean new extraction cache files for tenant {} file {}",
-                    tenantId, fileId, cleanupFailure);
+            deleteNewManagedFile(textPath);
+        } catch (IOException ignored) {
+            cleanupFailed = true;
         }
+        try {
+            deleteNewManagedFile(mapPath);
+        } catch (IOException ignored) {
+            cleanupFailed = true;
+        }
+        if (cleanupFailed) {
+            UUID obligationId = cleanupJournal.persist(tenantId, fileId, List.of(
+                    cleanupJournal.cacheTarget(textPath), cleanupJournal.cacheTarget(mapPath)));
+            CleanupPendingException pending = new CleanupPendingException(obligationId);
+            failure.addSuppressed(pending);
+            log.warn("Cleanup obligation {} retained for tenant {} file {}",
+                    obligationId, tenantId, fileId);
+        }
+    }
+
+    protected void deleteNewManagedFile(Path path) throws IOException {
+        Files.deleteIfExists(path);
     }
 
     private void deleteTemporary(Path path) {
@@ -426,15 +475,14 @@ public class ManagedExtractionCache {
                     }
                 }
                 if (failure != null) {
-                    try {
-                        Path obligation = persistCleanupObligation(files, tenantId, fileId);
-                        throw new IllegalStateException(
-                                "Managed extraction cleanup obligation persisted at " + obligation,
-                                failure);
-                    } catch (IOException obligationFailure) {
-                        failure.addSuppressed(obligationFailure);
-                        throw new IllegalStateException(
-                                "Managed extraction cleanup obligation could not be persisted", failure);
+                    List<DurableCleanupJournal.CleanupTarget> targets = files.stream()
+                            .map(QuarantinedFile::quarantined)
+                            .filter(path -> Files.exists(path, LinkOption.NOFOLLOW_LINKS))
+                            .map(cleanupJournal::cacheTarget)
+                            .toList();
+                    if (!targets.isEmpty()) {
+                        UUID obligationId = cleanupJournal.persist(tenantId, fileId, targets);
+                        throw new CleanupPendingException(obligationId);
                     }
                 }
             } finally {
@@ -469,25 +517,16 @@ public class ManagedExtractionCache {
         Files.deleteIfExists(path);
     }
 
-    private Path persistCleanupObligation(List<QuarantinedFile> files,
-                                          long tenantId, long fileId) throws IOException {
-        Path securedRoot = secureRoot();
-        Path temporary = Files.createTempFile(securedRoot, ".cleanup-required-", ".tmp");
-        Path destination = securedRoot.resolve("cleanup-required-" + UUID.randomUUID() + ".json");
-        try {
-            List<String> remaining = files.stream()
-                    .map(QuarantinedFile::quarantined)
-                    .filter(path -> Files.exists(path, LinkOption.NOFOLLOW_LINKS))
-                    .map(Path::toString)
-                    .toList();
-            objectMapper.writeValue(temporary.toFile(), Map.of(
-                    "tenantId", tenantId,
-                    "fileId", fileId,
-                    "quarantinedPaths", remaining));
-            moveAtomically(temporary, destination);
-            return destination;
-        } finally {
-            Files.deleteIfExists(temporary);
+    public static final class CleanupPendingException extends IllegalStateException {
+        private final UUID obligationId;
+
+        public CleanupPendingException(UUID obligationId) {
+            super("Managed extraction cleanup obligation " + obligationId + " is pending");
+            this.obligationId = obligationId;
+        }
+
+        public UUID obligationId() {
+            return obligationId;
         }
     }
 

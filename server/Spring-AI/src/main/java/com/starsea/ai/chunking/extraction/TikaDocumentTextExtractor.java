@@ -1,5 +1,6 @@
 package com.starsea.ai.chunking.extraction;
 
+import com.starsea.ai.chunking.general.UnicodeText;
 import org.apache.tika.config.TikaConfig;
 import org.apache.tika.config.TikaTaskTimeout;
 import org.apache.tika.exception.CorruptedFileException;
@@ -110,7 +111,7 @@ public class TikaDocumentTextExtractor implements DocumentTextExtractor {
                         "Document extraction exceeded the time limit");
             }
             String text = handler.toString();
-            if (text.isBlank()) {
+            if (UnicodeText.isBlank(text)) {
                 throw new ExtractionException(FailureReason.NO_TEXT,
                         "No chunkable text was extracted");
             }

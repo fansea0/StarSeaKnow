@@ -63,7 +63,7 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
             throw new IllegalArgumentException("General planner requires GeneralChunkConfig");
         }
         int laterBudget = laterBodyBudget(config, request.contextConfig());
-        List<ChunkDraft> drafts = new ArrayList<>();
+        List<PlannedDraft> drafts = new ArrayList<>();
         Accumulator current = null;
         String nextStartReason = BoundaryReason.DOCUMENT_START;
 
@@ -77,12 +77,14 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
             String withSeparator = current == null ? text : current.content + "\n" + text;
             int budget = drafts.isEmpty() ? config.maxCharacters() : laterBudget;
             if (current != null && fits(withSeparator, budget, request.maxIndexTokens())) {
-                current.append("\n" + text, block.sourceLocator(), boundaryAfter);
+                current.append(mappedFragment(block, UnicodeText.index(text),
+                        0, UnicodeText.length(text)), boundaryAfter);
                 continue;
             }
             if (current != null) {
                 drafts.add(current.toDraft());
-                nextStartReason = String.valueOf(drafts.get(drafts.size() - 1).boundaryReason().get("end"));
+                nextStartReason = String.valueOf(
+                        drafts.get(drafts.size() - 1).boundaryReason().get("end"));
                 current = null;
             }
 
@@ -96,9 +98,8 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
                 String candidate = textIndex.substring(
                         consumedCodePoints, consumedCodePoints + characterMaximum);
                 if (remainingCodePoints <= budget && fits(candidate, budget, request.maxIndexTokens())) {
-                    SourceLocator locator = sliceLocator(block, textIndex,
-                            consumedCodePoints, totalCodePoints);
-                    current = new Accumulator(candidate, locator, nextStartReason, boundaryAfter);
+                    current = new Accumulator(mappedFragment(block, textIndex,
+                            consumedCodePoints, totalCodePoints), nextStartReason, boundaryAfter);
                     consumedCodePoints = totalCodePoints;
                     continue;
                 }
@@ -112,9 +113,8 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
                 BoundaryUnit split = GeneralBoundaryScanner.scanFallback(candidate, tokenMaximum, null);
                 String endReason = tokenLimited ? BoundaryReason.MODEL_TOKEN_LIMIT : split.boundaryAfter().name();
                 int splitEnd = consumedCodePoints + split.cleanedEnd();
-                String content = textIndex.substring(consumedCodePoints, splitEnd);
-                SourceLocator locator = sliceLocator(block, textIndex, consumedCodePoints, splitEnd);
-                drafts.add(draft(content, locator, nextStartReason, endReason,
+                drafts.add(plannedDraft(List.of(mappedFragment(block, textIndex,
+                                consumedCodePoints, splitEnd)), nextStartReason, endReason,
                         split.boundaryAfter() == BoundaryKind.FORCED_CHARACTER));
                 consumedCodePoints = splitEnd;
                 nextStartReason = endReason;
@@ -130,7 +130,8 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
                 .filter(draft -> Boolean.TRUE.equals(draft.boundaryReason().get("forcedSplit"))).count());
         int tokenLimited = Math.toIntExact(drafts.stream()
                 .filter(draft -> BoundaryReason.MODEL_TOKEN_LIMIT.equals(draft.boundaryReason().get("end"))).count());
-        return new ChunkPlanningResult(drafts, forced, tokenLimited);
+        return new ChunkPlanningResult(drafts.stream().map(PlannedDraft::toChunkDraft).toList(),
+                forced, tokenLimited);
     }
 
     private int laterBodyBudget(GeneralChunkConfig config, ContextConfig context) {
@@ -160,8 +161,14 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
                 && tokenCounter.count(ChunkIndexContentBuilder.preview(List.of(), body)) <= maxTokens;
     }
 
-    private ChunkDraft draft(String content, SourceLocator locator, String start, String end, boolean forced) {
-        return new ChunkDraft(List.of(), content, locator, tokenCounter.count(content),
+    private PlannedDraft plannedDraft(List<MappedFragment> fragments, String start, String end,
+                                      boolean forced) {
+        String content = fragments.stream().map(MappedFragment::text)
+                .reduce("", String::concat);
+        SourceLocator locator = combineLocators(fragments.stream()
+                .map(MappedFragment::sourceLocator).filter(Objects::nonNull).toList());
+        return new PlannedDraft(List.copyOf(fragments), content, locator,
+                tokenCounter.count(content),
                 new BoundaryReason(start, end, forced).asMap());
     }
 
@@ -211,84 +218,130 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
         return new SourceLocator("TEXT", List.of(), null, null, null, null, null, null, List.of());
     }
 
-    private List<ChunkDraft> rebalanceBlankDrafts(List<ChunkDraft> original, int firstBudget,
-                                                   int laterBudget, int maxTokens) {
-        List<ChunkDraft> result = new ArrayList<>(original);
-        for (int index = 0; index < result.size(); index++) {
-            ChunkDraft blank = result.get(index);
-            if (!blank.content().isBlank()) continue;
-            if (index == 0) {
-                throw new IllegalArgumentException("Retained leading whitespace cannot form a useful chunk");
-            }
-            ChunkDraft previous = result.get(index - 1);
-            String separator = BoundaryKind.USER_DELIMITER.name().equals(
-                    previous.boundaryReason().get("end")) ? "\n" : "";
-            String combined = previous.content() + separator + blank.content();
-            int previousBudget = index - 1 == 0 ? firstBudget : laterBudget;
-            int blankBudget = index == 0 ? firstBudget : laterBudget;
-            if (fits(combined, previousBudget, maxTokens)) {
-                result.set(index - 1, draft(combined,
-                        combineLocators(List.of(previous.sourceLocator(), blank.sourceLocator())),
-                        boundaryValue(previous, "start"), boundaryValue(blank, "end"), false));
-                result.remove(index--);
+    private List<PlannedDraft> rebalanceBlankDrafts(List<PlannedDraft> original, int firstBudget,
+                                                     int laterBudget, int maxTokens) {
+        List<PlannedDraft> result = new ArrayList<>(original);
+        int index = 0;
+        while (index < result.size()) {
+            if (!UnicodeText.isBlank(result.get(index).content())) {
+                index++;
                 continue;
             }
-
-            UnicodeText.CodePointIndex previousText = UnicodeText.index(previous.content());
-            int split = Math.min(previousText.length() - 1, previousBudget);
-            boolean rebalanced = false;
-            while (split > 0) {
-                String prefix = previousText.substring(0, split);
-                String suffix = previousText.substring(split, previousText.length())
-                        + separator + blank.content();
-                if (!prefix.isBlank() && !suffix.isBlank()
-                        && fits(prefix, previousBudget, maxTokens)
-                        && fits(suffix, blankBudget, maxTokens)) {
-                    SourceLocator prefixLocator = sliceDraftLocator(previous, previousText, 0, split);
-                    SourceLocator movedLocator = sliceDraftLocator(
-                            previous, previousText, split, previousText.length());
-                    SourceLocator suffixLocator = combineLocators(
-                            List.of(movedLocator, blank.sourceLocator()));
-                    result.set(index - 1, draft(prefix, prefixLocator,
-                            boundaryValue(previous, "start"),
-                            BoundaryKind.FORCED_CHARACTER.name(), true));
-                    result.set(index, draft(suffix, suffixLocator,
-                            BoundaryKind.FORCED_CHARACTER.name(), boundaryValue(blank, "end"), false));
-                    rebalanced = true;
-                    break;
-                }
-                split--;
+            int blankEnd = index + 1;
+            while (blankEnd < result.size()
+                    && UnicodeText.isBlank(result.get(blankEnd).content())) {
+                blankEnd++;
             }
-            if (!rebalanced) {
-                throw new IllegalArgumentException(
-                        "Retained whitespace cannot be packed into useful chunks within the configured limits");
-            }
+            int rangeStart = index == 0 ? 0 : index - 1;
+            int rangeEnd = blankEnd == result.size() ? blankEnd : blankEnd + 1;
+            List<PlannedDraft> range = List.copyOf(result.subList(rangeStart, rangeEnd));
+            MappedSequence sequence = materialize(range);
+            List<PlannedDraft> replacement = repartition(sequence, rangeStart,
+                    firstBudget, laterBudget, maxTokens,
+                    boundaryValue(range.get(0), "start"),
+                    boundaryValue(range.get(range.size() - 1), "end"));
+            result.subList(rangeStart, rangeEnd).clear();
+            result.addAll(rangeStart, replacement);
+            index = Math.max(0, rangeStart - 1);
         }
         return result;
     }
 
-    private SourceLocator sliceDraftLocator(ChunkDraft draft, UnicodeText.CodePointIndex text,
-                                            int codePointStart, int codePointEnd) {
-        SourceLocator source = draft.sourceLocator();
-        if (source == null) return emptyLocator();
-        int charStart = text.charIndex(codePointStart);
-        int charEnd = text.charIndex(codePointEnd);
-        Integer start = source.startOffset() == null ? null : source.startOffset() + charStart;
-        Integer end = source.startOffset() == null ? source.endOffset() : source.startOffset() + charEnd;
-        return new SourceLocator(source.type(), source.blockIds(), start, end,
-                source.startLine(), source.endLine(), source.startPage(), source.endPage(), source.regions());
+    private MappedSequence materialize(List<PlannedDraft> drafts) {
+        List<MappedFragment> fragments = new ArrayList<>();
+        for (int index = 0; index < drafts.size(); index++) {
+            PlannedDraft draft = drafts.get(index);
+            fragments.addAll(draft.fragments());
+            if (index + 1 < drafts.size()
+                    && BoundaryKind.USER_DELIMITER.name().equals(
+                    draft.boundaryReason().get("end"))) {
+                fragments.add(MappedFragment.synthetic("\n"));
+            }
+        }
+        return new MappedSequence(fragments);
     }
 
-    private String boundaryValue(ChunkDraft draft, String key) {
+    private List<PlannedDraft> repartition(MappedSequence sequence, int globalStartIndex,
+                                            int firstBudget, int laterBudget, int maxTokens,
+                                            String outerStart, String outerEnd) {
+        if (UnicodeText.isBlank(sequence.content())) {
+            throw new IllegalArgumentException("Retained Unicode whitespace contains no chunkable text");
+        }
+        List<Integer> boundaries = new ArrayList<>();
+        boundaries.add(0);
+        int start = 0;
+        while (start < sequence.length()) {
+            int budget = globalStartIndex + boundaries.size() - 1 == 0
+                    ? firstBudget : laterBudget;
+            int end = maximumFittingEnd(sequence.index(), start, budget, maxTokens);
+            if (end <= start || UnicodeText.isBlank(sequence.index().substring(start, end))) {
+                throw cannotPackWhitespace();
+            }
+            if (end < sequence.length()) {
+                int lastNonWhitespace = sequence.lastNonWhitespace();
+                if (lastNonWhitespace < end) {
+                    int adjusted = lastNonWhitespace;
+                    if (adjusted <= start
+                            || UnicodeText.isBlank(sequence.index().substring(start, adjusted))) {
+                        throw cannotPackWhitespace();
+                    }
+                    end = adjusted;
+                } else {
+                    int nextEnd = maximumFittingEnd(
+                            sequence.index(), end, laterBudget, maxTokens);
+                    if (UnicodeText.isBlank(sequence.index().substring(end, nextEnd))) {
+                        int seed = sequence.previousNonWhitespace(end - 1);
+                        if (seed <= start
+                                || UnicodeText.isBlank(sequence.index().substring(start, seed))) {
+                            throw cannotPackWhitespace();
+                        }
+                        end = seed;
+                    }
+                }
+            }
+            boundaries.add(end);
+            start = end;
+        }
+        List<PlannedDraft> drafts = new ArrayList<>(boundaries.size() - 1);
+        for (int index = 0; index + 1 < boundaries.size(); index++) {
+            String startReason = index == 0 ? outerStart : BoundaryKind.FORCED_CHARACTER.name();
+            String endReason = index + 2 == boundaries.size()
+                    ? outerEnd : BoundaryKind.FORCED_CHARACTER.name();
+            drafts.add(plannedDraft(sequence.slice(boundaries.get(index), boundaries.get(index + 1)),
+                    startReason, endReason, index + 2 < boundaries.size()));
+        }
+        return drafts;
+    }
+
+    private int maximumFittingEnd(UnicodeText.CodePointIndex text, int start,
+                                  int budget, int maxTokens) {
+        int high = Math.min(text.length(), start + budget);
+        if (fits(text.substring(start, high), budget, maxTokens)) return high;
+        int low = start;
+        while (low < high) {
+            int middle = (low + high + 1) >>> 1;
+            if (fits(text.substring(start, middle), budget, maxTokens)) low = middle;
+            else high = middle - 1;
+        }
+        return low;
+    }
+
+    private IllegalArgumentException cannotPackWhitespace() {
+        return new IllegalArgumentException(
+                "Retained whitespace cannot be packed into useful chunks within the configured limits");
+    }
+
+    private String boundaryValue(PlannedDraft draft, String key) {
         Object value = draft.boundaryReason().get(key);
         return value == null ? BoundaryReason.DOCUMENT_END : value.toString();
     }
 
-    private void validateDrafts(List<ChunkDraft> drafts, int firstBudget, int laterBudget, int maxTokens) {
+    private void validateDrafts(List<PlannedDraft> drafts, int firstBudget,
+                                int laterBudget, int maxTokens) {
         for (int index = 0; index < drafts.size(); index++) {
-            ChunkDraft draft = drafts.get(index);
+            PlannedDraft draft = drafts.get(index);
             int budget = index == 0 ? firstBudget : laterBudget;
-            if (draft.content().isBlank() || !draft.sectionPath().isEmpty()
+            if (UnicodeText.isBlank(draft.content())
                     || UnicodeText.length(draft.content()) > budget
                     || tokenCounter.count(ChunkIndexContentBuilder.preview(List.of(), draft.content())) > maxTokens) {
                 throw new IllegalStateException("General planner produced an invalid chunk");
@@ -301,27 +354,121 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
         return new ChunkStrategyDescriptor.ConfigField(key, type, defaultValue, min, max, attributes);
     }
 
+    private MappedFragment mappedFragment(StructuredBlock block,
+                                          UnicodeText.CodePointIndex textIndex,
+                                          int codePointStart, int codePointEnd) {
+        return new MappedFragment(textIndex.substring(codePointStart, codePointEnd), block,
+                textIndex, codePointStart, codePointEnd,
+                sliceLocator(block, textIndex, codePointStart, codePointEnd));
+    }
+
+    private MappedFragment sliceFragment(MappedFragment fragment, int relativeStart, int relativeEnd) {
+        if (relativeStart == 0 && relativeEnd == fragment.length()) return fragment;
+        if (fragment.block() == null) {
+            return MappedFragment.synthetic(UnicodeText.substring(
+                    fragment.text(), relativeStart, relativeEnd));
+        }
+        int sourceStart = fragment.sourceCodePointStart() + relativeStart;
+        int sourceEnd = fragment.sourceCodePointStart() + relativeEnd;
+        return mappedFragment(fragment.block(), fragment.sourceIndex(), sourceStart, sourceEnd);
+    }
+
+    private record PlannedDraft(List<MappedFragment> fragments, String content,
+                                SourceLocator sourceLocator, int tokenCount,
+                                Map<String, Object> boundaryReason) {
+        private ChunkDraft toChunkDraft() {
+            return new ChunkDraft(List.of(), content, sourceLocator, tokenCount, boundaryReason);
+        }
+    }
+
+    private record MappedFragment(String text, StructuredBlock block,
+                                  UnicodeText.CodePointIndex sourceIndex,
+                                  int sourceCodePointStart, int sourceCodePointEnd,
+                                  SourceLocator sourceLocator) {
+        private static MappedFragment synthetic(String text) {
+            return new MappedFragment(text, null, null, 0, UnicodeText.length(text), null);
+        }
+
+        private int length() {
+            return sourceCodePointEnd - sourceCodePointStart;
+        }
+    }
+
+    private final class MappedSequence {
+        private final List<MappedFragment> fragments;
+        private final String content;
+        private final UnicodeText.CodePointIndex index;
+
+        private MappedSequence(List<MappedFragment> fragments) {
+            this.fragments = List.copyOf(fragments);
+            this.content = fragments.stream().map(MappedFragment::text)
+                    .reduce("", String::concat);
+            this.index = UnicodeText.index(content);
+        }
+
+        private String content() { return content; }
+        private UnicodeText.CodePointIndex index() { return index; }
+        private int length() { return index.length(); }
+
+        private int lastNonWhitespace() {
+            for (int offset = content.length(); offset > 0;) {
+                int codePoint = content.codePointBefore(offset);
+                offset -= Character.charCount(codePoint);
+                if (!UnicodeText.isWhitespace(codePoint)) {
+                    return content.codePointCount(0, offset);
+                }
+            }
+            return -1;
+        }
+
+        private int previousNonWhitespace(int fromCodePoint) {
+            for (int offset = Math.min(fromCodePoint, length() - 1); offset >= 0; offset--) {
+                int charOffset = index.charIndex(offset);
+                if (!UnicodeText.isWhitespace(content.codePointAt(charOffset))) return offset;
+            }
+            return -1;
+        }
+
+        private List<MappedFragment> slice(int codePointStart, int codePointEnd) {
+            List<MappedFragment> result = new ArrayList<>();
+            int cursor = 0;
+            for (MappedFragment fragment : fragments) {
+                int fragmentEnd = cursor + fragment.length();
+                int intersectionStart = Math.max(cursor, codePointStart);
+                int intersectionEnd = Math.min(fragmentEnd, codePointEnd);
+                if (intersectionStart < intersectionEnd) {
+                    result.add(sliceFragment(fragment,
+                            intersectionStart - cursor, intersectionEnd - cursor));
+                }
+                if (fragmentEnd >= codePointEnd) break;
+                cursor = fragmentEnd;
+            }
+            return List.copyOf(result);
+        }
+    }
+
     private final class Accumulator {
         private String content;
-        private final List<SourceLocator> locators = new ArrayList<>();
+        private final List<MappedFragment> fragments = new ArrayList<>();
         private final String startReason;
         private String endReason;
 
-        private Accumulator(String content, SourceLocator locator, String startReason, String endReason) {
-            this.content = content;
-            this.locators.add(locator == null ? emptyLocator() : locator);
+        private Accumulator(MappedFragment fragment, String startReason, String endReason) {
+            this.content = fragment.text();
+            this.fragments.add(fragment);
             this.startReason = startReason;
             this.endReason = endReason;
         }
 
-        private void append(String suffix, SourceLocator locator, String boundaryAfter) {
-            content += suffix;
-            locators.add(locator == null ? emptyLocator() : locator);
+        private void append(MappedFragment fragment, String boundaryAfter) {
+            content += "\n" + fragment.text();
+            fragments.add(MappedFragment.synthetic("\n"));
+            fragments.add(fragment);
             endReason = boundaryAfter;
         }
 
-        private ChunkDraft toDraft() {
-            return draft(content, combineLocators(locators), startReason, endReason, false);
+        private PlannedDraft toDraft() {
+            return plannedDraft(fragments, startReason, endReason, false);
         }
     }
 }

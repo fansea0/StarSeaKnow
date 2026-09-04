@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.stream.StreamSupport;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -69,6 +70,29 @@ class GeneralChunkConfigTest {
         assertEquals("\n", config("\r", DelimiterMode.LITERAL, 500).delimiter());
         assertEquals("\n", config("\r\n", DelimiterMode.LITERAL, 500).delimiter());
         assertEquals("(?:\n|\n)", config("(?:\r\n|\r)", DelimiterMode.REGEX, 500).delimiter());
+    }
+
+    @Test
+    void delimiter_actual_characters_and_literal_backslashes_survive_json_policy_round_trips()
+            throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        List<GeneralChunkConfig> policies = List.of(
+                config("\r", DelimiterMode.LITERAL, 500),
+                config("\r\n", DelimiterMode.LITERAL, 500),
+                config("(?:\r\n|\r)", DelimiterMode.REGEX, 500),
+                config("\\r\\n", DelimiterMode.LITERAL, 500));
+
+        for (GeneralChunkConfig policy : policies) {
+            JsonNode snapshot = mapper.valueToTree(policy);
+            GeneralChunkConfig restored = mapper.treeToValue(snapshot, GeneralChunkConfig.class);
+
+            assertEquals(policy, restored);
+            assertEquals(policy.delimiter(), snapshot.path("delimiter").asText());
+        }
+        assertEquals("\n", policies.get(0).delimiter());
+        assertEquals("\n", policies.get(1).delimiter());
+        assertEquals("(?:\n|\n)", policies.get(2).delimiter());
+        assertEquals("\\r\\n", policies.get(3).delimiter());
     }
 
     @Test

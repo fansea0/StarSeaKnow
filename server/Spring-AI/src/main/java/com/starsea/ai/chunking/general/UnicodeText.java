@@ -12,6 +12,20 @@ public final class UnicodeText {
         return value.codePointCount(0, value.length());
     }
 
+    public static boolean isWhitespace(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
+    }
+
+    public static boolean isBlank(CharSequence value) {
+        if (value == null || value.length() == 0) return true;
+        for (int offset = 0; offset < value.length();) {
+            int codePoint = Character.codePointAt(value, offset);
+            if (!isWhitespace(codePoint)) return false;
+            offset += Character.charCount(codePoint);
+        }
+        return true;
+    }
+
     public static int charIndex(String value, int codePointOffset) {
         Objects.requireNonNull(value, "value");
         int length = length(value);

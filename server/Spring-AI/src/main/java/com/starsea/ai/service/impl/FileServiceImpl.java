@@ -219,24 +219,36 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
     private void finalizeCommittedDeletion(
             ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine,
             Path sourceQuarantine, long tenantId, long fileId) {
-        RuntimeException cleanupFailure = null;
+        RuntimeException unjournaledFailure = null;
         try {
-            Files.deleteIfExists(sourceQuarantine);
+            deleteCommittedSource(sourceQuarantine);
         } catch (IOException | RuntimeException failure) {
-            cleanupFailure = new IllegalStateException(
-                    "Committed source quarantine could not be removed: " + sourceQuarantine,
-                    failure);
+            try {
+                UUID obligationId = extractionCache.persistSourceCleanup(
+                        tenantId, fileId, sourceQuarantine);
+                log.warn("Cleanup obligation {} retained for tenant {} file {}",
+                        obligationId, tenantId, fileId);
+            } catch (RuntimeException journalFailure) {
+                unjournaledFailure = journalFailure;
+            }
         }
         try {
             cacheQuarantine.commit();
+        } catch (ManagedExtractionCache.CleanupPendingException pending) {
+            log.warn("Cleanup obligation {} retained for tenant {} file {}",
+                    pending.obligationId(), tenantId, fileId);
         } catch (RuntimeException failure) {
-            if (cleanupFailure == null) cleanupFailure = failure;
-            else cleanupFailure.addSuppressed(failure);
+            if (unjournaledFailure == null) unjournaledFailure = failure;
+            else unjournaledFailure.addSuppressed(failure);
         }
-        if (cleanupFailure != null) {
-            log.warn("Post-commit file cleanup incomplete for tenant {} file {}; retry obligation retained",
-                    tenantId, fileId, cleanupFailure);
+        if (unjournaledFailure != null) {
+            throw new IllegalStateException(
+                    "Post-commit cleanup could not persist an obligation", unjournaledFailure);
         }
+    }
+
+    protected void deleteCommittedSource(Path sourceQuarantine) throws IOException {
+        Files.deleteIfExists(sourceQuarantine);
     }
 
     private void writePhysicalFile(MultipartFile file, Path uploadRoot, Path createdPath) {
@@ -287,7 +299,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
             Files.deleteIfExists(createdPath);
         } catch (IOException cleanupFailure) {
             failure.addSuppressed(cleanupFailure);
-            log.warn("Failed to remove newly created upload {}", createdPath, cleanupFailure);
+            log.warn("Failed to remove a newly created upload");
         }
     }
 

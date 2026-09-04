@@ -82,6 +82,46 @@ class ManagedExtractionCacheTest {
     }
 
     @Test
+    void failed_replacement_cleanup_is_journaled_without_discarding_the_new_cache_hit() throws Exception {
+        Path source = cacheRoot.resolve("replace-source.txt");
+        Files.writeString(source, "source");
+        Path managedRoot = cacheRoot.resolve("managed-replacement");
+        ObjectMapper objectMapper = new ObjectMapper();
+        DurableCleanupJournal journal = new DurableCleanupJournal(
+                objectMapper, managedRoot, cacheRoot.resolve("upload"));
+        StatefulMapper mapper = new StatefulMapper();
+        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger failedDeletes = new AtomicInteger(2);
+        ManagedExtractionCache cache = new ManagedExtractionCache(mapper.proxy(),
+                new DocumentTextExtractorRegistry(List.of(countingExtractor(calls))),
+                objectMapper, managedRoot, journal) {
+            @Override
+            protected void deleteReplacedManagedFile(Path path) throws java.io.IOException {
+                if (failedDeletes.getAndDecrement() > 0) {
+                    throw new java.io.IOException("deliberate replacement cleanup failure");
+                }
+                super.deleteReplacedManagedFile(path);
+            }
+        };
+        cache.getOrExtract(1L, 9L, "a".repeat(64), source, "text/plain");
+
+        ExtractedText replacement = cache.getOrExtract(
+                1L, 9L, "b".repeat(64), source, "text/plain");
+
+        assertEquals("cached body", replacement.text());
+        assertEquals(2, calls.get());
+        try (var entries = Files.list(journal.journalDirectory())) {
+            assertEquals(1, entries.filter(path -> path.toString().endsWith(".json")).count());
+        }
+
+        journal.retryPending(8);
+        try (var files = Files.walk(managedRoot.resolve("1/9"))) {
+            assertEquals(2, files.filter(Files::isRegularFile).count(),
+                    "only the active text/source-map generation remains");
+        }
+    }
+
+    @Test
     void same_length_text_tampering_invalidates_the_managed_file_pair() throws Exception {
         Path source = cacheRoot.resolve("source.txt");
         Files.writeString(source, "source");
@@ -333,15 +373,55 @@ class ManagedExtractionCacheTest {
         IllegalStateException failure = assertThrows(IllegalStateException.class, quarantine::commit);
 
         assertTrue(failure.getMessage().contains("cleanup obligation"));
-        try (var files = Files.list(managedRoot)) {
+        Path journalDirectory = managedRoot.resolve(".cleanup-journal");
+        try (var files = Files.list(journalDirectory)) {
             List<Path> obligations = files
-                    .filter(path -> path.getFileName().toString().startsWith("cleanup-required-"))
+                    .filter(path -> path.getFileName().toString().endsWith(".json"))
                     .toList();
             assertEquals(1, obligations.size());
             String persisted = Files.readString(obligations.get(0));
             assertTrue(persisted.contains("\"tenantId\":1"));
             assertTrue(persisted.contains("\"fileId\":9"));
             assertTrue(persisted.contains(".deleting-"));
+            assertFalse(persisted.contains(managedRoot.toString()),
+                    "cleanup records must contain managed relative targets only");
+        }
+    }
+
+    @Test
+    void failed_late_metadata_insert_journals_and_later_removes_the_new_managed_pair() throws Exception {
+        Path source = cacheRoot.resolve("late-insert.txt");
+        Files.writeString(source, "source");
+        Path managedRoot = cacheRoot.resolve("managed");
+        ObjectMapper objectMapper = new ObjectMapper();
+        DurableCleanupJournal journal = new DurableCleanupJournal(
+                objectMapper, managedRoot, cacheRoot.resolve("upload"));
+        FileTextExtractionMapper mapper = mock(FileTextExtractionMapper.class);
+        when(mapper.insert(any(FileTextExtraction.class))).thenReturn(0);
+        ManagedExtractionCache cache = new ManagedExtractionCache(mapper,
+                new DocumentTextExtractorRegistry(List.of(countingExtractor(new AtomicInteger()))),
+                objectMapper, managedRoot, journal) {
+            @Override
+            protected void deleteNewManagedFile(Path path) throws java.io.IOException {
+                throw new java.io.IOException("deliberate late cleanup failure");
+            }
+        };
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> cache.getOrExtract(1L, 9L, "d".repeat(64), source, "text/plain"));
+
+        assertEquals("Extraction cache metadata was not saved", failure.getMessage());
+        assertEquals(1, failure.getSuppressed().length);
+        assertTrue(failure.getSuppressed()[0]
+                instanceof ManagedExtractionCache.CleanupPendingException);
+        try (var files = Files.walk(managedRoot.resolve("1/9"))) {
+            assertEquals(2, files.filter(Files::isRegularFile).count());
+        }
+
+        journal.retryPending(8);
+
+        try (var files = Files.walk(managedRoot.resolve("1/9"))) {
+            assertEquals(0, files.filter(Files::isRegularFile).count());
         }
     }
 

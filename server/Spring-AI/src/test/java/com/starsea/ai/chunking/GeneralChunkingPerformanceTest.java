@@ -14,6 +14,7 @@ import com.starsea.ai.chunking.general.GeneralTextCleaner;
 import com.starsea.ai.chunking.general.NormalizedText;
 import com.starsea.ai.chunking.general.TextNormalizer;
 import com.starsea.ai.chunking.model.ChunkPlanningRequest;
+import com.starsea.ai.chunking.model.BlockType;
 import com.starsea.ai.chunking.model.ContextConfig;
 import com.starsea.ai.chunking.model.DelimiterMode;
 import com.starsea.ai.chunking.model.FileResource;
@@ -38,6 +39,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -75,7 +77,27 @@ class GeneralChunkingPerformanceTest {
         assertGrowth("normalization", small.normalization(), large.normalization());
         assertGrowth("cleaning", small.cleaning(), large.cleaning());
         assertGrowth("planning", small.planning(), large.planning());
+        assertTrue(large.tokenCounterCalls() <= small.tokenCounterCalls() * 15L + 100,
+                () -> "token-count operations grew too quickly: small="
+                        + small.tokenCounterCalls() + ", large=" + large.tokenCounterCalls());
         assertTrue(large.chunks() >= small.chunks());
+    }
+
+    @org.junit.jupiter.api.Test
+    void default_overlap_reservation_places_the_second_body_at_the_exact_later_boundary() {
+        String body = "x".repeat(8_000);
+        StructuredBlock block = new StructuredBlock("exact-boundary", BlockType.PARAGRAPH,
+                body, body, null, List.of(), COUNTER.count(body), null, java.util.Map.of());
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL,
+                4_000, false, false, false);
+
+        var result = new GeneralChunkPlanningStrategy(COUNTER).plan(new ChunkPlanningRequest(
+                new ParsedStructure(null, List.of(block)), config,
+                ContextConfig.generalDefaults(), 512));
+
+        assertEquals(List.of(4_000, 3_955, 45), result.drafts().stream()
+                .map(draft -> draft.content().codePointCount(0, draft.content().length())).toList());
+        assertEquals(body.substring(4_000, 7_955), result.drafts().get(1).content());
     }
 
     @org.junit.jupiter.api.Test
@@ -108,6 +130,7 @@ class GeneralChunkingPerformanceTest {
         GeneralChunkConfig config = new GeneralChunkConfig("\n\n", DelimiterMode.LITERAL,
                 4000, false, false, false);
         ContextConfig context = ContextConfig.generalDefaults();
+        CountingTokenCounter counter = new CountingTokenCounter(COUNTER);
 
         long extractionStart = System.nanoTime();
         var capability = registry.probe(source, type);
@@ -132,11 +155,11 @@ class GeneralChunkingPerformanceTest {
         for (int index = 0; index < cleaned.segments().size(); index++) {
             CleanedSegment segment = cleaned.segments().get(index);
             blocks.add(segment.toStructuredBlock("performance-" + index,
-                    COUNTER.count(segment.text())));
+                    counter.count(segment.text())));
         }
         FileResource resource = new FileResource(1L, 10L, 20L, null,
                 source.getFileName().toString(), type, source);
-        var planned = new GeneralChunkPlanningStrategy(COUNTER).plan(new ChunkPlanningRequest(
+        var planned = new GeneralChunkPlanningStrategy(counter).plan(new ChunkPlanningRequest(
                 new ParsedStructure(resource, blocks), config, context, 512));
         Duration planning = elapsed(planningStart);
 
@@ -145,11 +168,11 @@ class GeneralChunkingPerformanceTest {
             int characterBudget = index == 0 ? 4000 : 3955;
             assertTrue(planned.drafts().get(index).content().codePointCount(
                     0, planned.drafts().get(index).content().length()) <= characterBudget);
-            assertTrue(COUNTER.count(planned.drafts().get(index).content()) <= 512);
+            assertTrue(counter.count(planned.drafts().get(index).content()) <= 512);
         }
         if (!"pdf".equals(type)) {
             assertTrue(planned.drafts().stream().anyMatch(draft ->
-                            COUNTER.count(draft.content()) >= 450),
+                            counter.count(draft.content()) >= 450),
                     "large text fixtures must exercise high-token planning");
             assertTrue(scanner.delimiterMatched(), "large text fixtures are delimiter-dense");
         } else {
@@ -170,7 +193,7 @@ class GeneralChunkingPerformanceTest {
                 normalization.toMillis(), cleaning.toMillis(), planning.toMillis(),
                 planned.drafts().size());
         return new PipelineMetrics(extraction, normalization, cleaning, planning,
-                planned.drafts().size());
+                planned.drafts().size(), counter.calls());
     }
 
     private Duration elapsed(long start) {
@@ -243,6 +266,31 @@ class GeneralChunkingPerformanceTest {
     }
 
     private record PipelineMetrics(Duration extraction, Duration normalization,
-                                   Duration cleaning, Duration planning, int chunks) {
+                                   Duration cleaning, Duration planning, int chunks,
+                                   long tokenCounterCalls) {
+    }
+
+    private static final class CountingTokenCounter implements TokenCounter {
+        private final TokenCounter delegate;
+        private final AtomicLong calls = new AtomicLong();
+
+        private CountingTokenCounter(TokenCounter delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public int count(String text) {
+            calls.incrementAndGet();
+            return delegate.count(text);
+        }
+
+        @Override
+        public String id() {
+            return delegate.id();
+        }
+
+        private long calls() {
+            return calls.get();
+        }
     }
 }

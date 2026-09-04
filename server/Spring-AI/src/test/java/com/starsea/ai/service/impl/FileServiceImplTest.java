@@ -41,6 +41,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -366,7 +367,8 @@ class FileServiceImplTest {
         ManagedExtractionCache.ManagedFileQuarantine quarantine =
                 mock(ManagedExtractionCache.ManagedFileQuarantine.class);
         when(extractionCache.quarantineManagedFiles(1L, 20L)).thenReturn(quarantine);
-        doThrow(new IllegalStateException("cache cleanup failed")).when(quarantine).commit();
+        doThrow(new ManagedExtractionCache.CleanupPendingException(UUID.randomUUID()))
+                .when(quarantine).commit();
         VectorStore vectorStore = mock(VectorStore.class);
         FileController controller = new FileController(service, vectorStore);
 
@@ -376,6 +378,45 @@ class FileServiceImplTest {
         assertFalse(Files.exists(source));
         verify(quarantine).commit();
         verify(vectorStore).delete("(fileId == 20) && tenantId == 1");
+    }
+
+    @Test
+    void post_commit_source_cleanup_failure_persists_a_durable_source_obligation() throws Exception {
+        Path source = uploadDirectory.resolve("1/10/source.txt");
+        Files.createDirectories(source.getParent());
+        Files.writeString(source, "source");
+        com.starsea.ai.domain.File row = new com.starsea.ai.domain.File();
+        row.setId(20L);
+        row.setPath(source.toString());
+        when(fileMapper.selectById(20L)).thenReturn(row);
+        when(fileMapper.deleteById(20L)).thenReturn(1);
+        ManagedExtractionCache.ManagedFileQuarantine quarantine =
+                mock(ManagedExtractionCache.ManagedFileQuarantine.class);
+        when(extractionCache.quarantineManagedFiles(1L, 20L)).thenReturn(quarantine);
+        UUID obligationId = UUID.randomUUID();
+        when(extractionCache.persistSourceCleanup(
+                org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(20L), any(Path.class)))
+                .thenReturn(obligationId);
+        FileServiceImpl failingCleanup = new FileServiceImpl(fileMapper, knowledgeFileMapper,
+                knowledgeMapper, processingMapper, extractionCache, extractorRegistry,
+                transactionManager) {
+            @Override
+            protected void deleteCommittedSource(Path sourceQuarantine) throws IOException {
+                throw new IOException("deliberate source cleanup failure");
+            }
+        };
+        ReflectionTestUtils.setField(failingCleanup, "path", uploadDirectory.toString());
+
+        assertTrue(failingCleanup.deleteFile(20L));
+
+        verify(extractionCache).persistSourceCleanup(
+                org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.argThat(path -> path.getFileName().toString()
+                        .contains(".deleting-")));
+        verify(quarantine).commit();
+        assertFalse(Files.exists(source));
     }
 
     @Test
