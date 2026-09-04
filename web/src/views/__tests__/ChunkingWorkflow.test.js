@@ -7,6 +7,7 @@ import {
   getChunks,
   getProcessing,
   getStrategies,
+  reindexChunk,
   updateChunk,
 } from '../../api/chunking'
 import ChunkingWorkspace from '../ChunkingWorkspace.vue'
@@ -173,6 +174,137 @@ describe('Markdown chunking workflow', () => {
     expect(wrapper.find('[data-testid="open-confirm"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="reindex-chunk"]').exists()).toBe(false)
     expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('completes the GENERAL character workflow through edit, confirmation, and reindex', async () => {
+    getStrategies.mockResolvedValue({
+      data: {
+        fileType: 'txt',
+        strategies: [{
+          code: 'GENERAL', scope: 'GLOBAL', available: true,
+          supportedFileTypes: ['*'], plannerVersion: 'general-deterministic-v1',
+          configFields: [
+            { key: 'delimiter', defaultValue: '\n' },
+            { key: 'delimiterMode', defaultValue: 'LITERAL' },
+            { key: 'maxCharacters', defaultValue: 96, min: 64, max: 4000 },
+            { key: 'collapseWhitespace', defaultValue: false },
+            { key: 'removeUrls', defaultValue: true },
+            { key: 'removeEmails', defaultValue: false },
+          ],
+          defaultContextConfig: { enabled: true, limit: 16, unit: 'CHARACTERS', mode: 'CHARACTER_TAIL' },
+        }],
+      },
+    })
+    let fileState = 2
+    let fileLock = 2
+    let chunks = [
+      {
+        publicId: 'general-1', position: 0, content: '第一块通用正文。', sectionPath: [],
+        sourceLocator: { type: 'TEXT', startOffset: 0, endOffset: 8 }, tokenCount: 8,
+        status: 0, isModified: false, lockVersion: 0, overlapEnabled: true,
+        overlapLimit: 16, overlapUnit: 'CHARACTERS', overlapContent: null,
+        overlapTokenCount: 0, overlapCharacterCount: 0, overlapActualLength: 0,
+        overlapReductionReason: 'FIRST_CHUNK', overlapUnavailableReason: 'NO_AVAILABLE_OVERLAP',
+        lengthUnit: 'CHARACTERS', bodyLength: 8, indexLength: 8,
+        boundaryReason: { start: 'DOCUMENT_START', end: 'USER_DELIMITER', forcedSplit: false },
+      },
+      {
+        publicId: 'general-2', position: 1, content: '第二块通用正文。', sectionPath: [],
+        sourceLocator: { type: 'TEXT', startOffset: 9, endOffset: 17 }, tokenCount: 8,
+        status: 0, isModified: false, lockVersion: 0, overlapEnabled: true,
+        overlapLimit: 16, overlapUnit: 'CHARACTERS', overlapContent: '第一块通用正文。',
+        overlapTokenCount: 8, overlapCharacterCount: 8, overlapActualLength: 8,
+        overlapReductionReason: 'CONFIGURED_LIMIT', overlapUnavailableReason: null,
+        lengthUnit: 'CHARACTERS', bodyLength: 8, indexLength: 21,
+        boundaryReason: { start: 'USER_DELIMITER', end: 'DOCUMENT_END', forcedSplit: false },
+      },
+    ]
+    const generalProcessing = () => ({
+      data: {
+        state: fileState, failedFromState: null, progress: fileState === 6 ? 100 : 0,
+        lastError: null, lockVersion: fileLock, strategyCode: 'GENERAL',
+        policySnapshot: { delimiter: '\n', delimiterMode: 'LITERAL', maxCharacters: 96, collapseWhitespace: false, removeUrls: true, removeEmails: false },
+        contextPolicy: { enabled: true, limit: 16, unit: 'CHARACTERS', mode: 'CHARACTER_TAIL' },
+        preprocessingSummary: { whitespaceMatches: 2, whitespaceCharactersRemoved: 3, urlMatches: 1, urlCharactersReplaced: 18, emailMatches: 0, emailCharactersReplaced: 0, controlCharactersRemoved: 1, emptySegmentsRemoved: 0 },
+        delimiterMatched: true, forcedSplitCount: 0, tokenLimitedSplitCount: 0,
+      },
+    })
+    getProcessing.mockImplementation(() => Promise.resolve(generalProcessing()))
+    getChunks.mockImplementation(() => Promise.resolve({ data: chunks.map(chunk => ({ ...chunk })) }))
+    updateChunk.mockImplementation((knowledgeId, fileId, chunkId, request) => {
+      const index = chunks.findIndex(chunk => chunk.publicId === chunkId)
+      chunks[index] = {
+        ...chunks[index], content: request.content, status: 0, isModified: true,
+        lockVersion: chunks[index].lockVersion + 1,
+      }
+      if (index + 1 < chunks.length) {
+        chunks[index + 1] = {
+          ...chunks[index + 1], status: 0, isModified: true,
+          lockVersion: chunks[index + 1].lockVersion + 1,
+          overlapContent: request.content.slice(-16), overlapCharacterCount: 16,
+          overlapActualLength: 16, overlapReductionReason: 'CHARACTER_LIMIT',
+        }
+      }
+      fileState = 3
+      fileLock += 1
+      return Promise.resolve({ data: { ...chunks[index] } })
+    })
+    confirmVectorization.mockImplementation(() => {
+      fileState = 5
+      fileLock += 1
+      return Promise.resolve({ status: 202 })
+    })
+    reindexChunk.mockImplementation((knowledgeId, fileId, chunkId) => {
+      chunks = chunks.map(chunk => chunk.publicId === chunkId
+        ? { ...chunk, status: 2, isModified: true, lockVersion: chunk.lockVersion + 2 }
+        : chunk)
+      fileState = 6
+      fileLock += 2
+      return Promise.resolve({ status: 202 })
+    })
+
+    const wrapper = mountWorkspace()
+    await flushPromises()
+    expect(wrapper.text()).toContain('正文 8 字符')
+    expect(wrapper.text()).toContain('分隔符已匹配')
+    expect(wrapper.text()).toContain('URL1 处 / 替换 18 字符')
+    expect(wrapper.text()).toContain('已按配置上限缩减')
+
+    await wrapper.findAll('[data-testid="edit-chunk"]')[0].trigger('click')
+    await wrapper.findAll('textarea')[0].setValue('第一块正文已经人工更新，直接影响后继。')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+    expect(updateChunk).toHaveBeenCalledWith('10', '20', 'general-1', expect.objectContaining({
+      overlapUnit: 'CHARACTERS', overlapLimit: 16,
+    }))
+    expect(wrapper.text()).toContain('已按字符上限缩减')
+    expect(wrapper.get('[data-testid="overlap-content"]').text()).toContain('接影响后继')
+
+    await wrapper.get('[data-testid="open-confirm"]').trigger('click')
+    await flushPromises()
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog.querySelector('[data-testid="confirm-enabled-count"]').textContent).toContain('2')
+    expect(dialog.textContent).toContain('字符 2 块')
+    dialog.querySelector('[data-testid="confirm-vectorization"]').click()
+    await flushPromises()
+    expect(confirmVectorization).toHaveBeenCalledWith('10', '20', { lockVersion: 3 })
+
+    fileState = 6
+    chunks = chunks.map(chunk => ({ ...chunk, status: 2 }))
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="vectorization-complete"]').text()).toContain('2 个分块')
+
+    await wrapper.findAll('[data-testid="edit-chunk"]')[1].trigger('click')
+    await wrapper.findAll('textarea')[0].setValue('第二块完成后再次编辑。')
+    await vi.advanceTimersByTimeAsync(650)
+    await flushPromises()
+    const reindex = wrapper.get('[data-testid="reindex-chunk"]')
+    await reindex.trigger('click')
+    await flushPromises()
+    expect(reindexChunk).toHaveBeenCalledWith('10', '20', 'general-2')
+    expect(wrapper.get('[data-testid="vectorization-complete"]').text()).toContain('索引建立完成')
     wrapper.unmount()
   })
 })

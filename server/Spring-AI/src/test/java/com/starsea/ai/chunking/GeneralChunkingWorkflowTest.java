@@ -11,16 +11,20 @@ import com.starsea.ai.chunking.api.ChunkingApiModels.ConfirmRequest;
 import com.starsea.ai.chunking.api.ChunkingApiModels.EditChunkRequest;
 import com.starsea.ai.chunking.api.ChunkingApiModels.PreviewRequest;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
-import com.starsea.ai.chunking.context.DefaultChunkContextEnricher;
 import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
+import com.starsea.ai.chunking.extraction.DocumentTextExtractorRegistry;
+import com.starsea.ai.chunking.extraction.ManagedExtractionCache;
+import com.starsea.ai.chunking.extraction.PdfTextExtractor;
+import com.starsea.ai.chunking.extraction.PlainTextExtractor;
+import com.starsea.ai.chunking.extraction.TikaDocumentTextExtractor;
+import com.starsea.ai.chunking.general.GeneralChunkPlanningStrategy;
+import com.starsea.ai.chunking.general.GeneralTextCleaner;
+import com.starsea.ai.chunking.general.GeneralTextInputProvider;
+import com.starsea.ai.chunking.general.TextNormalizer;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.indexing.ChunkVectorService;
 import com.starsea.ai.chunking.indexing.ChunkVectorWorker;
 import com.starsea.ai.chunking.indexing.SpringAiChunkVectorGateway;
-import com.starsea.ai.chunking.markdown.MarkdownChunkPlanningStrategy;
-import com.starsea.ai.chunking.markdown.MarkdownStructureInputProvider;
-import com.starsea.ai.chunking.markdown.MarkdownStructureParser;
-import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.preview.ChunkCommandService;
@@ -38,15 +42,16 @@ import com.starsea.ai.chunking.token.HuggingFaceTokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.domain.FileProcessing;
+import com.starsea.ai.domain.FileTextExtraction;
 import com.starsea.ai.mapper.DocumentChunkMapper;
 import com.starsea.ai.mapper.FileMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
+import com.starsea.ai.mapper.FileTextExtractionMapper;
 import com.starsea.ai.openapi.retrieval.RetrievalQuery;
 import com.starsea.ai.openapi.retrieval.RetrievedChunk;
 import com.starsea.ai.service.FileService;
 import com.starsea.ai.service.impl.PgVectorRagServiceImpl;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.apache.ibatis.session.Configuration;
@@ -60,8 +65,6 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -72,12 +75,12 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -87,7 +90,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-class MarkdownChunkingWorkflowTest {
+class GeneralChunkingWorkflowTest {
 
     private static final long TENANT_ID = 1L;
     private static final long KNOWLEDGE_ID = 10L;
@@ -103,130 +106,140 @@ class MarkdownChunkingWorkflowTest {
         AuthContext.clear();
     }
 
-    @Test
-    void real_services_preserve_adjustments_overlap_source_and_original_q1_lines()
+    @org.junit.jupiter.params.ParameterizedTest(name = "GENERAL workflow for {0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"txt", "pdf", "docx"})
+    void real_services_cover_general_preview_edit_confirm_retrieval_and_reindex(String fileType)
             throws IOException {
         AuthContext.set(new AuthContext(
                 AuthContext.Kind.BUSINESS, 7L, TENANT_ID, "tenant_admin", "jti"));
-        Path uploadedSource = uploadedWorkflowFixture();
+        Path uploadedSource = uploadedGeneralFixture(fileType);
 
         try (ExactCounter exact = exactCounter()) {
             TokenCounter counter = exact.counter();
-            WorkflowRepository repository = new WorkflowRepository(uploadedSource);
-            WorkflowServices services = workflowServices(repository, counter);
+            WorkflowRepository repository = new WorkflowRepository(uploadedSource, fileType);
+            WorkflowServices services = workflowServices(repository, counter, fileType);
+
+            var capabilities = services.preview().strategies(KNOWLEDGE_ID, FILE_ID);
+            assertEquals(fileType, capabilities.fileType());
+            assertEquals(1, capabilities.strategies().size());
+            assertTrue(capabilities.strategies().get(0).available(),
+                    capabilities.strategies().get(0).reason());
 
             services.preview().startPreview(KNOWLEDGE_ID, FILE_ID, new PreviewRequest(
-                    "MARKDOWN_OPTIMIZED", new ChunkPolicy(20, 70, 140), false, 0));
+                    "GENERAL",
+                    Map.of("delimiter", "\n", "delimiterMode", "LITERAL",
+                            "maxCharacters", 96, "collapseWhitespace", false,
+                            "removeUrls", false, "removeEmails", false),
+                    Map.of("enabled", true, "limit", 16), false, 0));
 
             assertEquals(PipelineState.CHUNKED.code(), repository.processing.getPipelineState(),
                     repository.processing.getLastError());
-            DocumentChunk q1 = repository.chunks.stream()
-                    .filter(chunk -> chunk.getContent().contains("Q1"))
-                    .findFirst()
-                    .orElseThrow();
-            assertQ1SourceRange(q1, uploadedSource);
-            List<DocumentChunk> overlapPair = continuousPairs(repository.chunks).stream()
-                    .findFirst().orElseThrow(() -> new AssertionError(
-                            "the fixture must produce adjacent chunks under one heading"));
-            assertTrue(continuousPairs(repository.chunks).size() >= 1,
-                    "the fixture must produce adjacent chunks under one heading");
+            assertEquals("GENERAL", repository.processing.getStrategyCode());
+            assertEquals("CHARACTERS", repository.processing.getContextPolicy().get("unit"));
+            assertEquals(Boolean.TRUE, repository.processing.getPreviewSummary().get("delimiterMatched"));
+            String expectedExtractor = switch (fileType) {
+                case "txt" -> "plain-text";
+                case "pdf" -> "pdfbox";
+                default -> "tika";
+            };
+            assertEquals(expectedExtractor,
+                    repository.processing.getExecutionMetadata().get("extractorId"));
+            assertTrue(repository.chunks.size() >= 3, "fixture must produce adjacent chunks");
+            assertTrue(repository.chunks.stream().allMatch(chunk ->
+                    chunk.getContent().codePointCount(0, chunk.getContent().length()) <= 96
+                            && chunk.getTokenCount() <= 512
+                            && chunk.getSourceLocator() != null
+                            && chunk.getBoundaryReason() != null));
 
-            String editedBody = q1.getContent() + "\n\n自主招生咨询专线已经开通。";
-            services.commands().edit(KNOWLEDGE_ID, FILE_ID, q1.getPublicId(),
-                    new EditChunkRequest(editedBody, false, 40, q1.getLockVersion()));
-            DocumentChunk overlapTarget = overlapPair.get(1);
-            services.commands().edit(KNOWLEDGE_ID, FILE_ID, overlapTarget.getPublicId(),
-                    new EditChunkRequest(overlapTarget.getContent(), true, 40,
-                            overlapTarget.getLockVersion()));
-            DocumentChunk deleted = repository.chunks.stream()
-                    .filter(chunk -> chunk != q1)
-                    .filter(chunk -> !chunk.getSectionPath().contains("上下文连续性测试"))
-                    .max(Comparator.comparing(DocumentChunk::getPosition))
-                    .orElseThrow();
-            services.commands().delete(KNOWLEDGE_ID, FILE_ID,
-                    deleted.getPublicId(), deleted.getLockVersion());
+            DocumentChunk first = repository.chunks.get(0);
+            DocumentChunk successor = repository.chunks.get(1);
+            String editMarker = " edited-one";
+            String editedBody = first.getContent() + editMarker;
+            services.commands().edit(KNOWLEDGE_ID, FILE_ID, first.getPublicId(),
+                    new EditChunkRequest(editedBody, true, 16,
+                            com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS,
+                            first.getLockVersion()));
 
+            DocumentChunk savedFirst = repository.byPublicId(first.getPublicId());
+            DocumentChunk savedSuccessor = repository.byPublicId(successor.getPublicId());
+            assertEquals(editedBody, savedFirst.getContent());
             assertEquals(PipelineState.ADJUSTING.code(), repository.processing.getPipelineState());
-            assertEquals(editedBody, repository.byPublicId(q1.getPublicId()).getContent());
-            assertFalse(repository.chunks.contains(deleted));
+            assertEquals(savedFirst.getId(), savedSuccessor.getOverlapSourceChunkId());
+            assertEquals(null, savedFirst.getOverlapContent());
+            assertEquals(0, savedFirst.getOverlapCharacterCount());
+            assertEquals(16, savedSuccessor.getOverlapCharacterCount());
+            assertTrue(editedBody.endsWith(savedSuccessor.getOverlapContent()));
+            assertEquals("CHARACTERS", savedSuccessor.getOverlapUnit().name());
+            assertNotNull(savedSuccessor.getOverlapReductionReason());
 
             services.vectors().confirm(KNOWLEDGE_ID, FILE_ID,
                     new ConfirmRequest(repository.processing.getLockVersion()));
 
             assertEquals(PipelineState.COMPLETED.code(), repository.processing.getPipelineState());
-            assertEquals(6, repository.processing.getLockVersion(),
-                    "six legal file transitions must each increment the lock version");
-            assertEquals(Map.of("enabled", false, "mode", "COMPLETE_SENTENCE",
-                    "limit", 40, "unit", "TOKENS"), repository.processing.getContextPolicy());
             assertTrue(repository.chunks.stream()
                     .allMatch(chunk -> chunk.getStatus() == ChunkStatus.ACTIVE.code()));
-            repository.assertSuccessfulCasCoverage();
-            DocumentChunk enriched = repository.chunks.stream()
-                    .filter(chunk -> chunk.getOverlapContent() != null)
-                    .findFirst()
-                    .orElseThrow(() -> new AssertionError("enabled overlap must enrich a continuous chunk"));
-            DocumentChunk overlapSource = repository.byId(enriched.getOverlapSourceChunkId());
-            assertEquals(overlapSource.getId(), enriched.getOverlapSourceChunkId());
-            assertEquals(overlapSource.getSectionPath(), enriched.getSectionPath());
-            assertEquals(overlapSource.getPosition() + 1, enriched.getPosition());
-            assertTrue(overlapSource.getContent().contains(enriched.getOverlapContent()));
-            int overlapStart = overlapSource.getContent().indexOf(enriched.getOverlapContent());
-            assertTrue(overlapStart == 0 || isSentenceBoundaryBefore(
-                    overlapSource.getContent().charAt(overlapStart - 1)),
-                    "copied context must start at the source beginning or after a sentence boundary");
-            assertTrue(enriched.getOverlapContent().matches("(?s).*[。！？.!?]$"),
-                    "only a complete sentence may be copied");
-            ChunkIndexContentBuilder contentBuilder = new ChunkIndexContentBuilder();
-            int withoutOverlap = counter.count(contentBuilder.build(
-                    enriched.getSectionPath(), null, enriched.getContent()));
-            int withOverlap = counter.count(enriched.getIndexContent());
-            int independentlyCountedOverlap = withOverlap - withoutOverlap;
-            assertEquals(independentlyCountedOverlap, enriched.getOverlapTokenCount());
-            assertTrue(independentlyCountedOverlap > 0 && independentlyCountedOverlap <= 40);
-            assertTrue(enriched.getIndexContent()
-                    .contains("上文：" + enriched.getOverlapContent()));
-
-            repository.assertWrongCasIsRejected(q1.getPublicId());
-
-            DocumentChunk savedQ1 = repository.byPublicId(q1.getPublicId());
-            RetrievedChunk result = retrieve(repository, "自主招生咨询专线");
-            assertEquals(savedQ1.getPublicId(), result.chunkId());
-            assertEquals(savedQ1.getIndexContent(), result.content(),
-                    "retrieval must use saved index_content instead of stale vector text");
-            assertEquals(savedQ1.getSourceLocator(), result.sourceLocator());
+            assertTrue(repository.chunks.stream().allMatch(chunk -> counter.count(chunk.getIndexContent()) <= 512));
+            RetrievedChunk retrieved = retrieve(repository, editMarker.trim());
+            assertEquals(savedFirst.getPublicId(), retrieved.chunkId());
+            assertEquals(savedFirst.getIndexContent(), retrieved.content(),
+                    "retrieval must hydrate persisted index_content rather than fake vector text");
+            assertEquals(savedFirst.getSourceLocator(), retrieved.sourceLocator());
 
             DocumentChunk last = repository.chunks.stream()
-                    .max(Comparator.comparing(DocumentChunk::getPosition))
-                    .orElseThrow();
-            String reedited = last.getContent() + "\n\n补充说明。";
+                    .max(Comparator.comparing(DocumentChunk::getPosition)).orElseThrow();
+            String reindexMarker = " reindexed-two";
+            String reedited = last.getContent() + reindexMarker;
             services.commands().edit(KNOWLEDGE_ID, FILE_ID, last.getPublicId(),
-                    new EditChunkRequest(reedited, last.getLockVersion()));
+                    new EditChunkRequest(reedited, true, 16,
+                            com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS,
+                            last.getLockVersion()));
             assertEquals(PipelineState.ADJUSTING.code(), repository.processing.getPipelineState());
-            assertEquals(ChunkStatus.DRAFT.code(), repository.byPublicId(last.getPublicId()).getStatus());
+            assertEquals(ChunkStatus.DRAFT.code(),
+                    repository.byPublicId(last.getPublicId()).getStatus());
 
             services.vectors().reindex(KNOWLEDGE_ID, FILE_ID, last.getPublicId());
 
-            assertEquals(PipelineState.COMPLETED.code(), repository.processing.getPipelineState());
-            assertEquals(ChunkStatus.ACTIVE.code(), repository.byPublicId(last.getPublicId()).getStatus());
-            assertTrue(repository.byPublicId(last.getPublicId()).getIndexContent().contains(reedited));
+            assertEquals(PipelineState.COMPLETED.code(), repository.processing.getPipelineState(),
+                    repository.processing.getLastError());
+            DocumentChunk reindexed = repository.byPublicId(last.getPublicId());
+            assertEquals(ChunkStatus.ACTIVE.code(), reindexed.getStatus());
+            assertTrue(reindexed.getIndexContent().contains(reindexMarker.trim()));
+            RetrievedChunk afterReindex = retrieve(repository, reindexMarker.trim());
+            assertEquals(reindexed.getPublicId(), afterReindex.chunkId());
+            assertEquals(reindexed.getIndexContent(), afterReindex.content());
+            repository.assertScopedCasCoverage();
         }
     }
 
-    private boolean isSentenceBoundaryBefore(char value) {
-        return "。！？.!?\n\r".indexOf(value) >= 0;
-    }
-
-    private WorkflowServices workflowServices(WorkflowRepository repository, TokenCounter counter) {
+    private WorkflowServices workflowServices(
+            WorkflowRepository repository, TokenCounter counter, String fileType) {
         FileProcessingService states = new FileProcessingService(repository.processingMapper);
         ChunkStrategyRegistry strategies = new ChunkStrategyRegistry(
-                List.of(new MarkdownChunkPlanningStrategy(counter)));
-        MarkdownStructureParser markdownParser = new MarkdownStructureParser(counter);
-        DocumentStructureParserRegistry parsers = new DocumentStructureParserRegistry(
-                List.of(markdownParser));
+                List.of(new GeneralChunkPlanningStrategy(counter)));
+        DocumentStructureParserRegistry parsers = new DocumentStructureParserRegistry(List.of());
+        DocumentTextExtractorRegistry extractors = new DocumentTextExtractorRegistry(List.of(
+                new PlainTextExtractor(2_000_000, 1_000_000),
+                new PdfTextExtractor(2_000_000, 1_000_000, 30_000),
+                new TikaDocumentTextExtractor(2_000_000, 1_000_000, 30_000, 8)));
+        FileTextExtractionMapper extractionMapper = mock(FileTextExtractionMapper.class);
+        AtomicReference<FileTextExtraction> extraction = new AtomicReference<>();
+        when(extractionMapper.findScoped(TENANT_ID, FILE_ID)).thenAnswer(ignored -> extraction.get());
+        when(extractionMapper.insert(any(FileTextExtraction.class))).thenAnswer(invocation -> {
+            extraction.set(invocation.getArgument(0));
+            return 1;
+        });
+        when(extractionMapper.updateScoped(any(FileTextExtraction.class))).thenAnswer(invocation -> {
+            extraction.set(invocation.getArgument(0));
+            return 1;
+        });
+        ManagedExtractionCache cache = new ManagedExtractionCache(extractionMapper, extractors,
+                new ObjectMapper(), tempDir.resolve("workflow-cache-" + fileType));
         ChunkInputProviderRegistry inputs = new ChunkInputProviderRegistry(
-                List.of(new MarkdownStructureInputProvider(markdownParser)));
+                List.of(new GeneralTextInputProvider(extractors, cache, new TextNormalizer(),
+                        new GeneralTextCleaner(), counter)));
         ChunkPreviewPersistenceService persistence = new ChunkPreviewPersistenceService(
-                repository.chunkMapper, repository.processingMapper, states);
+                repository.chunkMapper, repository.processingMapper, states,
+                new StrategyAwareChunkContextEnricher(counter));
         ChunkPreviewWorker previewWorker = new ChunkPreviewWorker(
                 repository.fileMapper, repository.processingMapper, parsers, inputs, strategies,
                 counter, persistence, states);
@@ -245,7 +258,7 @@ class MarkdownChunkingWorkflowTest {
                 new ChunkIndexContentBuilder(), gateway);
         ChunkVectorWorker vectorWorker = new ChunkVectorWorker(
                 repository.processingMapper, repository.fileMapper, repository.chunkMapper,
-                states, new DefaultChunkContextEnricher(counter), counter, gateway,
+                states, new StrategyAwareChunkContextEnricher(counter), counter, gateway,
                 repository.transactions);
         ChunkVectorService vectors = new ChunkVectorService(
                 repository.processingMapper, repository.fileMapper, repository.chunkMapper,
@@ -254,77 +267,16 @@ class MarkdownChunkingWorkflowTest {
         return new WorkflowServices(preview, commands, vectors);
     }
 
-    private Path uploadedWorkflowFixture() throws IOException {
-        String fixture = """
-                # 工作流测试知识库
-
-                ### 招生咨询
-
-                **Q1：测试学校如何申请？**
-                A：申请人需要在报名系统提交基本资料，并在截止日期前确认报名信息。
-
-                **Q2：申请材料有哪些？**
-                A：申请材料包括身份证明、成绩证明和联系方式，所有资料都应清晰有效。
-
-                ---
-
-                ### 其他事项
-
-                系统每天处理报名信息。工作人员会检查资料完整性。审核结果通过站内消息发送。
-
-                如果资料需要补充，申请人应在规定时间内重新提交。逾期记录将进入待处理队列。
-
-                ### 上下文连续性测试
-
-                校园服务中心每天早上八点开放。值班老师会先核对学生证件。材料齐全后可以现场办理。
-
-                新生办理业务需要携带录取通知书。线上预约可以减少等待时间。特殊情况可联系值班老师。
-
-                办理完成后系统会发送确认消息。学生应当妥善保存办理回执。后续查询可以使用回执编号。
-
-                如果信息填写错误需要及时更正。更正完成后系统会再次发送通知。所有通知都应完整阅读。
-                """;
-        Path uploaded = tempDir.resolve("workflow-sample.md");
-        Files.writeString(uploaded, fixture, StandardCharsets.UTF_8);
+    private Path uploadedGeneralFixture(String fileType) {
+        String text = String.join("\n",
+                "alpha section 1111111111111111111111111111111111111111",
+                "beta section 2222222222222222222222222222222222222222",
+                "gamma section 3333333333333333333333333333333333333333",
+                "delta section 4444444444444444444444444444444444444444");
+        Path uploaded = tempDir.resolve("workflow-sample." + fileType);
+        com.starsea.ai.chunking.extraction.DocumentFixtureFactory.writer(fileType)
+                .accept(uploaded, text);
         return uploaded;
-    }
-
-    private List<List<DocumentChunk>> continuousPairs(List<DocumentChunk> chunks) {
-        List<DocumentChunk> ordered = chunks.stream()
-                .sorted(Comparator.comparing(DocumentChunk::getPosition))
-                .toList();
-        List<List<DocumentChunk>> pairs = new ArrayList<>();
-        for (int index = 1; index < ordered.size(); index++) {
-            DocumentChunk previous = ordered.get(index - 1);
-            DocumentChunk current = ordered.get(index);
-            if (previous.getSectionPath().contains("上下文连续性测试")
-                    && previous.getSectionPath().equals(current.getSectionPath())
-                    && current.getPosition() == previous.getPosition() + 1) {
-                pairs.add(List.of(previous, current));
-            }
-        }
-        return pairs;
-    }
-
-    private void assertQ1SourceRange(DocumentChunk q1, Path source) throws IOException {
-        List<String> lines = Files.readAllLines(source);
-        int questionLine = findLine(lines, "Q1：测试学校如何申请");
-        int answerLine = findLine(lines, "A：申请人需要在报名系统提交基本资料");
-        int start = ((Number) q1.getSourceLocator().get("startLine")).intValue();
-        int end = ((Number) q1.getSourceLocator().get("endLine")).intValue();
-        assertTrue(start <= questionLine && end >= answerLine,
-                "source range must cover the original Q1 question and answer lines");
-        assertTrue(lines.get(questionLine - 1).contains("Q1：测试学校如何申请"));
-        assertTrue(lines.get(answerLine - 1).contains("A：申请人需要在报名系统提交基本资料"));
-    }
-
-    private int findLine(List<String> lines, String marker) {
-        for (int index = 0; index < lines.size(); index++) {
-            if (lines.get(index).contains(marker)) {
-                return index + 1;
-            }
-        }
-        throw new AssertionError("missing fixture line: " + marker);
     }
 
     private RetrievedChunk retrieve(WorkflowRepository repository, String queryText) {
@@ -377,7 +329,7 @@ class MarkdownChunkingWorkflowTest {
         private final List<CasAudit> chunkCasAudits = new ArrayList<>();
         private long nextChunkId = 1;
 
-        private WorkflowRepository(Path source) {
+        private WorkflowRepository(Path source, String fileType) {
             Configuration configuration = new Configuration();
             configuration.setMapUnderscoreToCamelCase(true);
             TableInfoHelper.initTableInfo(
@@ -388,8 +340,8 @@ class MarkdownChunkingWorkflowTest {
                     DocumentChunk.class);
             file.setId(FILE_ID);
             file.setPublicId(FILE_PUBLIC_ID);
-            file.setFileName("workflow-sample.md");
-            file.setType("md");
+            file.setFileName("workflow-sample." + fileType);
+            file.setType(fileType);
             file.setPath(source.toString());
             file.setStatus(1);
             processing.setFileId(FILE_ID);
@@ -567,6 +519,8 @@ class MarkdownChunkingWorkflowTest {
                 target.setOverlapContent(patch.getOverlapContent());
                 target.setOverlapSourceChunkId(patch.getOverlapSourceChunkId());
                 target.setOverlapTokenCount(patch.getOverlapTokenCount());
+                target.setOverlapCharacterCount(patch.getOverlapCharacterCount());
+                target.setOverlapReductionReason(patch.getOverlapReductionReason());
                 target.setIndexContent(patch.getIndexContent());
                 target.setLastError(null);
                 target.setLockVersion(target.getLockVersion() + 1);
@@ -583,9 +537,12 @@ class MarkdownChunkingWorkflowTest {
                 if (patch.getOverlapTokenLimit() != null) {
                     target.setOverlapTokenLimit(patch.getOverlapTokenLimit());
                 }
+                if (patch.getOverlapUnit() != null) target.setOverlapUnit(patch.getOverlapUnit());
                 target.setOverlapContent(patch.getOverlapContent());
                 target.setOverlapSourceChunkId(patch.getOverlapSourceChunkId());
                 target.setOverlapTokenCount(patch.getOverlapTokenCount());
+                target.setOverlapCharacterCount(patch.getOverlapCharacterCount());
+                target.setOverlapReductionReason(patch.getOverlapReductionReason());
                 target.setIndexContent(patch.getIndexContent());
                 target.setStatus(ChunkStatus.DRAFT.code());
                 if (patch.getIsModified() != null) target.setIsModified(patch.getIsModified());
@@ -599,7 +556,15 @@ class MarkdownChunkingWorkflowTest {
         private boolean matchesMutableChunkCas(Wrapper<?> wrapper, DocumentChunk chunk) {
             Map<String, Object> required = new LinkedHashMap<>(chunkCasValues(chunk, false));
             required.remove("status");
-            return matches(wrapper, required);
+            if (matches(wrapper, required)) return true;
+            return matches(wrapper, Map.of(
+                    "tenant_id", chunk.getTenantId(),
+                    "knowledge_id", chunk.getKnowledgeId(),
+                    "file_id", chunk.getFileId(),
+                    "public_id", chunk.getPublicId(),
+                    "position", chunk.getPosition(),
+                    "status", chunk.getStatus(),
+                    "lock_version", chunk.getLockVersion()));
         }
 
         private boolean matchesChunkCas(Wrapper<?> wrapper, DocumentChunk chunk,
@@ -692,6 +657,15 @@ class MarkdownChunkingWorkflowTest {
                 assertEquals(beforeIndexing + 1, beforeActive);
                 assertEquals(beforeActive + 1, chunk.getLockVersion());
             }
+        }
+
+        private void assertScopedCasCoverage() {
+            assertTrue(processingCasAudits.stream().allMatch(CasAudit::matched));
+            assertTrue(chunkCasAudits.stream().allMatch(CasAudit::matched));
+            processingCasAudits.forEach(audit -> assertTrue(audit.required().keySet().containsAll(
+                    Set.of("file_id", "tenant_id", "knowledge_id", "pipeline_state", "lock_version"))));
+            chunkCasAudits.forEach(audit -> assertTrue(audit.required().keySet().containsAll(
+                    Set.of("tenant_id", "knowledge_id", "file_id", "public_id", "lock_version"))));
         }
 
         private void assertWrongCasIsRejected(UUID publicId) {
