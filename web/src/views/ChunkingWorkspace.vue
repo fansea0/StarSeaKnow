@@ -6,7 +6,11 @@
         <h1>分块设置与预览</h1>
         <p>生成、检查并确认这份文档的语义分块。</p>
       </div>
-      <el-button @click="reloadWorkspace">重新加载</el-button>
+      <el-button
+        data-testid="reload-workspace"
+        :disabled="fileMutationInProgress"
+        @click="reloadWorkspace"
+      >重新加载</el-button>
     </header>
 
     <section class="chunking-layout workspace-panel">
@@ -362,6 +366,7 @@ export default {
       return !this.destroyed && context.generation === this.requestGeneration && context.routeKey === this.activeRouteKey
     },
     startRoute(key) {
+      if (key === this.activeRouteKey && this.fileMutationInProgress) return
       this.requestGeneration += 1
       this.activeRouteKey = key
       this.stopPolling()
@@ -592,6 +597,7 @@ export default {
       }
     },
     reloadWorkspace() {
+      if (this.fileMutationInProgress) return
       this.startRoute(this.routeKey)
     },
     retryProcessingLoad() {

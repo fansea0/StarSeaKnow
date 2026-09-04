@@ -378,6 +378,18 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.text()).not.toContain('空白处理')
   })
 
+  it('renders a valid zero source offset through the workspace chunk card', async () => {
+    getProcessing.mockResolvedValue(processing(2))
+    getChunks.mockResolvedValue({ data: [{
+      ...draftChunk,
+      sourceLocator: { type: 'TEXT', startOffset: 0, endOffset: 18, regions: [] },
+    }] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="source-locator"]').text()).toContain('字符偏移 0–18')
+  })
+
   it('keeps file submission disabled until the initial processing lockVersion is loaded', async () => {
     const initialProcessing = deferred()
     getProcessing.mockReturnValue(initialProcessing.promise)
@@ -939,6 +951,58 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.vm.hasBlockingChunkSaves).toBe(false)
     expect(wrapper.get('.chunk-card').attributes('aria-disabled')).toBe('false')
     expect(wrapper.get('[data-testid="create-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('cannot reload or clear deletion ownership while confirmation is pending', async () => {
+    const confirmation = deferred()
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    vi.spyOn(ElMessageBox, 'confirm').mockReturnValue(confirmation.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="delete-chunk"]').trigger('click')
+    await nextTick()
+    const reload = wrapper.get('[data-testid="reload-workspace"]')
+
+    expect(reload.attributes('disabled')).toBeDefined()
+    wrapper.vm.reloadWorkspace()
+    wrapper.vm.startRoute(wrapper.vm.routeKey)
+    await flushPromises()
+    expect(getStrategies).toHaveBeenCalledTimes(1)
+    expect(getProcessing).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.deletingChunkIds.has('chunk-1')).toBe(true)
+
+    confirmation.reject(new Error('cancelled'))
+    await flushPromises()
+    expect(wrapper.vm.fileMutationInProgress).toBe(false)
+  })
+
+  it('cannot reload or clear deletion ownership while DELETE is pending', async () => {
+    const deletion = deferred()
+    getProcessing.mockResolvedValue(processing(3))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    deleteChunk.mockReturnValue(deletion.promise)
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="delete-chunk"]').trigger('click')
+    await flushPromises()
+    expect(deleteChunk).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="reload-workspace"]').attributes('disabled')).toBeDefined()
+
+    wrapper.vm.reloadWorkspace()
+    wrapper.vm.startRoute(wrapper.vm.routeKey)
+    await flushPromises()
+    expect(getStrategies).toHaveBeenCalledTimes(1)
+    expect(getProcessing).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.deletingChunkIds.has('chunk-1')).toBe(true)
+
+    deletion.reject({ response: { status: 503, data: { msg: '删除服务不可用' } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('删除服务不可用')
+    expect(wrapper.vm.fileMutationInProgress).toBe(false)
   })
 
   it('owns the workspace mutation barrier from delete confirmation through refresh', async () => {

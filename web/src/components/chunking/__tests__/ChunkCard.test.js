@@ -314,6 +314,11 @@ describe('ChunkCard', () => {
     expect(provenance).toContain('幻灯片 3')
     expect(provenance).toContain('文档 1')
 
+    const zeroOffset = mountCard({
+      sourceLocator: { type: 'TEXT', startOffset: 0, endOffset: 8, regions: [] },
+    })
+    expect(zeroOffset.get('[data-testid="source-locator"]').text()).toContain('字符偏移 0–8')
+
     expect(mountCard({
       sourceLocator: { type: 'FUTURE', startPage: null, startLine: null, startOffset: null, regions: [] },
     }).find('[data-testid="source-locator"]').exists()).toBe(false)
