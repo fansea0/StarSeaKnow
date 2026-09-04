@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -113,6 +114,53 @@ class GeneralChunkPlanningStrategyTest {
         }
     }
 
+    @Test
+    void cleaned_leading_url_email_and_whitespace_map_split_locators_to_retained_source() {
+        String prefix = " https://drop.test user@example.com \t";
+        String retained = "😀".repeat(70);
+        String source = prefix + retained;
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
+                true, true, true);
+        NormalizedText normalized = new TextNormalizer().normalize(source);
+        CleanedSegment cleaned = new GeneralTextCleaner().clean(
+                new GeneralBoundaryScanner(config).scan(normalized), config, normalized).segments().get(0);
+        StructuredBlock block = cleaned.toStructuredBlock("mapped", UnicodeText.length(cleaned.text()));
+        ChunkPlanningRequest request = new ChunkPlanningRequest(new ParsedStructure(null, List.of(block)),
+                config, disabledContext(), 512);
+
+        List<ChunkDraft> drafts = new GeneralChunkPlanningStrategy(codePointCounter()).plan(request).drafts();
+
+        assertEquals(List.of(64, 6), drafts.stream().map(draft -> UnicodeText.length(draft.content())).toList());
+        assertEquals(prefix.length(), drafts.get(0).sourceLocator().startOffset());
+        assertEquals(prefix.length() + 128, drafts.get(0).sourceLocator().endOffset());
+        assertEquals(prefix.length() + 128, drafts.get(1).sourceLocator().startOffset());
+        assertEquals(source.length(), drafts.get(1).sourceLocator().endOffset());
+    }
+
+    @Test
+    void indexed_planning_work_grows_linearly_for_ten_times_more_input() {
+        AtomicInteger smallCalls = new AtomicInteger();
+        AtomicInteger largeCalls = new AtomicInteger();
+        TokenCounter smallCounter = countingCodePointCounter(smallCalls);
+        TokenCounter largeCounter = countingCodePointCounter(largeCalls);
+        String small = "😀".repeat(640);
+        String large = small.repeat(10);
+
+        UnicodeText.CodePointIndex smallIndex = UnicodeText.index(small);
+        UnicodeText.CodePointIndex largeIndex = UnicodeText.index(large);
+        ChunkPlanningResult smallResult = new GeneralChunkPlanningStrategy(smallCounter).plan(
+                requestWithCounter(small, smallCounter));
+        ChunkPlanningResult largeResult = new GeneralChunkPlanningStrategy(largeCounter).plan(
+                requestWithCounter(large, largeCounter));
+
+        assertEquals(640, smallIndex.scanOperations());
+        assertEquals(6_400, largeIndex.scanOperations());
+        assertEquals(10 * smallIndex.scanOperations(), largeIndex.scanOperations());
+        assertEquals(10 * smallResult.drafts().size(), largeResult.drafts().size());
+        assertTrue(largeCalls.get() <= smallCalls.get() * 11,
+                () -> "token work grew from " + smallCalls + " to " + largeCalls);
+    }
+
     private ChunkPlanningRequest request(List<String> texts, int maxCharacters,
                                          ContextConfig context, int maxTokens) {
         List<StructuredBlock> blocks = java.util.stream.IntStream.range(0, texts.size())
@@ -140,6 +188,27 @@ class GeneralChunkPlanningStrategyTest {
             @Override public int count(String text) { return UnicodeText.length(text); }
             @Override public String id() { return "code-point"; }
         };
+    }
+
+    private TokenCounter countingCodePointCounter(AtomicInteger calls) {
+        return new TokenCounter() {
+            @Override public int count(String text) {
+                calls.incrementAndGet();
+                return UnicodeText.length(text);
+            }
+            @Override public String id() { return "counting-code-point"; }
+        };
+    }
+
+    private ChunkPlanningRequest requestWithCounter(String text, TokenCounter counter) {
+        StructuredBlock block = new StructuredBlock("scale", BlockType.PARAGRAPH, text, text,
+                null, List.of(), counter.count(text),
+                new SourceLocator("TEXT", List.of("scale"), 0, text.length(),
+                        null, null, null, null, List.of()),
+                Map.of("boundaryAfter", "DOCUMENT_END"));
+        return new ChunkPlanningRequest(new ParsedStructure(null, List.of(block)),
+                new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64, false, false, false),
+                disabledContext(), 512);
     }
 
     private void assertWellFormedUtf16(String value) {

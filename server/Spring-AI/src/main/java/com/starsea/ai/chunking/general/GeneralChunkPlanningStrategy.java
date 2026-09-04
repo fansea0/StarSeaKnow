@@ -85,16 +85,17 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
                 current = null;
             }
 
+            UnicodeText.CodePointIndex textIndex = UnicodeText.index(text);
             int consumedCodePoints = 0;
-            int totalCodePoints = UnicodeText.length(text);
+            int totalCodePoints = textIndex.length();
             while (consumedCodePoints < totalCodePoints) {
                 budget = drafts.isEmpty() ? config.maxCharacters() : laterBudget;
                 int remainingCodePoints = totalCodePoints - consumedCodePoints;
                 int characterMaximum = Math.min(budget, remainingCodePoints);
-                String candidate = UnicodeText.substring(
-                        text, consumedCodePoints, consumedCodePoints + characterMaximum);
+                String candidate = textIndex.substring(
+                        consumedCodePoints, consumedCodePoints + characterMaximum);
                 if (remainingCodePoints <= budget && fits(candidate, budget, request.maxIndexTokens())) {
-                    SourceLocator locator = sliceLocator(block.sourceLocator(), text,
+                    SourceLocator locator = sliceLocator(block, textIndex,
                             consumedCodePoints, totalCodePoints);
                     current = new Accumulator(candidate, locator, nextStartReason, boundaryAfter);
                     consumedCodePoints = totalCodePoints;
@@ -110,8 +111,8 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
                 BoundaryUnit split = GeneralBoundaryScanner.scanFallback(candidate, tokenMaximum, null);
                 String endReason = tokenLimited ? BoundaryReason.MODEL_TOKEN_LIMIT : split.boundaryAfter().name();
                 int splitEnd = consumedCodePoints + split.cleanedEnd();
-                String content = UnicodeText.substring(text, consumedCodePoints, splitEnd);
-                SourceLocator locator = sliceLocator(block.sourceLocator(), text, consumedCodePoints, splitEnd);
+                String content = textIndex.substring(consumedCodePoints, splitEnd);
+                SourceLocator locator = sliceLocator(block, textIndex, consumedCodePoints, splitEnd);
                 drafts.add(draft(content, locator, nextStartReason, endReason,
                         split.boundaryAfter() == BoundaryKind.FORCED_CHARACTER));
                 consumedCodePoints = splitEnd;
@@ -138,12 +139,13 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
     }
 
     private int maximumTokenPrefix(String text, int maximumCodePoints, int maxTokens) {
-        if (tokenCounter.count(UnicodeText.prefix(text, maximumCodePoints)) <= maxTokens) return maximumCodePoints;
+        UnicodeText.CodePointIndex index = UnicodeText.index(text);
+        if (tokenCounter.count(index.substring(0, maximumCodePoints)) <= maxTokens) return maximumCodePoints;
         int low = 0;
         int high = maximumCodePoints;
         while (low < high) {
             int middle = (low + high + 1) >>> 1;
-            if (tokenCounter.count(UnicodeText.prefix(text, middle)) <= maxTokens) low = middle;
+            if (tokenCounter.count(index.substring(0, middle)) <= maxTokens) low = middle;
             else high = middle - 1;
         }
         return low;
@@ -166,12 +168,22 @@ public final class GeneralChunkPlanningStrategy implements ChunkPlanningStrategy
         return finalBlock ? BoundaryReason.DOCUMENT_END : BoundaryKind.USER_DELIMITER.name();
     }
 
-    private SourceLocator sliceLocator(SourceLocator source, String text, int codePointStart, int codePointEnd) {
+    private SourceLocator sliceLocator(StructuredBlock block, UnicodeText.CodePointIndex textIndex,
+                                       int codePointStart, int codePointEnd) {
+        SourceLocator source = block.sourceLocator();
         if (source == null) return emptyLocator();
-        int charStart = UnicodeText.charIndex(text, codePointStart);
-        int charEnd = UnicodeText.charIndex(text, codePointEnd);
-        Integer startOffset = source.startOffset() == null ? null : source.startOffset() + charStart;
-        Integer endOffset = source.startOffset() == null ? source.endOffset() : source.startOffset() + charEnd;
+        int charStart = textIndex.charIndex(codePointStart);
+        int charEnd = textIndex.charIndex(codePointEnd);
+        Object mapping = block.attributes().get(CleanedSegment.OFFSET_MAP_ATTRIBUTE);
+        Integer startOffset;
+        Integer endOffset;
+        if (mapping instanceof CleanedOffsetMap offsetMap && charStart < charEnd) {
+            startOffset = offsetMap.sourceStart(charStart);
+            endOffset = offsetMap.sourceEnd(charEnd);
+        } else {
+            startOffset = source.startOffset() == null ? null : source.startOffset() + charStart;
+            endOffset = source.startOffset() == null ? source.endOffset() : source.startOffset() + charEnd;
+        }
         return new SourceLocator(source.type(), source.blockIds(), startOffset, endOffset,
                 source.startLine(), source.endLine(), source.startPage(), source.endPage(), source.regions());
     }

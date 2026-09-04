@@ -84,4 +84,29 @@ class GeneralTextCleanerTest {
         assertEquals(1, result.stats().whitespaceMatches());
         assertEquals(1, result.stats().whitespaceCharactersRemoved());
     }
+
+    @Test
+    void preserves_one_or_two_line_feeds_and_caps_longer_runs_at_two() {
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
+                true, false, false);
+
+        assertEquals("a\nb", clean("a\nb", config));
+        assertEquals("a\n\nb", clean("a\n\nb", config));
+        assertEquals("a\n\nb", clean("a\n\n\n\nb", config));
+    }
+
+    @Test
+    void collapses_horizontal_whitespace_without_trimming_meaningful_line_feeds() {
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
+                true, false, false);
+
+        assertEquals("alpha\nbeta\n\ngamma", clean(" \talpha \n \t beta\n\n\n gamma \t", config));
+        assertEquals("\nalpha\n", clean(" \t\n alpha \n\t ", config));
+    }
+
+    private String clean(String source, GeneralChunkConfig config) {
+        NormalizedText normalized = new TextNormalizer().normalize(source);
+        return new GeneralTextCleaner().clean(new GeneralBoundaryScanner(config).scan(normalized),
+                config, normalized).segments().get(0).text();
+    }
 }

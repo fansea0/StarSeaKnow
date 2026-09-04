@@ -41,6 +41,14 @@ public final class NormalizedText {
         return originalOffsets[normalizedUtf16Offset];
     }
 
+    public int originalCharacterStart(int normalizedUtf16Offset) {
+        return originalCharacterStarts[normalizedUtf16Offset];
+    }
+
+    public int originalCharacterEnd(int normalizedUtf16Offset) {
+        return originalCharacterEnds[normalizedUtf16Offset];
+    }
+
     public SourceLocator sourceLocator(int normalizedStart, int normalizedEnd) {
         if (normalizedStart < 0 || normalizedEnd < normalizedStart || normalizedEnd > text.length()) {
             throw new IndexOutOfBoundsException("Invalid normalized range");
