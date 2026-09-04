@@ -162,7 +162,7 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
         }
         int chunks = state == PipelineState.VECTORIZING
                 ? chunkMapper.restoreIndexingByFile(candidate.getFileId(), candidate.getTenantId(),
-                candidate.getKnowledgeId())
+                candidate.getKnowledgeId(), candidate.getLockVersion())
                 : 0;
         return new RecoverySummary(1, chunks);
     }

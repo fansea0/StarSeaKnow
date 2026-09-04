@@ -26,13 +26,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -64,7 +59,7 @@ public class ChunkVectorService {
                               ChunkRuntimePolicyResolver runtimePolicyResolver,
                               ChunkContextEnricher contextEnricher) {
         this(processingMapper, fileMapper, chunkMapper, stateService, worker,
-                transactions, executor, ChunkVectorService::sha256File, runtimePolicyResolver,
+                transactions, executor, SourceHashing::sha256, runtimePolicyResolver,
                 contextEnricher);
     }
 
@@ -76,7 +71,7 @@ public class ChunkVectorService {
                               TransactionTemplate transactions,
                               Executor executor) {
         this(processingMapper, fileMapper, chunkMapper, stateService, worker,
-                transactions, executor, ChunkVectorService::sha256File,
+                transactions, executor, SourceHashing::sha256,
                 new ChunkRuntimePolicyResolver(), fallbackEnricher());
     }
 
@@ -227,7 +222,8 @@ public class ChunkVectorService {
         }
 
         List<ChunkVectorWorker.ChunkSnapshot> snapshots = chunks.stream()
-                .map(chunk -> markIndexing(chunk, tenantId, knowledgeId, fileId))
+                .map(chunk -> markIndexing(chunk, tenantId, knowledgeId, fileId,
+                        vectorizingLockVersion))
                 .toList();
         int maxTokens = runtimePolicy.maxIndexTokens();
         return new ChunkVectorWorker.BatchJob(tenantId, knowledgeId, fileId,
@@ -276,7 +272,7 @@ public class ChunkVectorService {
                 PipelineState.ADJUSTING, PipelineState.VECTORIZING,
                 adjustingLockVersion).lockVersion();
         ChunkVectorWorker.ChunkSnapshot targetSnapshot = markIndexing(
-                target, tenantId, knowledgeId, fileId);
+                target, tenantId, knowledgeId, fileId, vectorizingLockVersion);
         List<ChunkVectorWorker.ChunkSnapshot> allSnapshots = chunks.stream()
                 .map(chunk -> Objects.equals(chunk.getId(), target.getId())
                         ? targetSnapshot
@@ -313,11 +309,13 @@ public class ChunkVectorService {
     }
 
     private ChunkVectorWorker.ChunkSnapshot markIndexing(DocumentChunk chunk, long tenantId,
-                                                          long knowledgeId, long fileId) {
+                                                          long knowledgeId, long fileId,
+                                                          int indexingLockVersion) {
         ChunkVectorWorker.ChunkSnapshot snapshot =
-                ChunkVectorWorker.ChunkSnapshot.afterMarking(chunk);
+                ChunkVectorWorker.ChunkSnapshot.afterMarking(chunk, indexingLockVersion);
         DocumentChunk patch = new DocumentChunk();
         patch.setStatus(ChunkStatus.INDEXING.code());
+        patch.setIndexingLockVersion(indexingLockVersion);
         int updated = chunkMapper.update(patch, new UpdateWrapper<DocumentChunk>()
                 .eq("id", chunk.getId())
                 .eq("tenant_id", tenantId)
@@ -327,10 +325,12 @@ public class ChunkVectorService {
                 .eq("status", chunk.getStatus())
                 .eq("lock_version", chunk.getLockVersion())
                 .set("last_error", null)
+                .set("indexing_lock_version", indexingLockVersion)
                 .setSql("lock_version = lock_version + 1"));
         if (updated != 1) {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
         }
+        chunk.setIndexingLockVersion(indexingLockVersion);
         return snapshot;
     }
 
@@ -421,15 +421,6 @@ public class ChunkVectorService {
         return context.getTenantId();
     }
 
-    private static String sha256File(Path path) throws IOException {
-        try {
-            return HexFormat.of().formatHex(
-                    MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path)));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable", exception);
-        }
-    }
-
     private int value(Integer value) {
         return value == null ? 0 : value;
     }
@@ -451,8 +442,4 @@ public class ChunkVectorService {
     private record SourceSnapshot(ChunkVectorWorker.FileSnapshot file, String hash) {
     }
 
-    @FunctionalInterface
-    interface SourceHashReader {
-        String hash(Path path) throws Exception;
-    }
 }

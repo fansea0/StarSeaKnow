@@ -11,6 +11,7 @@ import com.starsea.ai.domain.DocumentChunk;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -182,6 +183,41 @@ class CharacterTailContextEnricherTest {
                 () -> doubleTokenEnricher.enrich(List.of(chunk(11L, 0, "123456")), policy(64, 10)));
     }
 
+    @Test
+    void token_saturated_body_short_circuits_without_scanning_the_maximum_overlap() {
+        CountingOverlapTokenCounter tokens = new CountingOverlapTokenCounter();
+        CharacterTailContextEnricher countingEnricher = new CharacterTailContextEnricher(tokens);
+        DocumentChunk previous = chunk(11L, 0, "界".repeat(1_000));
+        DocumentChunk current = chunk(12L, 1, "文".repeat(64));
+        current.setOverlapLimit(1_000);
+
+        EnrichedChunk result = countingEnricher.enrich(
+                List.of(previous, current), policy(2_000, 64)).get(1);
+
+        assertNull(result.overlapContent());
+        assertEquals("FORMAT_OVERHEAD", result.overlapReductionReason());
+        assertEquals(2, tokens.calls());
+    }
+
+    @Test
+    void maximum_unicode_overlap_uses_bounded_tokenizer_calls_and_keeps_the_exact_tail() {
+        CountingOverlapTokenCounter tokens = new CountingOverlapTokenCounter();
+        CharacterTailContextEnricher countingEnricher = new CharacterTailContextEnricher(tokens);
+        String source = "前😀".repeat(500);
+        DocumentChunk previous = chunk(11L, 0, source);
+        DocumentChunk current = chunk(12L, 1, "界".repeat(40));
+        current.setOverlapLimit(1_000);
+
+        EnrichedChunk result = countingEnricher.enrich(
+                List.of(previous, current), policy(2_000, 64)).get(1);
+
+        assertEquals("😀前😀前😀前😀前😀前😀前😀前😀前😀前😀", result.overlapContent());
+        assertEquals(19, result.overlapCharacterCount());
+        assertEquals(64, result.indexContent().codePointCount(0, result.indexContent().length()));
+        assertEquals("MODEL_TOKEN_LIMIT", result.overlapReductionReason());
+        assertEquals(true, tokens.calls() <= 16, "tokenizer calls=" + tokens.calls());
+    }
+
     private static ChunkRuntimePolicy policy(int maxCharacters, int maxTokens) {
         return new ChunkRuntimePolicy("GENERAL",
                 new GeneralChunkConfig("\n", DelimiterMode.LITERAL, maxCharacters,
@@ -224,6 +260,29 @@ class CharacterTailContextEnricherTest {
         @Override
         public String id() {
             return "double-code-point-test";
+        }
+    }
+
+    private static final class CountingOverlapTokenCounter implements TokenCounter {
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Override
+        public int count(String text) {
+            calls.incrementAndGet();
+            if (text == null) {
+                return 0;
+            }
+            int length = text.codePointCount(0, text.length());
+            return !text.startsWith("上文：") && length > 100 ? 1 : length;
+        }
+
+        @Override
+        public String id() {
+            return "counting-code-point-test";
+        }
+
+        private int calls() {
+            return calls.get();
         }
     }
 }

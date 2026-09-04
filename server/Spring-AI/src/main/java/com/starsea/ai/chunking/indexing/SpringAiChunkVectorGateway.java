@@ -32,13 +32,13 @@ public final class SpringAiChunkVectorGateway implements ChunkVectorGateway {
     }
 
     @Override
-    public void deleteAll(List<UUID> publicIds) {
-        vectorStore.delete(publicIds.stream().map(UUID::toString).toList());
+    public void deleteAll(List<UUID> vectorIds) {
+        vectorStore.delete(vectorIds.stream().map(UUID::toString).toList());
     }
 
     @Override
-    public void delete(UUID publicId) {
-        deleteAll(List.of(publicId));
+    public void delete(UUID vectorId) {
+        deleteAll(List.of(vectorId));
     }
 
     private Document toSpringDocument(VectorDocument source) {
@@ -51,7 +51,7 @@ public final class SpringAiChunkVectorGateway implements ChunkVectorGateway {
         metadata.put("chunkIndex", source.chunkIndex());
         metadata.put("fileType", source.fileType());
         metadata.put("sectionPath", sectionPathJson(source.sectionPath()));
-        return new Document(source.publicId().toString(), source.indexContent(), metadata);
+        return new Document(source.vectorId().toString(), source.indexContent(), metadata);
     }
 
     private String sectionPathJson(List<String> sectionPath) {

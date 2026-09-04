@@ -43,7 +43,9 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -454,14 +456,17 @@ class ChunkVectorServiceTest {
         when(tokenCounter.count(any())).thenReturn(10);
         when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
         doThrow(new IllegalStateException("embedding unavailable")).when(gateway).add(any());
-        doThrow(new IllegalStateException("first cleanup failed")).when(gateway).delete(FIRST_PUBLIC_ID);
+        doThrow(new IllegalStateException("first cleanup failed"))
+                .doNothing().when(gateway).delete(any());
         ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
                 stateService, enricher, tokenCounter, gateway, transactions);
 
         worker.vectorizeBatch(batchJob(List.of(first, second), 5, ContextPolicy.defaults()));
 
-        verify(gateway).delete(FIRST_PUBLIC_ID);
-        verify(gateway).delete(SECOND_PUBLIC_ID);
+        var deletedIds = org.mockito.ArgumentCaptor.forClass(UUID.class);
+        verify(gateway, times(2)).delete(deletedIds.capture());
+        assertTrue(deletedIds.getAllValues().stream()
+                .noneMatch(id -> id.equals(FIRST_PUBLIC_ID) || id.equals(SECOND_PUBLIC_ID)));
         var patchCaptor = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
         verify(chunkMapper, times(2)).update(patchCaptor.capture(), any(Wrapper.class));
         assertTrue(patchCaptor.getAllValues().stream()
@@ -676,6 +681,100 @@ class ChunkVectorServiceTest {
     }
 
     @Test
+    void batch_rechecks_source_bytes_before_any_vector_io() throws Exception {
+        TopologyFixture fixture = topologyFixture(false);
+
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
+        Files.writeString(Path.of(fixture.file.getPath()), "changed before worker start");
+        fixture.dispatched.get().run();
+
+        assertEquals(PipelineState.FAILED.code(), fixture.processing.getPipelineState());
+        assertEquals(ChunkStatus.DRAFT.code(), fixture.chunk.getStatus());
+        assertNull(fixture.chunk.getIndexContent());
+        verify(fixture.gateway, never()).deleteAll(any());
+        verify(fixture.gateway, never()).delete(any());
+        verify(fixture.gateway, never()).add(any());
+    }
+
+    @Test
+    void batch_source_change_during_vector_write_cleans_the_job_and_never_activates()
+            throws Exception {
+        TopologyFixture fixture = topologyFixture(false);
+        CountDownLatch addEntered = new CountDownLatch(1);
+        CountDownLatch releaseAdd = new CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            addEntered.countDown();
+            assertTrue(releaseAdd.await(5, TimeUnit.SECONDS));
+            return null;
+        }).when(fixture.gateway).add(any());
+
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
+        AtomicReference<Throwable> workerFailure = new AtomicReference<>();
+        Thread workerThread = new Thread(() -> {
+            try {
+                fixture.dispatched.get().run();
+            } catch (Throwable failure) {
+                workerFailure.set(failure);
+            }
+        });
+        workerThread.start();
+        assertTrue(addEntered.await(5, TimeUnit.SECONDS));
+        Files.writeString(Path.of(fixture.file.getPath()), "changed during batch write");
+        releaseAdd.countDown();
+        workerThread.join(5_000);
+
+        assertFalse(workerThread.isAlive());
+        assertNull(workerFailure.get());
+        assertEquals(PipelineState.FAILED.code(), fixture.processing.getPipelineState());
+        assertEquals(ChunkStatus.DRAFT.code(), fixture.chunk.getStatus());
+        assertNull(fixture.chunk.getIndexContent());
+        verify(fixture.gateway).add(any());
+        verify(fixture.gateway).delete(any());
+        verify(fixture.stateService, never()).transition(KNOWLEDGE_ID, FILE_ID,
+                PipelineState.VECTORIZING, PipelineState.COMPLETED, 5);
+    }
+
+    @Test
+    void single_source_change_during_vector_write_cleans_the_job_and_never_activates()
+            throws Exception {
+        TopologyFixture fixture = topologyFixture(false);
+        fixture.processing.setPipelineState(PipelineState.COMPLETED.code());
+        fixture.chunk.setStatus(ChunkStatus.ACTIVE.code());
+        CountDownLatch addEntered = new CountDownLatch(1);
+        CountDownLatch releaseAdd = new CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            addEntered.countDown();
+            assertTrue(releaseAdd.await(5, TimeUnit.SECONDS));
+            return null;
+        }).when(fixture.gateway).add(any());
+
+        fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID);
+        AtomicReference<Throwable> workerFailure = new AtomicReference<>();
+        Thread workerThread = new Thread(() -> {
+            try {
+                fixture.dispatched.get().run();
+            } catch (Throwable failure) {
+                workerFailure.set(failure);
+            }
+        });
+        workerThread.start();
+        assertTrue(addEntered.await(5, TimeUnit.SECONDS));
+        Files.writeString(Path.of(fixture.file.getPath()), "changed during single write");
+        releaseAdd.countDown();
+        workerThread.join(5_000);
+
+        assertFalse(workerThread.isAlive());
+        assertTrue(workerFailure.get() instanceof ChunkingException);
+        assertEquals(PipelineState.ADJUSTING.code(), fixture.processing.getPipelineState());
+        assertEquals(ChunkStatus.DRAFT.code(), fixture.chunk.getStatus());
+        assertNull(fixture.chunk.getIndexContent());
+        verify(fixture.gateway).add(any());
+        verify(fixture.gateway).delete(any());
+        verify(fixture.stateService, never()).transition(KNOWLEDGE_ID, FILE_ID,
+                PipelineState.VECTORIZING, PipelineState.COMPLETED, 5);
+    }
+
+    @Test
     void single_external_failure_compensates_errors_and_rethrows_the_same_instance()
             throws Exception {
         TopologyFixture fixture = topologyFixture(true);
@@ -684,7 +783,7 @@ class ChunkVectorServiceTest {
         IllegalStateException original = new IllegalStateException(fullError);
         IllegalStateException cleanup = new IllegalStateException("cleanup unavailable");
         doThrow(original).when(fixture.gateway).add(any());
-        doThrow(cleanup).when(fixture.gateway).delete(FIRST_PUBLIC_ID);
+        doThrow(cleanup).when(fixture.gateway).delete(any());
 
         RuntimeException thrown = assertThrows(RuntimeException.class,
                 () -> fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, FIRST_PUBLIC_ID));
@@ -696,11 +795,11 @@ class ChunkVectorServiceTest {
         assertEquals(boundedError, fixture.chunk.getLastError());
         assertEquals(PipelineState.ADJUSTING.code(), fixture.processing.getPipelineState());
         assertEquals(boundedError, fixture.processing.getLastError());
-        verify(fixture.gateway).delete(FIRST_PUBLIC_ID);
+        verify(fixture.gateway).delete(any());
     }
 
     @Test
-    void phase_one_job_deeply_captures_body_and_metadata_before_backing_entities_mutate()
+    void phase_one_job_rejects_backing_row_mutation_after_capturing_prepared_content()
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
@@ -716,13 +815,13 @@ class ChunkVectorServiceTest {
 
         assertEquals("captured body", fixture.enrichedBody.get());
         assertEquals(List.of("Captured"), fixture.enrichedSectionPath.get());
-        assertEquals("标题：Captured\n\ncaptured body", fixture.addedDocument.get().indexContent());
-        assertEquals("md", fixture.addedDocument.get().fileType());
-        assertEquals(3, fixture.transactionManager.commits());
+        assertNull(fixture.addedDocument.get());
+        assertEquals(PipelineState.VECTORIZING.code(), fixture.processing.getPipelineState());
+        assertEquals(ChunkStatus.INDEXING.code(), fixture.chunk.getStatus());
     }
 
     @Test
-    void batch_phase_three_snapshot_mismatch_compensates_without_stranding_state()
+    void batch_snapshot_mismatch_does_not_compensate_a_chunk_it_no_longer_owns()
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
@@ -731,25 +830,17 @@ class ChunkVectorServiceTest {
         fixture.chunk.setContent("concurrent batch edit");
         fixture.dispatched.get().run();
 
-        assertEquals(ChunkStatus.DRAFT.code(), fixture.chunk.getStatus());
+        assertEquals(ChunkStatus.INDEXING.code(), fixture.chunk.getStatus());
         assertEquals("concurrent batch edit", fixture.chunk.getContent());
         assertEquals("hash-1", fixture.chunk.getContentHash());
-        assertNull(fixture.chunk.getOverlapContent());
-        assertNull(fixture.chunk.getOverlapSourceChunkId());
-        assertEquals(0, fixture.chunk.getOverlapTokenCount());
-        assertNull(fixture.chunk.getIndexContent());
-        assertNull(fixture.chunk.getLastError());
-        assertEquals(PipelineState.FAILED.code(), fixture.processing.getPipelineState());
-        assertEquals(PipelineState.VECTORIZING.code(), fixture.processing.getFailedFromState());
-        assertEquals(1, fixture.transactionManager.rollbacks());
-        assertEquals(2, fixture.transactionManager.commits());
-        verify(fixture.gateway, never()).delete(FIRST_PUBLIC_ID);
+        assertEquals(PipelineState.VECTORIZING.code(), fixture.processing.getPipelineState());
+        verify(fixture.gateway, never()).delete(any());
         verify(fixture.stateService, never()).transition(KNOWLEDGE_ID, FILE_ID,
                 PipelineState.VECTORIZING, PipelineState.COMPLETED, 5);
     }
 
     @Test
-    void single_phase_three_snapshot_mismatch_compensates_to_adjusting_without_losing_edits()
+    void single_snapshot_mismatch_does_not_compensate_a_chunk_it_no_longer_owns()
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
@@ -759,21 +850,18 @@ class ChunkVectorServiceTest {
         ChunkingException original = assertThrows(ChunkingException.class,
                 fixture.dispatched.get()::run);
 
-        assertEquals(ChunkStatus.DRAFT.code(), fixture.chunk.getStatus());
+        assertEquals(ChunkStatus.INDEXING.code(), fixture.chunk.getStatus());
         assertEquals("concurrent single edit", fixture.chunk.getContent());
         assertEquals("concurrent-single-hash", fixture.chunk.getContentHash());
-        assertEquals(original.getMessage(), fixture.chunk.getLastError());
-        assertEquals(PipelineState.ADJUSTING.code(), fixture.processing.getPipelineState());
-        assertEquals(original.getMessage(), fixture.processing.getLastError());
-        assertEquals(1, fixture.transactionManager.rollbacks());
-        assertEquals(2, fixture.transactionManager.commits());
-        verify(fixture.gateway, never()).delete(FIRST_PUBLIC_ID);
+        assertNull(fixture.chunk.getLastError());
+        assertEquals(PipelineState.VECTORIZING.code(), fixture.processing.getPipelineState());
+        verify(fixture.gateway, never()).delete(any());
         verify(fixture.stateService, never()).transition(KNOWLEDGE_ID, FILE_ID,
                 PipelineState.VECTORIZING, PipelineState.COMPLETED, 4);
     }
 
     @Test
-    void single_file_lock_race_uses_current_version_for_compensation_and_preserves_original_error()
+    void single_file_lock_race_never_compensates_the_new_file_owner()
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
@@ -784,17 +872,16 @@ class ChunkVectorServiceTest {
 
         assertEquals("Pipeline state or lock version changed during vectorization",
                 original.getMessage());
-        assertEquals(ChunkStatus.DRAFT.code(), fixture.chunk.getStatus());
+        assertEquals(ChunkStatus.INDEXING.code(), fixture.chunk.getStatus());
         assertEquals("captured body", fixture.chunk.getContent());
-        assertEquals(original.getMessage(), fixture.chunk.getLastError());
-        assertEquals(PipelineState.ADJUSTING.code(), fixture.processing.getPipelineState());
-        assertEquals(100, fixture.processing.getLockVersion());
-        assertEquals(original.getMessage(), fixture.processing.getLastError());
-        verify(fixture.gateway, never()).delete(FIRST_PUBLIC_ID);
+        assertNull(fixture.chunk.getLastError());
+        assertEquals(PipelineState.VECTORIZING.code(), fixture.processing.getPipelineState());
+        assertEquals(99, fixture.processing.getLockVersion());
+        verify(fixture.gateway, never()).delete(any());
     }
 
     @Test
-    void compensation_leaves_non_indexing_target_untouched_but_marks_batch_failed()
+    void compensation_leaves_non_indexing_target_and_pipeline_owner_untouched()
             throws Exception {
         TopologyFixture fixture = topologyFixture(false);
 
@@ -806,8 +893,8 @@ class ChunkVectorServiceTest {
 
         assertEquals(ChunkStatus.ACTIVE.code(), fixture.chunk.getStatus());
         assertEquals("concurrent active body", fixture.chunk.getContent());
-        assertEquals(PipelineState.FAILED.code(), fixture.processing.getPipelineState());
-        verify(fixture.gateway, never()).delete(FIRST_PUBLIC_ID);
+        assertEquals(PipelineState.VECTORIZING.code(), fixture.processing.getPipelineState());
+        verify(fixture.gateway, never()).delete(any());
     }
 
     private TopologyFixture topologyFixture(boolean directExecution) throws Exception {

@@ -68,4 +68,24 @@ class SpringAiChunkVectorGatewayTest {
 
         verify(vectorStore).delete(List.of(first.toString(), second.toString()));
     }
+
+    @Test
+    void uses_the_physical_generation_id_while_retaining_the_stable_chunk_identity() {
+        VectorStore vectorStore = mock(VectorStore.class);
+        SpringAiChunkVectorGateway gateway = new SpringAiChunkVectorGateway(
+                vectorStore, new ObjectMapper());
+        UUID vectorId = UUID.fromString("99999999-9999-9999-9999-999999999999");
+        UUID chunkPublicId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+
+        gateway.add(List.of(new ChunkVectorGateway.VectorDocument(
+                vectorId, chunkPublicId, "current generation", 1L, 10L, 20L,
+                UUID.fromString("22222222-2222-2222-2222-222222222222"),
+                0, "md", List.of())));
+
+        ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(captor.capture());
+        Document document = captor.getValue().get(0);
+        assertEquals(vectorId.toString(), document.getId());
+        assertEquals(chunkPublicId.toString(), document.getMetadata().get("documentChunkId"));
+    }
 }

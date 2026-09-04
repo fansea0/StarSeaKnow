@@ -111,6 +111,28 @@ class PgVectorRagServiceImplTest {
     }
 
     @Test
+    void filters_a_stale_physical_generation_for_an_active_chunk() {
+        Fixture fixture = fixture();
+        UUID staleVectorId = UUID.fromString("88888888-8888-8888-8888-888888888888");
+        UUID currentVectorId = UUID.fromString("99999999-9999-9999-9999-999999999999");
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                candidate(staleVectorId, FIRST_CHUNK_ID, "stale generation", 0.99),
+                candidate(currentVectorId, FIRST_CHUNK_ID, "current generation", 0.91)));
+        DocumentChunk current = chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                ChunkStatus.ACTIVE, 0, "database current");
+        current.setVectorId(currentVectorId);
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(current));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 2, 0.0));
+
+        assertEquals(1, result.size());
+        assertEquals(FIRST_CHUNK_ID, result.get(0).chunkId());
+        assertEquals(0.91, result.get(0).score());
+    }
+
+    @Test
     void preserves_similarity_order_deduplicates_stable_ids_and_truncates_after_filtering() {
         Fixture fixture = fixture();
         when(fixture.vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
@@ -209,13 +231,20 @@ class PgVectorRagServiceImplTest {
     }
 
     @Test
-    void rejects_valid_document_id_when_metadata_has_different_valid_id() {
-        assertCandidateRejected(Document.builder()
-                .id(FIRST_CHUNK_ID.toString())
-                .text("mismatched metadata id")
-                .metadata(candidateMetadata(SECOND_CHUNK_ID.toString()))
-                .score(0.99)
-                .build());
+    void accepts_a_distinct_physical_generation_id_when_it_is_current() {
+        Fixture fixture = fixture();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                candidate(FIRST_CHUNK_ID, SECOND_CHUNK_ID, "current generation", 0.99)));
+        DocumentChunk current = chunk(SECOND_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                ChunkStatus.ACTIVE, 0, "database current");
+        current.setVectorId(FIRST_CHUNK_ID);
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(current));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0));
+
+        assertEquals(List.of(SECOND_CHUNK_ID), result.stream().map(RetrievedChunk::chunkId).toList());
     }
 
     @Test
@@ -411,6 +440,16 @@ class PgVectorRagServiceImplTest {
                 .id(publicId.toString())
                 .text(text)
                 .metadata(candidateMetadata(publicId.toString()))
+                .score(score)
+                .build();
+    }
+
+    private static Document candidate(UUID vectorId, UUID chunkPublicId,
+                                      String text, double score) {
+        return Document.builder()
+                .id(vectorId.toString())
+                .text(text)
+                .metadata(candidateMetadata(chunkPublicId.toString()))
                 .score(score)
                 .build();
     }

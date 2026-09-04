@@ -493,6 +493,7 @@ public class ChunkCommandService {
         DocumentChunk copy = new DocumentChunk();
         copy.setId(source.getId());
         copy.setPublicId(source.getPublicId());
+        copy.setVectorId(source.getVectorId());
         copy.setTenantId(source.getTenantId());
         copy.setKnowledgeId(source.getKnowledgeId());
         copy.setFileId(source.getFileId());
@@ -567,13 +568,22 @@ public class ChunkCommandService {
 
     private List<UUID> vectorIds(DocumentChunk target, DocumentChunk dependent) {
         LinkedHashSet<UUID> ids = new LinkedHashSet<>();
-        if (target.getPublicId() != null) {
-            ids.add(target.getPublicId());
+        UUID targetVectorId = currentVectorId(target);
+        if (targetVectorId != null) {
+            ids.add(targetVectorId);
         }
-        if (dependent != null && dependent.getPublicId() != null) {
-            ids.add(dependent.getPublicId());
+        UUID dependentVectorId = currentVectorId(dependent);
+        if (dependentVectorId != null) {
+            ids.add(dependentVectorId);
         }
         return List.copyOf(ids);
+    }
+
+    private UUID currentVectorId(DocumentChunk chunk) {
+        if (chunk == null) {
+            return null;
+        }
+        return chunk.getVectorId() == null ? chunk.getPublicId() : chunk.getVectorId();
     }
 
     private void scheduleVectorCleanup(long tenantId, long knowledgeId, long fileId,

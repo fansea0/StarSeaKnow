@@ -385,8 +385,12 @@ class ChunkCommandServiceTest {
     @Test
     void edit_active_atomically_invalidates_target_and_dependent_before_vector_cleanup() {
         DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.ACTIVE, 2, "Old");
+        UUID targetVectorId = UUID.fromString("20000000-0000-0000-0000-000000000021");
+        target.setVectorId(targetVectorId);
         target.setSectionPath(List.of());
         DocumentChunk dependent = chunk(32L, NEXT_ID, 5, ChunkStatus.ACTIVE, 7, "Next");
+        UUID dependentVectorId = UUID.fromString("20000000-0000-0000-0000-000000000022");
+        dependent.setVectorId(dependentVectorId);
         dependent.setOverlapEnabled(true);
         dependent.setOverlapTokenLimit(40);
         dependent.setOverlapSourceChunkId(31L);
@@ -403,8 +407,8 @@ class ChunkCommandServiceTest {
         verify(chunkMapper, times(2)).update(any(DocumentChunk.class), any());
         verify(stateService).transition(KNOWLEDGE_ID, FILE_ID,
                 PipelineState.CHUNKED, PipelineState.ADJUSTING, 5);
-        verify(vectorGateway).delete(CHUNK_ID);
-        verify(vectorGateway).delete(NEXT_ID);
+        verify(vectorGateway).delete(targetVectorId);
+        verify(vectorGateway).delete(dependentVectorId);
     }
 
     @Test

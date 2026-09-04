@@ -84,8 +84,7 @@ public class PgVectorRagServiceImpl implements RagService {
                 .build();
 
         List<ScoredCandidate> candidates = safeDocuments(vectorStore.similaritySearch(request)).stream()
-                .map(document -> new ScoredCandidate(stablePublicId(document),
-                        normalizeScore(document.getScore())))
+                .map(this::candidate)
                 .filter(candidate -> candidate.publicId() != null)
                 .filter(candidate -> candidate.score() >= query.scoreThreshold())
                 .toList();
@@ -107,6 +106,8 @@ public class PgVectorRagServiceImpl implements RagService {
 
         Set<UUID> emitted = new LinkedHashSet<>();
         return candidates.stream()
+                .filter(candidate -> currentGeneration(
+                        candidate, activeChunks.get(candidate.publicId())))
                 .filter(candidate -> emitted.add(candidate.publicId()))
                 .map(candidate -> toRetrievedChunk(candidate, activeChunks.get(candidate.publicId())))
                 .filter(Objects::nonNull)
@@ -193,16 +194,24 @@ public class PgVectorRagServiceImpl implements RagService {
         return null;
     }
 
-    private static UUID stablePublicId(Document document) {
-        UUID documentId = parseUuid(document.getId());
-        if (documentId == null) {
-            return null;
+    private ScoredCandidate candidate(Document document) {
+        UUID vectorId = parseUuid(document.getId());
+        if (vectorId == null) {
+            return new ScoredCandidate(null, null, normalizeScore(document.getScore()));
         }
-        if (!document.getMetadata().containsKey("documentChunkId")) {
-            return documentId;
+        UUID publicId = document.getMetadata().containsKey("documentChunkId")
+                ? parseUuid(document.getMetadata().get("documentChunkId")) : vectorId;
+        return new ScoredCandidate(publicId, vectorId, normalizeScore(document.getScore()));
+    }
+
+    private static boolean currentGeneration(ScoredCandidate candidate, DocumentChunk chunk) {
+        if (chunk == null) {
+            return false;
         }
-        UUID metadataId = parseUuid(document.getMetadata().get("documentChunkId"));
-        return documentId.equals(metadataId) ? documentId : null;
+        UUID currentVectorId = chunk.getVectorId();
+        return currentVectorId == null
+                ? Objects.equals(candidate.vectorId(), candidate.publicId())
+                : Objects.equals(candidate.vectorId(), currentVectorId);
     }
 
     private static UUID parseUuid(Object value) {
@@ -232,7 +241,7 @@ public class PgVectorRagServiceImpl implements RagService {
         return null;
     }
 
-    private record ScoredCandidate(UUID publicId, double score) {
+    private record ScoredCandidate(UUID publicId, UUID vectorId, double score) {
     }
 
 }

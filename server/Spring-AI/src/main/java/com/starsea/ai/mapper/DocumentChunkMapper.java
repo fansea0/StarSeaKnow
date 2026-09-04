@@ -15,7 +15,8 @@ public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
 
     int restoreIndexingByFile(@Param("fileId") long fileId,
                               @Param("tenantId") long tenantId,
-                              @Param("knowledgeId") long knowledgeId);
+                              @Param("knowledgeId") long knowledgeId,
+                              @Param("indexingLockVersion") int indexingLockVersion);
 
     List<DocumentChunk> findActiveByPublicIds(@Param("tenantId") long tenantId,
                                               @Param("knowledgeIds") Set<Long> knowledgeIds,

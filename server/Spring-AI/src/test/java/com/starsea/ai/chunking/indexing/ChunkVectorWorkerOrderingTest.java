@@ -13,6 +13,7 @@ import com.starsea.ai.mapper.DocumentChunkMapper;
 import com.starsea.ai.mapper.FileMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
 import com.starsea.ai.chunking.processing.FileProcessingService;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -87,7 +88,7 @@ class ChunkVectorWorkerOrderingTest {
         when(chunkMapper.update(any(), any())).thenReturn(1);
         when(tokens.count(any())).thenReturn(4);
         ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
-                stateService, enricher, tokens, gateway, transactions, resolver);
+                stateService, enricher, tokens, gateway, transactions, resolver, path -> "hash");
         ChunkVectorWorker.ChunkSnapshot snapshot =
                 ChunkVectorWorker.ChunkSnapshot.fromIndexing(chunk);
         ChunkVectorWorker.PreparedChunk prepared = ChunkVectorWorker.PreparedChunk.from(
@@ -145,8 +146,10 @@ class ChunkVectorWorkerOrderingTest {
         assertThrows(RuntimeException.class, () -> fixture.worker().vectorizeSingle(job));
 
         verify(fixture.gateway()).deleteAll(any());
-        verify(fixture.gateway()).add(any());
-        verify(fixture.gateway()).delete(fixture.snapshot().publicId());
+        ArgumentCaptor<List<ChunkVectorGateway.VectorDocument>> documents =
+                ArgumentCaptor.forClass(List.class);
+        verify(fixture.gateway()).add(documents.capture());
+        verify(fixture.gateway()).delete(documents.getValue().get(0).vectorId());
         verify(fixture.stateService(), never()).transition(10L, 20L,
                 PipelineState.VECTORIZING, PipelineState.COMPLETED, 5);
         verify(fixture.stateService(), never()).transition(10L, 20L,
@@ -164,8 +167,10 @@ class ChunkVectorWorkerOrderingTest {
         fixture.worker().vectorizeBatch(job);
 
         verify(fixture.gateway()).deleteAll(any());
-        verify(fixture.gateway()).add(any());
-        verify(fixture.gateway()).delete(fixture.snapshot().publicId());
+        ArgumentCaptor<List<ChunkVectorGateway.VectorDocument>> documents =
+                ArgumentCaptor.forClass(List.class);
+        verify(fixture.gateway()).add(documents.capture());
+        verify(fixture.gateway()).delete(documents.getValue().get(0).vectorId());
         verify(fixture.stateService(), never()).transition(10L, 20L,
                 PipelineState.VECTORIZING, PipelineState.COMPLETED, 5);
     }
@@ -226,7 +231,7 @@ class ChunkVectorWorkerOrderingTest {
         when(chunkMapper.update(any(), any())).thenReturn(1);
         when(tokens.count(any())).thenReturn(4);
         ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
-                stateService, enricher, tokens, gateway, transactions, resolver);
+                stateService, enricher, tokens, gateway, transactions, resolver, path -> "hash");
         return new UnexpectedChunkFixture(worker, gateway, stateService, snapshot, processingSnapshot,
                 prepared, fileSnapshot);
     }

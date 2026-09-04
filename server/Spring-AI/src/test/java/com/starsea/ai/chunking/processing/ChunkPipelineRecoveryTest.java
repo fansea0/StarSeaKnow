@@ -83,6 +83,8 @@ class ChunkPipelineRecoveryTest {
             assertEquals(true, restore.contains("overlap_character_count = 0"));
             assertEquals(true, restore.contains("overlap_reduction_reason = null"));
             assertEquals(true, restore.contains("index_content = null"));
+            assertEquals(true, restore.contains("indexing_lock_version = null"));
+            assertEquals(true, restore.contains("indexing_lock_version = #{indexinglockversion}"));
         }
     }
 
@@ -100,7 +102,7 @@ class ChunkPipelineRecoveryTest {
 
         verify(processingMapper).transition(20L, 1L, 10L, 1, 7, 0, 4, 1,
                 "CHUNKING timed out during recovery scan");
-        verify(chunkMapper, never()).restoreIndexingByFile(20L, 1L, 10L);
+        verify(chunkMapper, never()).restoreIndexingByFile(20L, 1L, 10L, 4);
     }
 
     @Test
@@ -112,13 +114,13 @@ class ChunkPipelineRecoveryTest {
         when(processingMapper.findTimedOutAsync(cutoff)).thenReturn(List.of(stale));
         when(processingMapper.transition(20L, 1L, 10L, 5, 7, 0, 8, 5,
                 "VECTORIZING timed out during recovery scan")).thenReturn(1);
-        when(chunkMapper.restoreIndexingByFile(20L, 1L, 10L)).thenReturn(2);
+        when(chunkMapper.restoreIndexingByFile(20L, 1L, 10L, 8)).thenReturn(2);
 
         ChunkPipelineRecovery.RecoverySummary summary = recovery(processingMapper, chunkMapper).recoverTimedOut();
 
         assertEquals(1, summary.filesRecovered());
         assertEquals(2, summary.chunksRecovered());
-        verify(chunkMapper).restoreIndexingByFile(20L, 1L, 10L);
+        verify(chunkMapper).restoreIndexingByFile(20L, 1L, 10L, 8);
     }
 
     @Test
@@ -135,7 +137,7 @@ class ChunkPipelineRecoveryTest {
 
         assertEquals(0, summary.filesRecovered());
         assertEquals(0, summary.chunksRecovered());
-        verify(chunkMapper, never()).restoreIndexingByFile(20L, 1L, 10L);
+        verify(chunkMapper, never()).restoreIndexingByFile(20L, 1L, 10L, 8);
     }
 
     @Test

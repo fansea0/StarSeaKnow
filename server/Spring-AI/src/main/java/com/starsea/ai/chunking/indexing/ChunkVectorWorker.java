@@ -36,6 +36,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.stream.Collectors;
 
 @Component
@@ -52,6 +55,7 @@ public class ChunkVectorWorker {
     private final ChunkVectorGateway gateway;
     private final TransactionTemplate transactions;
     private final ChunkRuntimePolicyResolver runtimePolicyResolver;
+    private final SourceHashReader sourceHashReader;
 
     @Autowired
     public ChunkVectorWorker(FileProcessingMapper processingMapper,
@@ -63,6 +67,21 @@ public class ChunkVectorWorker {
                              ChunkVectorGateway gateway,
                              TransactionTemplate transactions,
                              ChunkRuntimePolicyResolver runtimePolicyResolver) {
+        this(processingMapper, fileMapper, chunkMapper, stateService, enricher,
+                tokenCounter, gateway, transactions, runtimePolicyResolver,
+                SourceHashing::sha256);
+    }
+
+    ChunkVectorWorker(FileProcessingMapper processingMapper,
+                      FileMapper fileMapper,
+                      DocumentChunkMapper chunkMapper,
+                      FileProcessingService stateService,
+                      ChunkContextEnricher enricher,
+                      TokenCounter tokenCounter,
+                      ChunkVectorGateway gateway,
+                      TransactionTemplate transactions,
+                      ChunkRuntimePolicyResolver runtimePolicyResolver,
+                      SourceHashReader sourceHashReader) {
         this.processingMapper = processingMapper;
         this.fileMapper = fileMapper;
         this.chunkMapper = chunkMapper;
@@ -72,6 +91,7 @@ public class ChunkVectorWorker {
         this.gateway = gateway;
         this.transactions = transactions;
         this.runtimePolicyResolver = Objects.requireNonNull(runtimePolicyResolver, "runtimePolicyResolver");
+        this.sourceHashReader = Objects.requireNonNull(sourceHashReader, "sourceHashReader");
     }
 
     public ChunkVectorWorker(FileProcessingMapper processingMapper,
@@ -94,10 +114,13 @@ public class ChunkVectorWorker {
                     job.prepared(), job.allChunks(), job.chunks());
             validatePrepared(prepared);
             validateBatchBeforeIo(job);
-            writeVectors(prepared, vectorMutationStarted);
+            validateSourceBytes(job.file(), job.sourceHash(), job.processing());
+            writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
+            validateSourceBytes(job.file(), job.sourceHash(), job.processing());
             transactions.executeWithoutResult(status -> completeBatch(job, prepared));
+            cleanupPreviousVectors(job.chunks());
         } catch (RuntimeException failure) {
-            if (vectorMutationStarted.get()) cleanupEvery(job.chunks(), failure);
+            if (vectorMutationStarted.get()) cleanupEvery(job.vectorIds().values(), failure);
             restoreBatch(job, failure);
         }
     }
@@ -110,10 +133,13 @@ public class ChunkVectorWorker {
                     job.prepared(), job.allChunks(), List.of(job.chunk()));
             validatePrepared(prepared);
             validateSingleBeforeIo(job);
-            writeVectors(prepared, vectorMutationStarted);
+            validateSourceBytes(job.file(), job.sourceHash(), job.processing());
+            writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
+            validateSourceBytes(job.file(), job.sourceHash(), job.processing());
             transactions.executeWithoutResult(status -> completeSingle(job, prepared));
+            cleanupPreviousVectors(List.of(job.chunk()));
         } catch (RuntimeException failure) {
-            if (vectorMutationStarted.get()) cleanupEvery(List.of(job.chunk()), failure);
+            if (vectorMutationStarted.get()) cleanupEvery(job.vectorIds().values(), failure);
             restoreSingle(job, failure);
             throw failure;
         }
@@ -225,12 +251,13 @@ public class ChunkVectorWorker {
         }
     }
 
-    private void writeVectors(PreparedBatch prepared,
+    private void writeVectors(PreparedBatch prepared, Map<Long, UUID> vectorIds,
                               java.util.concurrent.atomic.AtomicBoolean mutationStarted) {
         List<ChunkVectorGateway.VectorDocument> documents = new ArrayList<>(prepared.chunks().size());
         for (EnrichedChunk enriched : prepared.chunks()) {
             DocumentChunk chunk = enriched.chunk();
             documents.add(new ChunkVectorGateway.VectorDocument(
+                    Objects.requireNonNull(vectorIds.get(chunk.getId()), "vectorId"),
                     chunk.getPublicId(),
                     enriched.indexContent(),
                     chunk.getTenantId(),
@@ -258,11 +285,11 @@ public class ChunkVectorWorker {
                 }
             }
         }
-        List<UUID> publicIds = documents.stream()
-                .map(ChunkVectorGateway.VectorDocument::publicId)
+        List<UUID> vectorIdsToReplace = documents.stream()
+                .map(ChunkVectorGateway.VectorDocument::vectorId)
                 .toList();
         mutationStarted.set(true);
-        gateway.deleteAll(publicIds);
+        gateway.deleteAll(vectorIdsToReplace);
         gateway.add(List.copyOf(documents));
     }
 
@@ -287,6 +314,24 @@ public class ChunkVectorWorker {
         }
     }
 
+    private void validateSourceBytes(FileSnapshot file, String expectedHash,
+                                     ProcessingSnapshot processing) {
+        if (processing == null) {
+            return;
+        }
+        final String actualHash;
+        try {
+            actualHash = sourceHashReader.hash(Path.of(file.path()));
+        } catch (InvalidPathException | NullPointerException exception) {
+            throw ChunkingException.unprocessable("The source document cannot be read");
+        } catch (Exception exception) {
+            throw ChunkingException.unprocessable("The source document cannot be read");
+        }
+        if (!Objects.equals(expectedHash, actualHash)) {
+            throw ChunkingException.sourceChanged();
+        }
+    }
+
     private void completeBatch(BatchJob job, PreparedBatch prepared) {
         FileProcessing processing = requireLockedProcessing(job.tenantId(), job.knowledgeId(),
                 job.fileId(), PipelineState.VECTORIZING, job.fileLockVersion());
@@ -300,7 +345,7 @@ public class ChunkVectorWorker {
             ChunkSnapshot snapshot = job.snapshot(enriched.chunk().getId());
             DocumentChunk current = currentById.get(snapshot.id());
             requireSnapshot(current, snapshot);
-            activate(current, snapshot, enriched);
+            activate(current, snapshot, enriched, job.vectorId(snapshot.id()));
         }
         stateService.transition(job.knowledgeId(), job.fileId(), PipelineState.VECTORIZING,
                 PipelineState.COMPLETED, job.fileLockVersion());
@@ -322,7 +367,7 @@ public class ChunkVectorWorker {
         }
         DocumentChunk current = currentById.get(job.chunk().id());
         requireSnapshot(current, job.chunk());
-        activate(current, job.chunk(), prepared.chunks().get(0));
+        activate(current, job.chunk(), prepared.chunks().get(0), job.vectorId(job.chunk().id()));
         boolean allActive = chunks.stream().allMatch(chunk ->
                 Objects.equals(chunk.getId(), job.chunk().id())
                         || chunkStatus(chunk) == ChunkStatus.ACTIVE);
@@ -331,9 +376,11 @@ public class ChunkVectorWorker {
                 targetState, job.fileLockVersion());
     }
 
-    private void activate(DocumentChunk current, ChunkSnapshot snapshot, EnrichedChunk enriched) {
+    private void activate(DocumentChunk current, ChunkSnapshot snapshot, EnrichedChunk enriched,
+                          UUID vectorId) {
         DocumentChunk patch = new DocumentChunk();
         patch.setStatus(ChunkStatus.ACTIVE.code());
+        patch.setVectorId(vectorId);
         patch.setOverlapContent(enriched.overlapContent());
         patch.setOverlapSourceChunkId(enriched.overlapSourceChunkId());
         patch.setOverlapTokenCount(enriched.overlapTokenCount());
@@ -342,6 +389,7 @@ public class ChunkVectorWorker {
         patch.setIndexContent(enriched.indexContent());
         UpdateWrapper<DocumentChunk> update = chunkScope(current, snapshot)
                 .set("last_error", null)
+                .set("indexing_lock_version", null)
                 .setSql("lock_version = lock_version + 1");
         if (enriched.overlapContent() == null) {
             update.set("overlap_content", null);
@@ -355,13 +403,18 @@ public class ChunkVectorWorker {
         if (chunkMapper.update(patch, update) != 1) {
             throw ChunkingException.conflict("Chunk changed before vector activation");
         }
+        current.setVectorId(vectorId);
+        current.setIndexingLockVersion(null);
     }
 
     private void restoreBatch(BatchJob job, RuntimeException original) {
         try {
             transactions.executeWithoutResult(status -> {
                 FileProcessing processing = requireCompensatableProcessing(
-                        job.tenantId(), job.knowledgeId(), job.fileId());
+                        job.tenantId(), job.knowledgeId(), job.fileId(), job.fileLockVersion());
+                requireJobSnapshot(processing, job.sourceHash(), job.processing(), job.maxTokens());
+                requireExactJobChunks(job.tenantId(), job.knowledgeId(), job.fileId(),
+                        job.allChunks(), job.chunks());
                 restoreIndexingTargets(job.tenantId(), job.knowledgeId(), job.fileId(),
                         job.chunks(), null);
                 stateService.fail(job.knowledgeId(), job.fileId(), PipelineState.VECTORIZING,
@@ -379,7 +432,10 @@ public class ChunkVectorWorker {
             String error = failureSummary(original);
             transactions.executeWithoutResult(status -> {
                 FileProcessing processing = requireCompensatableProcessing(
-                        job.tenantId(), job.knowledgeId(), job.fileId());
+                        job.tenantId(), job.knowledgeId(), job.fileId(), job.fileLockVersion());
+                requireJobSnapshot(processing, job.sourceHash(), job.processing(), job.maxTokens());
+                requireExactJobChunks(job.tenantId(), job.knowledgeId(), job.fileId(),
+                        job.allChunks(), List.of(job.chunk()));
                 restoreIndexingTargets(job.tenantId(), job.knowledgeId(), job.fileId(),
                         List.of(job.chunk()), error);
                 stateService.recoverSingleVectorizationFailure(job.knowledgeId(), job.fileId(),
@@ -395,15 +451,10 @@ public class ChunkVectorWorker {
     private void restoreIndexingTargets(long tenantId, long knowledgeId, long fileId,
                                         List<ChunkSnapshot> snapshots, String lastError) {
         List<DocumentChunk> chunks = chunkMapper.findByFileForUpdate(fileId, tenantId, knowledgeId);
-        Map<UUID, DocumentChunk> currentByPublicId = chunks.stream()
-                .filter(chunk -> chunk.getPublicId() != null)
-                .collect(Collectors.toMap(DocumentChunk::getPublicId, chunk -> chunk));
+        Map<Long, DocumentChunk> currentById = byId(chunks);
         for (ChunkSnapshot snapshot : snapshots) {
-            DocumentChunk current = currentByPublicId.get(snapshot.publicId());
-            if (current == null
-                    || !Integer.valueOf(ChunkStatus.INDEXING.code()).equals(current.getStatus())) {
-                continue;
-            }
+            DocumentChunk current = currentById.get(snapshot.id());
+            requireSnapshot(current, snapshot);
             DocumentChunk patch = new DocumentChunk();
             patch.setStatus(ChunkStatus.DRAFT.code());
             patch.setLastError(lastError);
@@ -414,13 +465,15 @@ public class ChunkVectorWorker {
                     .eq("file_id", fileId)
                     .eq("public_id", snapshot.publicId())
                     .eq("status", ChunkStatus.INDEXING.code())
-                    .eq("lock_version", current.getLockVersion())
+                    .eq("lock_version", snapshot.lockVersion())
+                    .eq("indexing_lock_version", snapshot.indexingLockVersion())
                     .set("overlap_content", null)
                     .set("overlap_source_chunk_id", null)
                     .set("overlap_token_count", 0)
                     .set("overlap_character_count", 0)
                     .set("overlap_reduction_reason", null)
                     .set("index_content", null)
+                    .set("indexing_lock_version", null)
                     .setSql("lock_version = lock_version + 1");
             if (lastError == null) {
                 update.set("last_error", null);
@@ -428,17 +481,32 @@ public class ChunkVectorWorker {
             if (chunkMapper.update(patch, update) != 1) {
                 throw ChunkingException.conflict("Chunk changed before failure restoration");
             }
+            current.setIndexingLockVersion(null);
         }
     }
 
-    private void cleanupEvery(List<ChunkSnapshot> snapshots, RuntimeException original) {
-        for (ChunkSnapshot snapshot : snapshots) {
+    private void cleanupEvery(Collection<UUID> vectorIds, RuntimeException original) {
+        for (UUID vectorId : vectorIds) {
             try {
-                gateway.delete(snapshot.publicId());
+                gateway.delete(vectorId);
             } catch (RuntimeException cleanupFailure) {
                 addSuppressedUnlessSame(original, cleanupFailure);
                 log.error("Unable to delete vector after indexing failure for chunk {}",
-                        snapshot.publicId(), cleanupFailure);
+                        vectorId, cleanupFailure);
+            }
+        }
+    }
+
+    private void cleanupPreviousVectors(List<ChunkSnapshot> snapshots) {
+        for (ChunkSnapshot snapshot : snapshots) {
+            if (snapshot.vectorId() == null) {
+                continue;
+            }
+            try {
+                gateway.delete(snapshot.vectorId());
+            } catch (RuntimeException cleanupFailure) {
+                log.warn("Unable to delete superseded vector generation {} for chunk {}",
+                        snapshot.vectorId(), snapshot.publicId(), cleanupFailure);
             }
         }
     }
@@ -465,18 +533,36 @@ public class ChunkVectorWorker {
     }
 
     private FileProcessing requireCompensatableProcessing(long tenantId, long knowledgeId,
-                                                           long fileId) {
+                                                           long fileId, int fileLockVersion) {
         FileProcessing processing = processingMapper.findScopedForUpdate(
                 fileId, tenantId, knowledgeId);
         if (processing == null) {
             throw ChunkingException.notFound(
                     "File was not found in the current tenant and knowledge base");
         }
-        if (pipelineState(processing) != PipelineState.VECTORIZING) {
+        if (pipelineState(processing) != PipelineState.VECTORIZING
+                || !Integer.valueOf(fileLockVersion).equals(processing.getLockVersion())) {
             throw ChunkingException.conflict(
-                    "File left VECTORIZING before vector failure could be compensated");
+                    "File ownership changed before vector failure could be compensated");
         }
         return processing;
+    }
+
+    private void requireExactJobChunks(long tenantId, long knowledgeId, long fileId,
+                                       List<ChunkSnapshot> allSnapshots,
+                                       List<ChunkSnapshot> targets) {
+        Map<Long, DocumentChunk> currentById = byId(
+                chunkMapper.findByFileForUpdate(fileId, tenantId, knowledgeId));
+        requireExactChunkSet(currentById, allSnapshots);
+        Set<Long> targetIds = targets.stream().map(ChunkSnapshot::id).collect(Collectors.toSet());
+        for (ChunkSnapshot snapshot : allSnapshots) {
+            DocumentChunk current = currentById.get(snapshot.id());
+            if (targetIds.contains(snapshot.id())) {
+                requireSnapshot(current, snapshot);
+            } else {
+                requireRelatedSnapshot(current, snapshot);
+            }
+        }
     }
 
     private void requireJobSnapshot(FileProcessing processing, String sourceHash,
@@ -512,12 +598,27 @@ public class ChunkVectorWorker {
     private void requireSnapshot(DocumentChunk current, ChunkSnapshot expected) {
         if (current == null
                 || !Objects.equals(current.getPublicId(), expected.publicId())
+                || !Objects.equals(current.getTenantId(), expected.tenantId())
+                || !Objects.equals(current.getKnowledgeId(), expected.knowledgeId())
+                || !Objects.equals(current.getFileId(), expected.fileId())
+                || !Objects.equals(current.getPosition(), expected.position())
+                || !Objects.equals(current.getContent(), expected.content())
                 || !Objects.equals(current.getLockVersion(), expected.lockVersion())
                 || !Objects.equals(current.getContentHash(), expected.contentHash())
                 || !Objects.equals(current.getOverlapEnabled(), expected.overlapEnabled())
                 || !Objects.equals(current.getOverlapLimit(), expected.overlapLimit())
                 || !Objects.equals(current.getOverlapUnit(), expected.overlapUnit())
-                || chunkStatus(current) != ChunkStatus.INDEXING) {
+                || !Objects.equals(current.getSectionPath() == null ? List.of() : current.getSectionPath(),
+                expected.sectionPath())
+                || !Objects.equals(ChunkSnapshot.immutableMap(current.getSourceLocator()),
+                expected.sourceLocator())
+                || !Objects.equals(ChunkSnapshot.immutableMap(current.getBoundaryReason()),
+                expected.boundaryReason())
+                || !Objects.equals(current.getTokenCount(), expected.tokenCount())
+                || !Objects.equals(current.getIsModified(), expected.isModified())
+                || !Objects.equals(current.getVectorId(), expected.vectorId())
+                || !Objects.equals(current.getIndexingLockVersion(), expected.indexingLockVersion())
+                || !Objects.equals(current.getStatus(), expected.status())) {
             throw ChunkingException.conflict("Chunk state or content snapshot changed during vectorization");
         }
     }
@@ -529,7 +630,23 @@ public class ChunkVectorWorker {
                 || !Objects.equals(current.getContentHash(), expected.contentHash())
                 || !Objects.equals(current.getOverlapEnabled(), expected.overlapEnabled())
                 || !Objects.equals(current.getOverlapLimit(), expected.overlapLimit())
-                || !Objects.equals(current.getOverlapUnit(), expected.overlapUnit())) {
+                || !Objects.equals(current.getOverlapUnit(), expected.overlapUnit())
+                || !Objects.equals(current.getTenantId(), expected.tenantId())
+                || !Objects.equals(current.getKnowledgeId(), expected.knowledgeId())
+                || !Objects.equals(current.getFileId(), expected.fileId())
+                || !Objects.equals(current.getPosition(), expected.position())
+                || !Objects.equals(current.getContent(), expected.content())
+                || !Objects.equals(current.getSectionPath() == null ? List.of() : current.getSectionPath(),
+                expected.sectionPath())
+                || !Objects.equals(ChunkSnapshot.immutableMap(current.getSourceLocator()),
+                expected.sourceLocator())
+                || !Objects.equals(ChunkSnapshot.immutableMap(current.getBoundaryReason()),
+                expected.boundaryReason())
+                || !Objects.equals(current.getTokenCount(), expected.tokenCount())
+                || !Objects.equals(current.getIsModified(), expected.isModified())
+                || !Objects.equals(current.getVectorId(), expected.vectorId())
+                || !Objects.equals(current.getIndexingLockVersion(), expected.indexingLockVersion())
+                || !Objects.equals(current.getStatus(), expected.status())) {
             throw ChunkingException.conflict(
                     "Related chunk snapshot changed during vectorization");
         }
@@ -556,7 +673,10 @@ public class ChunkVectorWorker {
                 .eq("file_id", current.getFileId())
                 .eq("public_id", snapshot.publicId())
                 .eq("status", ChunkStatus.INDEXING.code())
-                .eq("lock_version", snapshot.lockVersion());
+                .eq("lock_version", snapshot.lockVersion())
+                .eq("indexing_lock_version", snapshot.indexingLockVersion());
+        update = snapshot.vectorId() == null
+                ? update.isNull("vector_id") : update.eq("vector_id", snapshot.vectorId());
         return snapshot.contentHash() == null
                 ? update.isNull("content_hash")
                 : update.eq("content_hash", snapshot.contentHash());
@@ -623,6 +743,11 @@ public class ChunkVectorWorker {
             List<String> sectionPath,
             Map<String, Object> sourceLocator,
             Map<String, Object> boundaryReason,
+            Integer tokenCount,
+            Integer status,
+            Boolean isModified,
+            UUID vectorId,
+            Integer indexingLockVersion,
             int lockVersion) {
 
         public ChunkSnapshot {
@@ -633,24 +758,29 @@ public class ChunkVectorWorker {
             boundaryReason = immutableMap(boundaryReason);
         }
 
-        public static ChunkSnapshot afterMarking(DocumentChunk chunk) {
-            return from(chunk, chunk.getLockVersion() + 1);
+        public static ChunkSnapshot afterMarking(DocumentChunk chunk, int indexingLockVersion) {
+            return from(chunk, chunk.getLockVersion() + 1,
+                    ChunkStatus.INDEXING.code(), indexingLockVersion);
         }
 
         public static ChunkSnapshot current(DocumentChunk chunk) {
-            return from(chunk, chunk.getLockVersion());
+            return from(chunk, chunk.getLockVersion(), chunk.getStatus(),
+                    chunk.getIndexingLockVersion());
         }
 
         public static ChunkSnapshot fromIndexing(DocumentChunk chunk) {
             return current(chunk);
         }
 
-        private static ChunkSnapshot from(DocumentChunk chunk, int lockVersion) {
+        private static ChunkSnapshot from(DocumentChunk chunk, int lockVersion,
+                                          Integer status, Integer indexingLockVersion) {
             return new ChunkSnapshot(
                     chunk.getId(), chunk.getPublicId(), chunk.getTenantId(), chunk.getKnowledgeId(),
                     chunk.getFileId(), chunk.getPosition(), chunk.getContent(), chunk.getContentHash(),
                     chunk.getOverlapEnabled(), chunk.getOverlapLimit(), chunk.getOverlapUnit(),
-                    chunk.getSectionPath(), chunk.getSourceLocator(), chunk.getBoundaryReason(), lockVersion);
+                    chunk.getSectionPath(), chunk.getSourceLocator(), chunk.getBoundaryReason(),
+                    chunk.getTokenCount(), status, chunk.getIsModified(), chunk.getVectorId(),
+                    indexingLockVersion, lockVersion);
         }
 
         DocumentChunk detached() {
@@ -669,7 +799,11 @@ public class ChunkVectorWorker {
             chunk.setSectionPath(sectionPath);
             chunk.setSourceLocator(sourceLocator);
             chunk.setBoundaryReason(boundaryReason);
-            chunk.setStatus(ChunkStatus.INDEXING.code());
+            chunk.setTokenCount(tokenCount);
+            chunk.setStatus(status);
+            chunk.setIsModified(isModified);
+            chunk.setVectorId(vectorId);
+            chunk.setIndexingLockVersion(indexingLockVersion);
             chunk.setLockVersion(lockVersion);
             return chunk;
         }
@@ -738,6 +872,16 @@ public class ChunkVectorWorker {
             return chunks.stream().filter(value -> value.id() == id).findFirst()
                     .orElseThrow(() -> new IllegalStateException("Missing chunk snapshot"));
         }
+
+        Map<Long, UUID> vectorIds() {
+            return chunks.stream().collect(Collectors.toUnmodifiableMap(
+                    ChunkSnapshot::id, snapshot -> vectorGenerationId(
+                            tenantId, knowledgeId, fileId, fileLockVersion, snapshot)));
+        }
+
+        UUID vectorId(long id) {
+            return Objects.requireNonNull(vectorIds().get(id), "vectorId");
+        }
     }
 
     public record SingleJob(long tenantId, long knowledgeId, long fileId,
@@ -761,6 +905,26 @@ public class ChunkVectorWorker {
             this(tenantId, knowledgeId, fileId, fileLockVersion, sourceHash, maxTokens,
                     file, allChunks, chunk, null, List.of());
         }
+
+        Map<Long, UUID> vectorIds() {
+            return Map.of(chunk.id(), vectorGenerationId(
+                    tenantId, knowledgeId, fileId, fileLockVersion, chunk));
+        }
+
+        UUID vectorId(long id) {
+            if (id != chunk.id()) {
+                throw new IllegalStateException("Missing chunk vector generation");
+            }
+            return vectorIds().get(id);
+        }
+    }
+
+    private static UUID vectorGenerationId(long tenantId, long knowledgeId, long fileId,
+                                           int fileLockVersion, ChunkSnapshot snapshot) {
+        String identity = "starseaknow-vector-v1|" + tenantId + '|' + knowledgeId + '|'
+                + fileId + '|' + snapshot.publicId() + '|' + fileLockVersion + '|'
+                + snapshot.lockVersion();
+        return UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8));
     }
 
     public record ProcessingSnapshot(String strategyCode, String plannerVersion,
