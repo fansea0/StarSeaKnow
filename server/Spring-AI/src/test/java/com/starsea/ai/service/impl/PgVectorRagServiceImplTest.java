@@ -19,12 +19,15 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.pgvector.PgVectorFilterExpressionConverter;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -200,27 +203,138 @@ class PgVectorRagServiceImplTest {
     }
 
     @Test
-    void expands_saturated_candidate_window_until_top_k_distinct_parent_contexts_are_found() {
+    void excludes_authoritative_parent_to_reach_second_context_after_one_thousand_children() {
         Fixture fixture = fixture();
-        List<UUID> sameParentChildren = List.of(
-                FIRST_CHUNK_ID, SECOND_CHUNK_ID, THIRD_CHUNK_ID,
-                FOURTH_CHUNK_ID, FIFTH_CHUNK_ID, SIXTH_CHUNK_ID);
-        List<Document> firstWindow = java.util.stream.IntStream.range(0, sameParentChildren.size())
-                .mapToObj(index -> candidate(sameParentChildren.get(index), "same parent " + index,
-                        0.99 - index * 0.01))
+        UUID secondParentChildId = new UUID(0L, 1_100L);
+        List<Document> corpus = IntStream.rangeClosed(100, 1_100)
+                .mapToObj(value -> childCandidate(new UUID(0L, value),
+                        value == 1_100 ? SECOND_PARENT_ID : FIRST_PARENT_ID,
+                        "child " + value, 1.0 - (value - 100) / 2_000.0))
                 .toList();
-        List<Document> expandedWindow = new java.util.ArrayList<>(firstWindow);
-        expandedWindow.add(candidate(SEVENTH_CHUNK_ID, "next parent", 0.90));
         when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
-                .thenAnswer(invocation -> invocation.<SearchRequest>getArgument(0).getTopK() == 6
-                        ? firstWindow : expandedWindow);
+                .thenAnswer(invocation -> {
+                    SearchRequest request = invocation.getArgument(0);
+                    boolean firstParentExcluded = pgFilter(request).contains(FIRST_PARENT_ID.toString());
+                    return (firstParentExcluded ? corpus.stream().skip(1_000) : corpus.stream())
+                            .limit(request.getTopK())
+                            .toList();
+                });
         when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
                 .thenAnswer(invocation -> invocation.<List<UUID>>getArgument(2).stream()
                         .map(publicId -> childChunk(publicId,
-                                SEVENTH_CHUNK_ID.equals(publicId) ? SECOND_PARENT_ID : FIRST_PARENT_ID,
-                                SEVENTH_CHUNK_ID.equals(publicId) ? 9 : 7,
-                                "child index", SEVENTH_CHUNK_ID.equals(publicId)
+                                secondParentChildId.equals(publicId) ? SECOND_PARENT_ID : FIRST_PARENT_ID,
+                                secondParentChildId.equals(publicId) ? 9 : 7,
+                                "child index", secondParentChildId.equals(publicId)
                                         ? "second parent body" : "first parent body"))
+                        .toList());
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("query", Set.of(KNOWLEDGE_ID), 2, 0.2));
+
+        assertEquals(List.of(new UUID(0L, 100L), secondParentChildId),
+                result.stream().map(RetrievedChunk::chunkId).toList());
+        assertEquals(List.of(1.0, 0.5), result.stream().map(RetrievedChunk::score).toList());
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<SearchRequest> searches = (ArgumentCaptor) ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore, org.mockito.Mockito.times(2)).similaritySearch(searches.capture());
+        assertEquals(List.of(6, 6), searches.getAllValues().stream().map(SearchRequest::getTopK).toList());
+        assertTrue(pgFilter(searches.getAllValues().get(1))
+                .contains("!($.parentChunkId == \"" + FIRST_PARENT_ID + "\")"));
+    }
+
+    @Test
+    void parent_exclusion_filter_explicitly_preserves_single_candidates() {
+        Fixture fixture = fixture();
+        List<Document> firstWindow = List.of(
+                childCandidate(FIRST_CHUNK_ID, FIRST_PARENT_ID, "child 1", 0.99),
+                childCandidate(SECOND_CHUNK_ID, FIRST_PARENT_ID, "child 2", 0.98),
+                childCandidate(THIRD_CHUNK_ID, FIRST_PARENT_ID, "child 3", 0.97),
+                childCandidate(FOURTH_CHUNK_ID, FIRST_PARENT_ID, "child 4", 0.96),
+                childCandidate(FIFTH_CHUNK_ID, FIRST_PARENT_ID, "child 5", 0.95),
+                childCandidate(SIXTH_CHUNK_ID, FIRST_PARENT_ID, "child 6", 0.94));
+        Document single = singleCandidate(SEVENTH_CHUNK_ID, "single", 0.90);
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenAnswer(invocation -> pgFilter(invocation.getArgument(0)).contains(FIRST_PARENT_ID.toString())
+                        ? List.of(single) : firstWindow);
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenAnswer(invocation -> invocation.<List<UUID>>getArgument(2).stream()
+                        .map(publicId -> SEVENTH_CHUNK_ID.equals(publicId)
+                                ? chunk(publicId, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                ChunkStatus.ACTIVE, 9, "single database content")
+                                : childChunk(publicId, FIRST_PARENT_ID, 7,
+                                "child index", "first parent body"))
+                        .toList());
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("query", Set.of(KNOWLEDGE_ID), 2, 0.2));
+
+        assertEquals(List.of(FIRST_CHUNK_ID, SEVENTH_CHUNK_ID),
+                result.stream().map(RetrievedChunk::chunkId).toList());
+        assertEquals(List.of("标题：Parent\n\nfirst parent body", "single database content"),
+                result.stream().map(RetrievedChunk::content).toList());
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<SearchRequest> searches = (ArgumentCaptor) ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore, org.mockito.Mockito.times(2)).similaritySearch(searches.capture());
+        String secondFilter = pgFilter(searches.getAllValues().get(1));
+        assertTrue(secondFilter.contains("$.chunkType == \"SINGLE\""));
+        assertTrue(secondFilter.contains("$.chunkType == \"CHILD\""));
+        assertTrue(secondFilter.contains("!($.parentChunkId == \"" + FIRST_PARENT_ID + "\")"));
+    }
+
+    @Test
+    void parent_exclusion_filter_preserves_legacy_single_without_chunk_type_metadata() {
+        Fixture fixture = fixture();
+        List<Document> firstWindow = List.of(
+                childCandidate(FIRST_CHUNK_ID, FIRST_PARENT_ID, "child 1", 0.99),
+                childCandidate(SECOND_CHUNK_ID, FIRST_PARENT_ID, "child 2", 0.98),
+                childCandidate(THIRD_CHUNK_ID, FIRST_PARENT_ID, "child 3", 0.97),
+                childCandidate(FOURTH_CHUNK_ID, FIRST_PARENT_ID, "child 4", 0.96),
+                childCandidate(FIFTH_CHUNK_ID, FIRST_PARENT_ID, "child 5", 0.95),
+                childCandidate(SIXTH_CHUNK_ID, FIRST_PARENT_ID, "child 6", 0.94));
+        Document legacySingle = candidate(SEVENTH_CHUNK_ID, "legacy single", 0.90);
+        String missingChunkTypeBranch = "!($.chunkType == \"SINGLE\" || $.chunkType == \"CHILD\")";
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenAnswer(invocation -> pgFilter(invocation.getArgument(0)).contains(missingChunkTypeBranch)
+                        ? List.of(legacySingle) : firstWindow);
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenAnswer(invocation -> invocation.<List<UUID>>getArgument(2).stream()
+                        .map(publicId -> SEVENTH_CHUNK_ID.equals(publicId)
+                                ? chunk(publicId, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                                ChunkStatus.ACTIVE, 9, "legacy single database content")
+                                : childChunk(publicId, FIRST_PARENT_ID, 7,
+                                "child index", "first parent body"))
+                        .toList());
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("query", Set.of(KNOWLEDGE_ID), 2, 0.2));
+
+        assertEquals(List.of(FIRST_CHUNK_ID, SEVENTH_CHUNK_ID),
+                result.stream().map(RetrievedChunk::chunkId).toList());
+        assertEquals(List.of("标题：Parent\n\nfirst parent body", "legacy single database content"),
+                result.stream().map(RetrievedChunk::content).toList());
+    }
+
+    @Test
+    void stale_parent_metadata_falls_back_to_candidate_id_exclusion_and_keeps_progressing() {
+        Fixture fixture = fixture();
+        List<Document> staleParentWindow = List.of(
+                childCandidate(FIRST_CHUNK_ID, SECOND_PARENT_ID, "child 1", 0.99),
+                childCandidate(SECOND_CHUNK_ID, SECOND_PARENT_ID, "child 2", 0.98),
+                childCandidate(THIRD_CHUNK_ID, SECOND_PARENT_ID, "child 3", 0.97),
+                childCandidate(FOURTH_CHUNK_ID, SECOND_PARENT_ID, "child 4", 0.96),
+                childCandidate(FIFTH_CHUNK_ID, SECOND_PARENT_ID, "child 5", 0.95),
+                childCandidate(SIXTH_CHUNK_ID, SECOND_PARENT_ID, "child 6", 0.94));
+        Document nextParent = childCandidate(SEVENTH_CHUNK_ID, SECOND_PARENT_ID, "next parent", 0.90);
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenAnswer(invocation -> pgFilter(invocation.getArgument(0)).contains(FIRST_CHUNK_ID.toString())
+                        ? List.of(nextParent) : staleParentWindow);
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenAnswer(invocation -> invocation.<List<UUID>>getArgument(2).stream()
+                        .map(publicId -> SEVENTH_CHUNK_ID.equals(publicId)
+                                ? childChunk(publicId, SECOND_PARENT_ID, 9,
+                                "child index", "second parent body")
+                                : childChunk(publicId, FIRST_PARENT_ID, 7,
+                                "child index", "first parent body"))
                         .toList());
 
         List<RetrievedChunk> result = fixture.service.retrieve(
@@ -229,10 +343,55 @@ class PgVectorRagServiceImplTest {
         assertEquals(List.of(FIRST_CHUNK_ID, SEVENTH_CHUNK_ID),
                 result.stream().map(RetrievedChunk::chunkId).toList());
         assertEquals(List.of(0.99, 0.90), result.stream().map(RetrievedChunk::score).toList());
+        verify(fixture.vectorStore, org.mockito.Mockito.times(3)).similaritySearch(any(SearchRequest.class));
+    }
+
+    @Test
+    void stops_after_no_progress_with_missing_metadata_noise_and_keeps_window_bounded() {
+        Fixture fixture = fixture();
+        Map<String, Object> missingMetadata = new LinkedHashMap<>(candidateMetadata(FIRST_CHUNK_ID.toString()));
+        missingMetadata.remove("documentChunkId");
+        Document noise = Document.builder()
+                .id(FIRST_CHUNK_ID.toString())
+                .text("missing metadata")
+                .metadata(missingMetadata)
+                .score(0.90)
+                .build();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(noise, noise, noise, noise, noise, noise));
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of());
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("query", Set.of(KNOWLEDGE_ID), 2, 0.2));
+
+        assertTrue(result.isEmpty());
         @SuppressWarnings({"rawtypes", "unchecked"})
         ArgumentCaptor<SearchRequest> searches = (ArgumentCaptor) ArgumentCaptor.forClass(SearchRequest.class);
         verify(fixture.vectorStore, org.mockito.Mockito.times(2)).similaritySearch(searches.capture());
-        assertEquals(List.of(6, 12), searches.getAllValues().stream().map(SearchRequest::getTopK).toList());
+        assertEquals(List.of(6, 6), searches.getAllValues().stream().map(SearchRequest::getTopK).toList());
+    }
+
+    @Test
+    void stops_after_filterable_invalid_candidate_budget_is_exhausted() {
+        Fixture fixture = fixture();
+        AtomicInteger batch = new AtomicInteger();
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenAnswer(invocation -> IntStream.range(0, invocation.<SearchRequest>getArgument(0).getTopK())
+                        .mapToObj(offset -> singleCandidate(
+                                new UUID(1L, batch.getAndIncrement()), "invalid", 0.90))
+                        .toList());
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of());
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("query", Set.of(KNOWLEDGE_ID), 2, 0.2));
+
+        assertTrue(result.isEmpty());
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<SearchRequest> searches = (ArgumentCaptor) ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore, org.mockito.Mockito.times(43)).similaritySearch(searches.capture());
+        assertTrue(searches.getAllValues().stream().allMatch(request -> request.getTopK() == 6));
     }
 
     @Test
@@ -558,6 +717,33 @@ class PgVectorRagServiceImplTest {
                 .metadata(candidateMetadata(publicId.toString()))
                 .score(score)
                 .build();
+    }
+
+    private static Document singleCandidate(UUID publicId, String text, double score) {
+        Map<String, Object> metadata = new LinkedHashMap<>(candidateMetadata(publicId.toString()));
+        metadata.put("chunkType", ChunkType.SINGLE.name());
+        return Document.builder()
+                .id(publicId.toString())
+                .text(text)
+                .metadata(metadata)
+                .score(score)
+                .build();
+    }
+
+    private static Document childCandidate(UUID publicId, UUID parentPublicId, String text, double score) {
+        Map<String, Object> metadata = new LinkedHashMap<>(candidateMetadata(publicId.toString()));
+        metadata.put("chunkType", ChunkType.CHILD.name());
+        metadata.put("parentChunkId", parentPublicId.toString());
+        return Document.builder()
+                .id(publicId.toString())
+                .text(text)
+                .metadata(metadata)
+                .score(score)
+                .build();
+    }
+
+    private static String pgFilter(SearchRequest request) {
+        return new PgVectorFilterExpressionConverter().convertExpression(request.getFilterExpression());
     }
 
     private static Map<String, Object> candidateMetadata(String chunkPublicId) {
