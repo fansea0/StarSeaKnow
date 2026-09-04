@@ -1,16 +1,19 @@
 import { normalizeFileType, normalizeStrategyCode } from './normalization'
 
-const localOnlyStrategyCodes = new Set(['GENERAL', 'PARENT_CHILD'])
+const localOnlyStrategyCodes = new Set(['GENERAL'])
 
 export const placeholderStrategies = Object.freeze([
   Object.freeze({ code: 'GENERAL', title: '通用', scope: 'GLOBAL', disabled: true, reason: '暂未开放' }),
-  Object.freeze({ code: 'PARENT_CHILD', title: '父子分块', scope: 'GLOBAL', disabled: true, reason: '暂未开放' }),
 ])
 
 const presentation = {
   MARKDOWN_OPTIMIZED: {
     title: 'MD 自适应分块',
     description: '按 Markdown 标题结构生成可调整的语义分块。',
+  },
+  PARENT_CHILD: {
+    title: '父子分块',
+    description: '子块精准召回，父块提供完整回答上下文。',
   },
 }
 

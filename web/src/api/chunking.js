@@ -1,7 +1,7 @@
 import { http } from './http'
 import { normalizeStrategyCode } from '../features/chunking/normalization'
 
-const localOnlyStrategyCodes = new Set(['GENERAL', 'PARENT_CHILD'])
+const localOnlyStrategyCodes = new Set(['GENERAL'])
 
 function filePath(knowledgeId, fileId, suffix = '') {
   return `/knowledge/${knowledgeId}/files/${fileId}${suffix}`

@@ -9,16 +9,15 @@ const backendMarkdown = [
 ]
 
 describe('mergeStrategies', () => {
-  it('keeps local placeholders first and appends compatible backend strategies', () => {
+  it('keeps only the general local placeholder and appends compatible backend strategies', () => {
     expect(mergeStrategies('md', backendMarkdown)).toEqual([
       expect.objectContaining({ code: 'GENERAL', disabled: true }),
-      expect.objectContaining({ code: 'PARENT_CHILD', disabled: true }),
       expect.objectContaining({ code: 'MARKDOWN_OPTIMIZED', disabled: false }),
     ])
   })
 
   it('keeps only disabled local placeholders when a file type has no backend strategy', () => {
-    expect(mergeStrategies('pdf', [])).toHaveLength(2)
+    expect(mergeStrategies('pdf', [])).toHaveLength(1)
   })
 
   it('normalizes requested and supported file types before matching', () => {
@@ -26,7 +25,7 @@ describe('mergeStrategies', () => {
       { code: 'MARKDOWN_OPTIMIZED', supportedFileTypes: ['.MD', '.mArKdOwN'] },
     ])
 
-    expect(strategies[2]).toMatchObject({
+    expect(strategies[1]).toMatchObject({
       code: 'MARKDOWN_OPTIMIZED',
       title: 'MD 自适应分块',
       description: expect.any(String),
@@ -34,9 +33,11 @@ describe('mergeStrategies', () => {
     })
   })
 
-  it('filters reserved codes and deduplicates normalized backend codes without mutating input', () => {
+  it('opens, presents, and deduplicates backend PARENT_CHILD descriptors without mutating input', () => {
     const backend = [
       { code: ' general ', supportedFileTypes: ['md'] },
+      { code: ' parent_child ', supportedFileTypes: ['md', 'markdown'], marker: 'parent-first' },
+      { code: 'PARENT_CHILD', supportedFileTypes: ['md', 'markdown'], marker: 'parent-second' },
       { code: ' markdown_optimized ', supportedFileTypes: ['.MD', '.markdown'], marker: 'first' },
       { code: 'MARKDOWN_OPTIMIZED', supportedFileTypes: ['md'], marker: 'second' },
       { code: 'FUTURE_MODE', supportedFileTypes: ['markdown'] },
@@ -51,6 +52,12 @@ describe('mergeStrategies', () => {
       'MARKDOWN_OPTIMIZED',
       'FUTURE_MODE',
     ])
+    expect(strategies[1]).toMatchObject({
+      marker: 'parent-first',
+      title: '父子分块',
+      description: '子块精准召回，父块提供完整回答上下文。',
+      disabled: false,
+    })
     expect(strategies[2]).toMatchObject({ marker: 'first', title: 'MD 自适应分块' })
     expect(strategies[3]).toMatchObject({ title: 'FUTURE MODE', description: expect.any(String), disabled: false })
     expect(backend).toEqual(original)

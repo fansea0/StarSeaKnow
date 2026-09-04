@@ -59,8 +59,24 @@ describe('chunking API client', () => {
     expect(http.post).toHaveBeenNthCalledWith(3, '/knowledge/11/files/22/chunks/chunk-1/reindex')
   })
 
-  it.each(['GENERAL', ' general ', 'PaReNt_ChIlD '])('rejects local-only strategy code %s before a preview request is sent', (strategyCode) => {
+  it.each(['GENERAL', ' general '])('rejects local-only strategy code %s before a preview request is sent', (strategyCode) => {
     expect(() => createPreview(11, 22, { strategyCode })).toThrow('暂未开放')
     expect(http.post).not.toHaveBeenCalled()
+  })
+
+  it('submits a backend-advertised PARENT_CHILD preview request unchanged', () => {
+    const request = {
+      strategyCode: 'PARENT_CHILD',
+      strategyConfig: {
+        parentMode: 'PARAGRAPH',
+        parentMaxTokens: 1024,
+        childMaxTokens: 256,
+        childOverlapTokens: 32,
+      },
+    }
+
+    createPreview(11, 22, request)
+
+    expect(http.post).toHaveBeenCalledWith('/knowledge/11/files/22/chunk-preview', request)
   })
 })

@@ -175,15 +175,69 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.text()).not.toContain('旧文件迟到正文')
   })
 
-  it('loads backend capabilities and selects MD optimized while placeholders stay disabled', async () => {
+  it('uses backend PARENT_CHILD capability while retaining only the general disabled placeholder', async () => {
+    getStrategies.mockResolvedValue({
+      data: {
+        fileType: 'md',
+        strategies: [
+          { code: 'MARKDOWN_OPTIMIZED', supportedFileTypes: ['md', 'markdown'] },
+          { code: 'PARENT_CHILD', supportedFileTypes: ['md', 'markdown'] },
+        ],
+      },
+    })
+    getProcessing.mockResolvedValue(processing(0, { strategyCode: 'PARENT_CHILD' }))
     const wrapper = mountWorkspace()
     await flushPromises()
 
     expect(getStrategies).toHaveBeenCalledWith('11', '22')
     expect(getProcessing).toHaveBeenCalledWith('11', '22')
     expect(wrapper.get('[data-strategy="GENERAL"]').attributes('aria-disabled')).toBe('true')
-    expect(wrapper.get('[data-strategy="PARENT_CHILD"]').attributes('aria-disabled')).toBe('true')
-    expect(wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').classes()).toContain('is-selected')
+    expect(wrapper.get('[data-strategy="PARENT_CHILD"]').attributes('aria-disabled')).toBe('false')
+    expect(wrapper.get('[data-strategy="PARENT_CHILD"]').classes()).toContain('is-selected')
+  })
+
+  it('isolates strategy configs, restores the processing strategy snapshot, and submits the selected parent-child config', async () => {
+    getStrategies.mockResolvedValue({
+      data: {
+        fileType: 'md',
+        strategies: [
+          { code: 'MARKDOWN_OPTIMIZED', supportedFileTypes: ['md', 'markdown'] },
+          { code: 'PARENT_CHILD', supportedFileTypes: ['md', 'markdown'] },
+        ],
+      },
+    })
+    getProcessing.mockResolvedValue(processing(0, {
+      strategyCode: 'PARENT_CHILD',
+      policySnapshot: {
+        parentMode: 'PARAGRAPH',
+        parentMaxTokens: 2048,
+        childMaxTokens: 384,
+        childOverlapTokens: 64,
+      },
+    }))
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="parent-max-tokens"] input').element.value).toBe('2048')
+    await wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').trigger('click')
+    await nextTick()
+    expect(wrapper.get('[data-testid="min-tokens"] input').element.value).toBe('100')
+
+    await wrapper.get('[data-strategy="PARENT_CHILD"]').trigger('click')
+    await nextTick()
+    expect(wrapper.get('[data-testid="parent-max-tokens"] input').element.value).toBe('2048')
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(createPreview).toHaveBeenCalledWith('11', '22', expect.objectContaining({
+      strategyCode: 'PARENT_CHILD',
+      strategyConfig: {
+        parentMode: 'PARAGRAPH',
+        parentMaxTokens: 2048,
+        childMaxTokens: 384,
+        childOverlapTokens: 64,
+      },
+    }))
   })
 
   it('keeps file submission disabled until the initial processing lockVersion is loaded', async () => {

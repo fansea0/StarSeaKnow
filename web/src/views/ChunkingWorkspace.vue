@@ -23,8 +23,8 @@
         :show-preview-action="canPreview"
         :error="capabilityError || submissionError"
         @select="selectStrategy"
-        @config-change="strategyConfig = $event"
-        @validity-change="configValid = $event"
+        @config-change="handleConfigChange"
+        @validity-change="handleConfigValidity"
         @preview="submitPreview"
       />
 
@@ -125,6 +125,7 @@ import {
   reindexChunk,
 } from '../api/chunking'
 import { mergeStrategies } from '../features/chunking/strategyCatalog'
+import { defaultConfigFor, normalizePolicySnapshot } from '../features/chunking/strategyConfig'
 import ChunkPreviewPanel from '../components/chunking/ChunkPreviewPanel.vue'
 import ChunkStrategyPanel from '../components/chunking/ChunkStrategyPanel.vue'
 import ContextConfirmDialog from '../components/chunking/ContextConfirmDialog.vue'
@@ -134,7 +135,6 @@ const processingStates = new Set([1, 5])
 const previewStates = new Set([0, 2, 3])
 const confirmStates = new Set([2, 3])
 const mutableChunkStates = new Set([2, 3, 6])
-const defaultStrategyConfig = Object.freeze({ minTokens: 100, targetTokens: 400, maxTokens: 512 })
 
 function initialProcessing() {
   return {
@@ -154,15 +154,6 @@ function errorMessage(cause, fallback) {
     return '源文件已发生变化，请重新生成分块预览'
   }
   return cause?.response?.data?.msg || fallback
-}
-
-function validPolicySnapshot(snapshot) {
-  const minTokens = snapshot?.minTokens
-  const targetTokens = snapshot?.targetTokens
-  const maxTokens = snapshot?.maxTokens
-  if (![minTokens, targetTokens, maxTokens].every(value => Number.isInteger(value) && value > 0)) return null
-  if (minTokens > targetTokens || targetTokens > maxTokens || maxTokens > 512) return null
-  return { minTokens, targetTokens, maxTokens }
 }
 
 function shouldLoadChunks(processing) {
@@ -186,9 +177,10 @@ export default {
     return {
       strategies: [],
       selectedStrategy: '',
-      strategyConfig: { ...defaultStrategyConfig },
+      strategyConfig: defaultConfigFor('MARKDOWN_OPTIMIZED'),
+      strategyConfigs: {},
       strategyConfigHydrated: false,
-      configValid: true,
+      configValid: false,
       chunks: [],
       processing: initialProcessing(),
       processingLoaded: false,
@@ -299,9 +291,10 @@ export default {
       this.stopPolling()
       this.strategies = []
       this.selectedStrategy = ''
-      this.strategyConfig = { ...defaultStrategyConfig }
+      this.strategyConfig = defaultConfigFor('MARKDOWN_OPTIMIZED')
+      this.strategyConfigs = {}
       this.strategyConfigHydrated = false
-      this.configValid = true
+      this.configValid = false
       this.chunks = []
       this.processing = initialProcessing()
       this.processingLoaded = false
@@ -332,6 +325,22 @@ export default {
     async initialize(context) {
       await Promise.all([this.loadCapabilities(context), this.refreshProcessing(false, context)])
     },
+    descriptorFor(code) {
+      return this.strategies.find(strategy => strategy.code === code)
+    },
+    activateStrategy(code, snapshot) {
+      const descriptor = this.descriptorFor(code)
+      if (!descriptor || descriptor.disabled) return false
+      const cached = this.strategyConfigs[code]
+      const nextConfig = snapshot === undefined
+        ? (cached || defaultConfigFor(descriptor))
+        : normalizePolicySnapshot(code, snapshot, descriptor)
+      this.selectedStrategy = code
+      this.strategyConfig = { ...nextConfig }
+      this.strategyConfigs = { ...this.strategyConfigs, [code]: { ...nextConfig } }
+      this.configValid = false
+      return true
+    },
     syncSelectedStrategy() {
       const backendSelected = this.strategies.find(strategy => (
         !strategy.disabled && strategy.code === this.processing.strategyCode
@@ -339,7 +348,12 @@ export default {
       const markdownDefault = this.strategies.find(strategy => (
         !strategy.disabled && strategy.code === 'MARKDOWN_OPTIMIZED'
       ))
-      this.selectedStrategy = backendSelected?.code || markdownDefault?.code || ''
+      const desired = backendSelected?.code || markdownDefault?.code || ''
+      if (!desired) return
+      if (!this.selectedStrategy || !this.strategyConfigHydrated) {
+        const snapshot = backendSelected ? this.processing.policySnapshot : undefined
+        this.activateStrategy(desired, snapshot)
+      }
     },
     async loadCapabilities(context = this.currentContext()) {
       this.capabilityLoading = true
@@ -359,8 +373,24 @@ export default {
     selectStrategy(code) {
       const strategy = this.strategies.find(item => item.code === code)
       if (!strategy || strategy.disabled) return
-      this.selectedStrategy = code
+      if (code === this.selectedStrategy) return
+      if (this.selectedStrategy) {
+        this.strategyConfigs = {
+          ...this.strategyConfigs,
+          [this.selectedStrategy]: { ...this.strategyConfig },
+        }
+      }
+      this.activateStrategy(code)
       this.submissionError = ''
+    },
+    handleConfigChange(config) {
+      if (!this.selectedStrategy || !config || typeof config !== 'object') return
+      const value = { ...config }
+      this.strategyConfig = value
+      this.strategyConfigs = { ...this.strategyConfigs, [this.selectedStrategy]: { ...value } }
+    },
+    handleConfigValidity(valid) {
+      this.configValid = Boolean(valid)
     },
     async refreshProcessing(forceChunkLoad = false, context = this.currentContext()) {
       if (!this.isCurrent(context)) return false
@@ -378,8 +408,6 @@ export default {
           this.retainedChunksLoaded = false
           this.syncSelectedStrategy()
           if (!this.strategyConfigHydrated) {
-            const restoredConfig = validPolicySnapshot(this.processing.policySnapshot)
-            if (restoredConfig) this.strategyConfig = restoredConfig
             this.strategyConfigHydrated = true
           }
           if (forceChunkLoad) this.chunksLoadedKey = ''
@@ -495,7 +523,7 @@ export default {
 
         await createPreview(context.knowledgeId, context.fileId, {
           strategyCode: this.selectedStrategy,
-          strategyConfig: { ...this.strategyConfig },
+          strategyConfig: { ...(this.strategyConfigs[this.selectedStrategy] || this.strategyConfig) },
           replaceEditedDrafts,
           lockVersion: this.processing.lockVersion,
         })
