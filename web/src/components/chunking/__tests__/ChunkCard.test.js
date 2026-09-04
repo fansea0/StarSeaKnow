@@ -20,7 +20,8 @@ const chunk = {
   isModified: false,
   lockVersion: 4,
   overlapEnabled: false,
-  overlapTokenLimit: 40,
+  overlapLimit: 40,
+  overlapUnit: 'TOKENS',
   overlapContent: null,
   overlapTokenCount: 0,
   overlapUnavailableReason: null,
@@ -88,7 +89,8 @@ describe('ChunkCard', () => {
     expect(updateChunk).toHaveBeenCalledWith('11', '22', 'chunk-1', {
       content: '更新后的正文',
       overlapEnabled: false,
-      overlapTokenLimit: 40,
+      overlapLimit: 40,
+      overlapUnit: 'TOKENS',
       lockVersion: 4,
     })
     expect(wrapper.get('[data-testid="save-status"]').text()).toBe('保存中')
@@ -134,7 +136,8 @@ describe('ChunkCard', () => {
     expect(updateChunk).toHaveBeenNthCalledWith(2, '11', '22', 'chunk-1', {
       content: '第二次正文',
       overlapEnabled: false,
-      overlapTokenLimit: 40,
+      overlapLimit: 40,
+      overlapUnit: 'TOKENS',
       lockVersion: 5,
     })
     expect(wrapper.get('textarea').element.value).toBe('第二次正文')
@@ -180,7 +183,8 @@ describe('ChunkCard', () => {
   it('shows the per-chunk overlap setting and renders only backend-provided readonly context', async () => {
     const wrapper = mountCard({
       overlapEnabled: true,
-      overlapTokenLimit: 64,
+      overlapLimit: 64,
+      overlapUnit: 'TOKENS',
       overlapContent: '后端生成的完整补充上文',
       overlapTokenCount: 17,
       indexContent: '机密索引内容',
@@ -196,7 +200,8 @@ describe('ChunkCard', () => {
   it('uses 40 as the fallback limit and maps stable backend reason codes to Chinese', async () => {
     const backendReason = mountCard({
       overlapEnabled: true,
-      overlapTokenLimit: 0,
+      overlapLimit: 0,
+      overlapUnit: 'TOKENS',
       overlapUnavailableReason: 'NO_AVAILABLE_OVERLAP',
     })
 
@@ -210,8 +215,7 @@ describe('ChunkCard', () => {
       overlapContent: null,
       overlapUnavailableReason: 'FUTURE_REASON',
     })
-    expect(unknownReason.get('[data-testid="overlap-unavailable"]').text()).toContain('暂时无法生成补充上文')
-    expect(unknownReason.text()).not.toContain('FUTURE_REASON')
+    expect(unknownReason.get('[data-testid="overlap-unavailable"]').text()).toContain('FUTURE_REASON')
     expect(unknownReason.get('[data-testid="overlap-token-count"]').text()).toContain('0 Token')
   })
 
@@ -235,13 +239,14 @@ describe('ChunkCard', () => {
     expect(updateChunk).toHaveBeenNthCalledWith(2, '11', '22', 'chunk-1', {
       content: '第一次正文',
       overlapEnabled: true,
-      overlapTokenLimit: 40,
+      overlapLimit: 40,
+      overlapUnit: 'TOKENS',
       lockVersion: 5,
     })
   })
 
   it('saves a 1-512 overlap limit through the same queue and clears pending saves on unmount', async () => {
-    updateChunk.mockResolvedValue({ data: { ...chunk, overlapEnabled: true, overlapTokenLimit: 512, lockVersion: 5 } })
+    updateChunk.mockResolvedValue({ data: { ...chunk, overlapEnabled: true, overlapLimit: 512, lockVersion: 5 } })
     const wrapper = mountCard({ overlapEnabled: true })
     const limitInput = wrapper.get('[data-testid="overlap-token-limit"] input')
     expect(limitInput.attributes('min')).toBe('1')
@@ -253,7 +258,8 @@ describe('ChunkCard', () => {
     expect(updateChunk).toHaveBeenCalledWith('11', '22', 'chunk-1', {
       content: '原始正文',
       overlapEnabled: true,
-      overlapTokenLimit: 512,
+      overlapLimit: 512,
+      overlapUnit: 'TOKENS',
       lockVersion: 4,
     })
 
@@ -263,5 +269,30 @@ describe('ChunkCard', () => {
     wrapper.unmount()
     await vi.advanceTimersByTimeAsync(650)
     expect(updateChunk).not.toHaveBeenCalled()
+  })
+
+  it('renders character units, persisted reasons, and sends the generic edit contract', async () => {
+    updateChunk.mockResolvedValue({ data: { ...chunk, overlapLimit: 700, overlapUnit: 'CHARACTERS', lockVersion: 5 } })
+    const wrapper = mountCard({
+      lengthUnit: 'CHARACTERS', bodyLength: 86, indexLength: 104,
+      overlapEnabled: true, overlapLimit: 700, overlapUnit: 'CHARACTERS', overlapActualLength: 18,
+      overlapCharacterCount: 18, overlapTokenCount: 7, overlapReductionReason: 'CHARACTER_LIMIT',
+      boundaryReason: { start: 'USER_DELIMITER', end: 'FUTURE_BOUNDARY', forcedSplit: true },
+    })
+
+    expect(wrapper.text()).toContain('正文 86 字符')
+    expect(wrapper.text()).toContain('最终索引 104 字符')
+    expect(wrapper.text()).toContain('18 字符 / 7 Token')
+    expect(wrapper.get('[data-testid="overlap-reduction-reason"]').text()).toContain('字符上限')
+    expect(wrapper.get('[data-testid="boundary-reason"]').text()).toContain('用户分隔符')
+    expect(wrapper.get('[data-testid="boundary-reason"]').text()).toContain('FUTURE_BOUNDARY')
+    expect(wrapper.get('[data-testid="overlap-token-limit"] input').attributes('max')).toBe('1000')
+
+    await wrapper.get('[data-testid="overlap-token-limit"] input').setValue('701')
+    await wrapper.get('[data-testid="overlap-token-limit"] input').trigger('change')
+    await vi.advanceTimersByTimeAsync(650)
+    expect(updateChunk).toHaveBeenCalledWith('11', '22', 'chunk-1', {
+      content: '原始正文', overlapEnabled: true, overlapLimit: 701, overlapUnit: 'CHARACTERS', lockVersion: 4,
+    })
   })
 })

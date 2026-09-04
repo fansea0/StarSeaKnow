@@ -2,7 +2,7 @@
   <main class="chunking-workspace" aria-label="分块工作区">
     <header class="workspace-heading">
       <div>
-        <span class="workspace-heading__eyebrow mono">MARKDOWN / 语义分块</span>
+        <span class="workspace-heading__eyebrow mono">CHUNKING / 确定性分块</span>
         <h1>分块设置与预览</h1>
         <p>生成、检查并确认这份文档的语义分块。</p>
       </div>
@@ -14,6 +14,8 @@
         :strategies="strategies"
         :selected-code="selectedStrategy"
         :strategy-config="strategyConfig"
+        :context-config="contextConfig"
+        :server-field-errors="serverFieldErrors"
         :config-disabled="!strategyConfigHydrated"
         :config-valid="configValid"
         :loading="capabilityLoading"
@@ -23,8 +25,10 @@
         :show-preview-action="canPreview"
         :error="capabilityError || submissionError"
         @select="selectStrategy"
-        @config-change="strategyConfig = $event"
-        @validity-change="configValid = $event"
+        @config-change="updateStrategyConfig"
+        @context-change="updateContextConfig"
+        @validity-change="updateConfigValidity"
+        @field-change="clearServerFieldError"
         @preview="submitPreview"
       />
 
@@ -88,6 +92,7 @@
           :show-confirm="canConfirm"
           :reindexing-ids="reindexingChunkIds"
           :reload-epochs="chunkReloadEpochs"
+          :summary="previewSummary"
           @updated="handleChunkUpdated"
           @deleted="handleChunkDeleted"
           @reload="reloadChunks"
@@ -108,6 +113,7 @@
       :total-count="chunks.length"
       :enabled-count="overlapEnabledCount"
       :generated-count="overlapGeneratedCount"
+      :unit-summary="overlapUnitSummary"
       @confirm="submitVectorization"
       @reload="reloadConfirmState"
     />
@@ -134,7 +140,36 @@ const processingStates = new Set([1, 5])
 const previewStates = new Set([0, 2, 3])
 const confirmStates = new Set([2, 3])
 const mutableChunkStates = new Set([2, 3, 6])
-const defaultStrategyConfig = Object.freeze({ minTokens: 100, targetTokens: 400, maxTokens: 512 })
+const markdownFallbackConfig = Object.freeze({ minTokens: 100, targetTokens: 400, maxTokens: 512 })
+
+function descriptorStrategyConfig(strategy) {
+  const defaults = {}
+  for (const field of strategy?.configFields || []) {
+    if (field?.key && field.defaultValue !== undefined) defaults[field.key] = field.defaultValue
+  }
+  if (strategy?.code === 'MARKDOWN_OPTIMIZED') return { ...markdownFallbackConfig, ...defaults }
+  if (strategy?.code === 'GENERAL') {
+    return {
+      delimiter: '\n', delimiterMode: 'LITERAL', maxCharacters: 500,
+      collapseWhitespace: true, removeUrls: false, removeEmails: false,
+      ...defaults,
+    }
+  }
+  return defaults
+}
+
+function descriptorContextConfig(strategy) {
+  const fallback = strategy?.code === 'GENERAL' ? { enabled: true, limit: 40 } : { enabled: false, limit: 40 }
+  const source = strategy?.defaultContextConfig || {}
+  const limit = Number.isInteger(source.limit) ? source.limit : (Number.isInteger(source.overlapTokens) ? source.overlapTokens : fallback.limit)
+  return { enabled: Boolean(source.enabled ?? source.overlapEnabled ?? fallback.enabled) && limit > 0, limit }
+}
+
+function normalizedContextConfig(source, fallback = { enabled: false, limit: 40 }) {
+  if (!source || typeof source !== 'object') return { ...fallback }
+  const limit = Number.isInteger(source.limit) ? source.limit : (Number.isInteger(source.overlapTokens) ? source.overlapTokens : fallback.limit)
+  return { enabled: Boolean(source.enabled ?? source.overlapEnabled ?? fallback.enabled) && limit > 0, limit }
+}
 
 function initialProcessing() {
   return {
@@ -146,6 +181,10 @@ function initialProcessing() {
     strategyCode: '',
     policySnapshot: {},
     contextPolicy: {},
+    preprocessingSummary: null,
+    delimiterMatched: null,
+    forcedSplitCount: null,
+    tokenLimitedSplitCount: null,
   }
 }
 
@@ -154,15 +193,6 @@ function errorMessage(cause, fallback) {
     return '源文件已发生变化，请重新生成分块预览'
   }
   return cause?.response?.data?.msg || fallback
-}
-
-function validPolicySnapshot(snapshot) {
-  const minTokens = snapshot?.minTokens
-  const targetTokens = snapshot?.targetTokens
-  const maxTokens = snapshot?.maxTokens
-  if (![minTokens, targetTokens, maxTokens].every(value => Number.isInteger(value) && value > 0)) return null
-  if (minTokens > targetTokens || targetTokens > maxTokens || maxTokens > 512) return null
-  return { minTokens, targetTokens, maxTokens }
 }
 
 function shouldLoadChunks(processing) {
@@ -186,9 +216,10 @@ export default {
     return {
       strategies: [],
       selectedStrategy: '',
-      strategyConfig: { ...defaultStrategyConfig },
-      strategyConfigHydrated: false,
-      configValid: true,
+      strategyStates: {},
+      restoredStrategyCodes: new Set(),
+      strategySelectionTouched: false,
+      serverFieldErrors: {},
       chunks: [],
       processing: initialProcessing(),
       processingLoaded: false,
@@ -266,6 +297,34 @@ export default {
         && typeof chunk.overlapContent === 'string'
         && chunk.overlapContent.trim().length > 0).length
     },
+    overlapUnitSummary() {
+      const counts = this.chunks.reduce((result, chunk) => {
+        if (!chunk.overlapEnabled) return result
+        const unit = String(chunk.overlapUnit || 'TOKENS').toUpperCase() === 'CHARACTERS' ? '字符' : 'Token'
+        result[unit] = (result[unit] || 0) + 1
+        return result
+      }, {})
+      return Object.entries(counts).map(([unit, count]) => `${unit} ${count} 块`).join(' / ')
+    },
+    previewSummary() {
+      const source = this.processing
+      const present = source.preprocessingSummary != null || source.delimiterMatched != null
+        || source.forcedSplitCount != null || source.tokenLimitedSplitCount != null
+      if (!present) return null
+      return {
+        preprocessingSummary: source.preprocessingSummary,
+        delimiterMatched: source.delimiterMatched,
+        forcedSplitCount: source.forcedSplitCount,
+        tokenLimitedSplitCount: source.tokenLimitedSplitCount,
+      }
+    },
+    currentStrategyState() {
+      return this.strategyStates[this.selectedStrategy] || null
+    },
+    strategyConfig() { return this.currentStrategyState?.strategyConfig || {} },
+    contextConfig() { return this.currentStrategyState?.contextConfig || { enabled: false, limit: 40 } },
+    strategyConfigHydrated() { return Boolean(this.currentStrategyState) && this.processingLoaded },
+    configValid() { return this.currentStrategyState?.valid !== false },
     hasBlockingChunkSaves() {
       return Object.values(this.chunkSaveStates).some(state => state?.blocking === true)
     },
@@ -299,9 +358,10 @@ export default {
       this.stopPolling()
       this.strategies = []
       this.selectedStrategy = ''
-      this.strategyConfig = { ...defaultStrategyConfig }
-      this.strategyConfigHydrated = false
-      this.configValid = true
+      this.strategyStates = {}
+      this.restoredStrategyCodes = new Set()
+      this.strategySelectionTouched = false
+      this.serverFieldErrors = {}
       this.chunks = []
       this.processing = initialProcessing()
       this.processingLoaded = false
@@ -339,7 +399,41 @@ export default {
       const markdownDefault = this.strategies.find(strategy => (
         !strategy.disabled && strategy.code === 'MARKDOWN_OPTIMIZED'
       ))
-      this.selectedStrategy = backendSelected?.code || markdownDefault?.code || ''
+      const current = this.strategies.find(strategy => !strategy.disabled && strategy.code === this.selectedStrategy)
+      if (!this.strategySelectionTouched && backendSelected) this.selectedStrategy = backendSelected.code
+      else if (!current) this.selectedStrategy = markdownDefault?.code || this.strategies.find(strategy => !strategy.disabled)?.code || ''
+    },
+    hydrateStrategyStates() {
+      const states = { ...this.strategyStates }
+      for (const strategy of this.strategies) {
+        if (strategy.disabled || states[strategy.code]) continue
+        states[strategy.code] = {
+          strategyConfig: descriptorStrategyConfig(strategy),
+          contextConfig: descriptorContextConfig(strategy),
+          valid: true,
+        }
+      }
+      this.strategyStates = states
+      this.restoreProcessingSnapshot()
+    },
+    restoreProcessingSnapshot() {
+      const code = this.processing.strategyCode
+      const strategy = this.strategies.find(item => !item.disabled && item.code === code)
+      if (!this.processingLoaded || !strategy || this.restoredStrategyCodes.has(code)) return
+      const base = this.strategyStates[code] || {
+        strategyConfig: descriptorStrategyConfig(strategy),
+        contextConfig: descriptorContextConfig(strategy),
+        valid: true,
+      }
+      this.strategyStates = {
+        ...this.strategyStates,
+        [code]: {
+          ...base,
+          strategyConfig: { ...base.strategyConfig, ...(this.processing.policySnapshot || {}) },
+          contextConfig: normalizedContextConfig(this.processing.contextPolicy, base.contextConfig),
+        },
+      }
+      this.restoredStrategyCodes.add(code)
     },
     async loadCapabilities(context = this.currentContext()) {
       this.capabilityLoading = true
@@ -349,6 +443,7 @@ export default {
         if (!this.isCurrent(context)) return
         const catalog = mergeStrategies(response?.data?.fileType, response?.data?.strategies)
         this.strategies = catalog
+        this.hydrateStrategyStates()
         this.syncSelectedStrategy()
       } catch (cause) {
         if (this.isCurrent(context)) this.capabilityError = errorMessage(cause, '可用分块策略暂时无法加载。')
@@ -360,7 +455,41 @@ export default {
       const strategy = this.strategies.find(item => item.code === code)
       if (!strategy || strategy.disabled) return
       this.selectedStrategy = code
+      this.strategySelectionTouched = true
       this.submissionError = ''
+      this.serverFieldErrors = {}
+    },
+    updateStrategyConfig(config) {
+      if (!this.selectedStrategy || !this.currentStrategyState) return
+      this.strategyStates = {
+        ...this.strategyStates,
+        [this.selectedStrategy]: { ...this.currentStrategyState, strategyConfig: { ...config } },
+      }
+    },
+    updateContextConfig(config) {
+      if (!this.selectedStrategy || !this.currentStrategyState) return
+      this.strategyStates = {
+        ...this.strategyStates,
+        [this.selectedStrategy]: { ...this.currentStrategyState, contextConfig: { ...config } },
+      }
+    },
+    updateConfigValidity(valid) {
+      if (!this.selectedStrategy || !this.currentStrategyState) return
+      this.strategyStates = {
+        ...this.strategyStates,
+        [this.selectedStrategy]: { ...this.currentStrategyState, valid: Boolean(valid) },
+      }
+    },
+    clearServerFieldError(field) {
+      if (!Object.keys(this.serverFieldErrors).length) return
+      if (!field || field === 'strategyConfig') {
+        this.serverFieldErrors = {}
+        return
+      }
+      const errors = { ...this.serverFieldErrors }
+      delete errors[field]
+      delete errors[`contextConfig.${field}`]
+      this.serverFieldErrors = errors
     },
     async refreshProcessing(forceChunkLoad = false, context = this.currentContext()) {
       if (!this.isCurrent(context)) return false
@@ -377,11 +506,7 @@ export default {
           const retainedChunksFailure = isRetainedChunksFailure(this.processing)
           this.retainedChunksLoaded = false
           this.syncSelectedStrategy()
-          if (!this.strategyConfigHydrated) {
-            const restoredConfig = validPolicySnapshot(this.processing.policySnapshot)
-            if (restoredConfig) this.strategyConfig = restoredConfig
-            this.strategyConfigHydrated = true
-          }
+          this.hydrateStrategyStates()
           if (forceChunkLoad) this.chunksLoadedKey = ''
           if (shouldLoadChunks(this.processing)) {
             this.stopPolling()
@@ -477,6 +602,7 @@ export default {
       const context = this.currentContext()
       this.previewSubmitting = true
       this.submissionError = ''
+      this.serverFieldErrors = {}
       try {
         let replaceEditedDrafts = false
         if (this.chunks.some(chunk => Number(chunk.status) === 0 && chunk.isModified)) {
@@ -496,6 +622,7 @@ export default {
         await createPreview(context.knowledgeId, context.fileId, {
           strategyCode: this.selectedStrategy,
           strategyConfig: { ...this.strategyConfig },
+          contextConfig: { ...this.contextConfig },
           replaceEditedDrafts,
           lockVersion: this.processing.lockVersion,
         })
@@ -505,6 +632,17 @@ export default {
       } catch (cause) {
         if (!this.isCurrent(context)) return
         const status = cause?.response?.status
+        if (status === 422) {
+          this.serverFieldErrors = {
+            ...(cause?.response?.data?.data?.fieldErrors || cause?.response?.data?.fieldErrors || {}),
+          }
+          if (Object.keys(this.serverFieldErrors).length && this.currentStrategyState) {
+            this.strategyStates = {
+              ...this.strategyStates,
+              [this.selectedStrategy]: { ...this.currentStrategyState, valid: false },
+            }
+          }
+        }
         this.submissionError = status === 409
           ? errorMessage(cause, '文件状态已变化，请重新加载后再生成分块。')
           : errorMessage(cause, status === 422 ? '分块设置不符合要求，请调整后重试。' : '分块预览提交失败，请稍后重试。')

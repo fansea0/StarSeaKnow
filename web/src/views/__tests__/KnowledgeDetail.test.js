@@ -23,6 +23,7 @@ const markdownFile = {
   status: 1,
   type: 'md',
   pipelineState: 0,
+  chunkingCapability: { available: true, reason: null },
   createTime: '2026-09-01T00:00:00Z',
 }
 
@@ -194,32 +195,31 @@ describe('KnowledgeDetail', () => {
     expect(wrapper.vm.docList.map(row => row.fileName)).toEqual(['b.md'])
   })
 
-  it('renders non-Markdown embedding as unavailable without calling the removed endpoint', async () => {
+  it('renders backend-unavailable files with the exact capability reason', async () => {
     const wrapper = mountDetail()
     await flushPromises()
-    await wrapper.setData({ docList: [{ ...markdownFile, id: 31, type: 'pdf', fileName: 'guide.pdf' }] })
+    await wrapper.setData({ docList: [{ ...markdownFile, id: 31, type: 'pdf', fileName: 'guide.pdf', chunkingCapability: { available: false, reason: 'PDF 文本提取失败' } }] })
 
     const action = wrapper.get('[data-testid="file-primary-action-31"]')
-    expect(action.text()).toContain('暂不支持')
+    expect(action.text()).toContain('暂不可用')
+    expect(wrapper.text()).toContain('PDF 文本提取失败')
     expect(action.attributes('disabled')).toBeDefined()
     await action.trigger('click')
     expect(axios.post).not.toHaveBeenCalled()
   })
 
-  it('uses the MD adaptive chunking name in the unsupported-file explanation', async () => {
+  it('uses a neutral reason when capability is missing', async () => {
     const wrapper = mountDetail()
     await flushPromises()
 
     wrapper.vm.handleFileAction({ id: 31, type: 'pdf', fileName: 'guide.pdf' })
 
-    expect(wrapper.vm.$message.info).toHaveBeenCalledWith(
-      '当前仅支持 MD 自适应分块，其他文件类型暂不支持。',
-    )
+    expect(wrapper.vm.$message.info).toHaveBeenCalledWith('尚未获得该文件的分块能力信息')
   })
-  it('opens a Markdown row in the chunking workspace without the legacy embedding POST', async () => {
+  it('opens any capability-enabled row in the chunking workspace without extension inference', async () => {
     const wrapper = mountDetail()
     await flushPromises()
-    await wrapper.setData({ docList: [markdownFile] })
+    await wrapper.setData({ docList: [{ ...markdownFile, type: 'pdf', fileName: 'guide.pdf' }] })
 
     await wrapper.get('[data-testid="file-primary-action-22"]').trigger('click')
 
@@ -252,7 +252,9 @@ describe('KnowledgeDetail', () => {
   it('refreshes and opens the workspace after an uploaded Markdown file returns its id', async () => {
     const wrapper = mountDetail()
     await flushPromises()
-    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
+    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockImplementation(async () => {
+      wrapper.vm.docList = [{ ...markdownFile, id: 23, type: 'txt', fileName: 'guide.txt' }]
+    })
 
     await completeUpload(wrapper, { code: 200, data: 23 })
     await flushPromises()
@@ -262,6 +264,18 @@ describe('KnowledgeDetail', () => {
       name: 'ChunkingWorkspace',
       params: { knowledgeId: '11', fileId: '23' },
     })
+  })
+
+  it('does not auto-open an uploaded file when refreshed capability is unavailable', async () => {
+    const wrapper = mountDetail()
+    await flushPromises()
+    vi.spyOn(wrapper.vm, 'fetchDocList').mockImplementation(async () => {
+      wrapper.vm.docList = [{ ...markdownFile, id: 23, chunkingCapability: { available: false, reason: '内容不可提取' } }]
+    })
+
+    await completeUpload(wrapper, { code: 200, data: 23 }, 'guide.pdf')
+
+    expect(wrapper.vm.$router.push).not.toHaveBeenCalled()
   })
 
   it('ignores an upload from knowledge A when its success arrives after navigating to knowledge B', async () => {
@@ -274,7 +288,9 @@ describe('KnowledgeDetail', () => {
     route.params.id = '12'
     await nextTick()
     await flushPromises()
-    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
+    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockImplementation(async () => {
+      if (succeeds) wrapper.vm.docList = [{ ...markdownFile, id: 42, type: 'pdf', fileName: 'new.pdf' }]
+    })
     wrapper.vm.$router.push.mockClear()
     wrapper.vm.$message.success.mockClear()
 
@@ -334,7 +350,9 @@ describe('KnowledgeDetail', () => {
   ])('handles upload envelope %p as success: %s', async (response, succeeds) => {
     const wrapper = mountDetail()
     await flushPromises()
-    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockResolvedValue()
+    const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockImplementation(async () => {
+      if (succeeds) wrapper.vm.docList = [{ ...markdownFile, id: 42, type: 'pdf', fileName: 'new.pdf' }]
+    })
 
     await completeUpload(wrapper, response)
 
@@ -355,7 +373,10 @@ describe('KnowledgeDetail', () => {
     await flushPromises()
     let resolveRefresh
     const refresh = vi.spyOn(wrapper.vm, 'fetchDocList').mockImplementation(() => new Promise((resolve) => {
-      resolveRefresh = resolve
+      resolveRefresh = () => {
+        wrapper.vm.docList = [{ ...markdownFile, id: 42 }]
+        resolve()
+      }
     }))
 
     const upload = completeUpload(wrapper, { code: 200, data: 42 })

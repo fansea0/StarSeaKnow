@@ -54,19 +54,19 @@
         <label class="overlap-limit" data-testid="overlap-token-limit">
           <span>补充上限</span>
           <el-input-number
-            v-model="overlapTokenLimit"
+            v-model="overlapLimit"
             :min="1"
-            :max="512"
+            :max="overlapMaximum"
             controls-position="right"
             :disabled="actionsDisabled"
-            @change="changeOverlapTokenLimit"
+            @change="changeOverlapLimit"
           />
-          <small>1–512 Token</small>
+          <small>1–{{ overlapMaximum }} {{ overlapUnitLabel }}</small>
         </label>
         <div class="overlap-preview">
           <div class="overlap-preview__heading">
             <strong>补充内容</strong>
-            <span data-testid="overlap-token-count">{{ localChunk.overlapTokenCount }} Token</span>
+            <span data-testid="overlap-token-count">{{ overlapActualText }}</span>
           </div>
           <p v-if="localChunk.overlapContent" class="overlap-content" data-testid="overlap-content">
             {{ localChunk.overlapContent }}
@@ -74,13 +74,20 @@
           <p v-else class="overlap-unavailable" data-testid="overlap-unavailable">
             {{ overlapUnavailableText }}
           </p>
+          <dl class="overlap-readonly" aria-label="补充上文只读详情">
+            <div><dt>实际长度</dt><dd>{{ overlapActualText }}</dd></div>
+            <div v-if="hasBothActualCounts"><dt>双单位计数</dt><dd>{{ actualCountsText }}</dd></div>
+            <div v-if="localChunk.overlapReductionReason"><dt>缩减原因</dt><dd data-testid="overlap-reduction-reason">{{ reductionReasonText }}</dd></div>
+          </dl>
         </div>
       </div>
     </div>
 
     <footer class="chunk-card__footer">
       <div class="chunk-metadata">
-        <span>正文 {{ localChunk.tokenCount }} Token</span>
+        <span>正文 {{ bodyLength }} {{ lengthUnitLabel }}</span>
+        <span v-if="hasIndexLength">最终索引 {{ localChunk.indexLength }} {{ lengthUnitLabel }}</span>
+        <span v-if="boundaryText" data-testid="boundary-reason">边界 {{ boundaryText }}</span>
         <span v-if="saveStatus" data-testid="save-status" aria-live="polite">{{ saveStatus }}</span>
       </div>
       <div class="chunk-actions">
@@ -130,7 +137,8 @@ const localChunk = reactive({ ...props.chunk })
 const editing = ref(false)
 const editorValue = ref(props.chunk.content || '')
 const overlapEnabled = ref(Boolean(props.chunk.overlapEnabled))
-const overlapTokenLimit = ref(normalizeOverlapTokenLimit(props.chunk.overlapTokenLimit))
+const initialOverlapLimit = chunk => chunk.overlapLimit ?? chunk.overlapTokenLimit
+const overlapLimit = ref(normalizeOverlapLimit(initialOverlapLimit(props.chunk)))
 const saveStatus = ref('')
 const errorMessage = ref('')
 const conflict = ref(false)
@@ -144,6 +152,22 @@ let destroyed = false
 const overlapUnavailableMessages = Object.freeze({
   NO_AVAILABLE_OVERLAP: '当前分块没有可补充的完整上文。',
 })
+const reductionMessages = Object.freeze({
+  CONFIGURED_LIMIT: '已按配置上限缩减',
+  CHARACTER_LIMIT: '已按字符上限缩减',
+  MODEL_TOKEN_LIMIT: '已按模型 Token 上限缩减',
+  FORMAT_OVERHEAD: '已为索引格式预留空间',
+  NO_ADJACENT_SOURCE: '没有相邻来源',
+  FIRST_CHUNK: '首块无前文',
+  DISABLED: '补充上文已停用',
+})
+const boundaryMessages = Object.freeze({
+  DOCUMENT_START: '文档开始', DOCUMENT_END: '文档结束', USER_DELIMITER: '用户分隔符',
+  LINE_BREAK: '换行', SENTENCE_END: '句末', WHITESPACE: '空白', FORCED_CHARACTER: '字符上限强制切分',
+  MODEL_TOKEN_LIMIT: '模型 Token 上限', PARAGRAPH_END: '段落末尾', THEMATIC_BREAK: '主题分隔线',
+  PEER_LABEL: '同级标签', CONTAINER_END: '容器末尾', H1_SECTION: '一级标题', H2_SECTION: '二级标题',
+  H3_SECTION: '三级标题', H4_SECTION: '四级标题',
+})
 
 const chunkNumber = computed(() => String((Number(localChunk.position) || 0) + 1).padStart(2, '0'))
 const actionsDisabled = computed(() => props.disabled || Number(localChunk.status) === 1)
@@ -151,25 +175,48 @@ const sectionPathText = computed(() => localChunk.sectionPath?.length ? localChu
 const overlapUnavailableText = computed(() => {
   const code = String(localChunk.overlapUnavailableReason || '').trim()
   if (!code) return '暂无可补充的上文。'
-  return overlapUnavailableMessages[code] || '暂时无法生成补充上文，请稍后重试。'
+  return overlapUnavailableMessages[code] || code
+})
+const overlapUnit = computed(() => String(localChunk.overlapUnit || 'TOKENS').toUpperCase())
+const overlapUnitLabel = computed(() => overlapUnit.value === 'CHARACTERS' ? '字符' : 'Token')
+const overlapMaximum = computed(() => overlapUnit.value === 'CHARACTERS' ? 1000 : 512)
+const lengthUnitLabel = computed(() => String(localChunk.lengthUnit || 'TOKENS').toUpperCase() === 'CHARACTERS' ? '字符' : 'Token')
+const bodyLength = computed(() => Number.isFinite(Number(localChunk.bodyLength)) ? Number(localChunk.bodyLength) : Number(localChunk.tokenCount) || 0)
+const hasIndexLength = computed(() => Number.isFinite(Number(localChunk.indexLength)))
+const overlapActualLength = computed(() => Number.isFinite(Number(localChunk.overlapActualLength))
+  ? Number(localChunk.overlapActualLength)
+  : overlapUnit.value === 'CHARACTERS' ? Number(localChunk.overlapCharacterCount) || 0 : Number(localChunk.overlapTokenCount) || 0)
+const overlapActualText = computed(() => `${overlapActualLength.value} ${overlapUnitLabel.value}`)
+const hasBothActualCounts = computed(() => Number.isFinite(Number(localChunk.overlapCharacterCount)) && Number.isFinite(Number(localChunk.overlapTokenCount)))
+const actualCountsText = computed(() => `${Number(localChunk.overlapCharacterCount) || 0} 字符 / ${Number(localChunk.overlapTokenCount) || 0} Token`)
+const readableCode = code => boundaryMessages[code] || String(code || '').trim()
+const reductionReasonText = computed(() => reductionMessages[localChunk.overlapReductionReason] || String(localChunk.overlapReductionReason || '').trim())
+const boundaryText = computed(() => {
+  const boundary = localChunk.boundaryReason || {}
+  const parts = []
+  if (boundary.start) parts.push(`起点：${readableCode(boundary.start)}`)
+  if (boundary.end) parts.push(`终点：${readableCode(boundary.end)}`)
+  if (boundary.forcedSplit) parts.push('强制切分')
+  return parts.join('；')
 })
 
-function normalizeOverlapTokenLimit(value) {
-  return Number.isInteger(value) && value >= 1 && value <= 512 ? value : 40
+function normalizeOverlapLimit(value) {
+  const maximum = String(localChunk.overlapUnit || 'TOKENS').toUpperCase() === 'CHARACTERS' ? 1000 : 512
+  return Number.isInteger(value) && value >= 1 && value <= maximum ? value : 40
 }
 
 function currentSnapshot() {
   return {
     content: editorValue.value || '',
     overlapEnabled: overlapEnabled.value,
-    overlapTokenLimit: normalizeOverlapTokenLimit(overlapTokenLimit.value),
+    overlapLimit: normalizeOverlapLimit(overlapLimit.value),
   }
 }
 
 function matchesServer(snapshot = currentSnapshot()) {
   return snapshot.content === (localChunk.content || '')
     && snapshot.overlapEnabled === Boolean(localChunk.overlapEnabled)
-    && snapshot.overlapTokenLimit === normalizeOverlapTokenLimit(localChunk.overlapTokenLimit)
+    && snapshot.overlapLimit === normalizeOverlapLimit(initialOverlapLimit(localChunk))
 }
 
 function reportSaveState() {
@@ -192,7 +239,7 @@ watch(
     if (!editing.value) editorValue.value = value.content || ''
     if (!saveInFlight && !queuedSave && !saveTimer) {
       overlapEnabled.value = Boolean(value.overlapEnabled)
-      overlapTokenLimit.value = normalizeOverlapTokenLimit(value.overlapTokenLimit)
+      overlapLimit.value = normalizeOverlapLimit(initialOverlapLimit(value))
     }
   },
   { deep: true },
@@ -229,7 +276,7 @@ function resetFromServer() {
   Object.assign(localChunk, props.chunk)
   editorValue.value = props.chunk.content || ''
   overlapEnabled.value = Boolean(props.chunk.overlapEnabled)
-  overlapTokenLimit.value = normalizeOverlapTokenLimit(props.chunk.overlapTokenLimit)
+  overlapLimit.value = normalizeOverlapLimit(initialOverlapLimit(props.chunk))
   saveStatus.value = ''
   errorMessage.value = ''
   conflict.value = false
@@ -247,8 +294,8 @@ function queueSave() {
   reportSaveState()
 }
 
-function changeOverlapTokenLimit(value) {
-  overlapTokenLimit.value = normalizeOverlapTokenLimit(value)
+function changeOverlapLimit(value) {
+  overlapLimit.value = normalizeOverlapLimit(value)
   queueSave()
 }
 
@@ -266,7 +313,7 @@ async function saveBody() {
   const snapshot = {
     content: editorValue.value,
     overlapEnabled: overlapEnabled.value,
-    overlapTokenLimit: normalizeOverlapTokenLimit(overlapTokenLimit.value),
+    overlapLimit: normalizeOverlapLimit(overlapLimit.value),
   }
   if (!snapshot.content.trim()) {
     errorMessage.value = '正文不能为空，请输入内容后再保存。'
@@ -286,6 +333,7 @@ async function saveBody() {
   try {
     const response = await updateChunk(props.knowledgeId, props.fileId, localChunk.publicId, {
       ...snapshot,
+      overlapUnit: overlapUnit.value,
       lockVersion: localChunk.lockVersion,
     })
     if (generation !== requestGeneration) return
@@ -299,8 +347,8 @@ async function saveBody() {
     Object.assign(localChunk, updated)
     if (editorValue.value === snapshot.content) editorValue.value = updated.content
     if (overlapEnabled.value === snapshot.overlapEnabled) overlapEnabled.value = Boolean(updated.overlapEnabled)
-    if (overlapTokenLimit.value === snapshot.overlapTokenLimit) {
-      overlapTokenLimit.value = normalizeOverlapTokenLimit(updated.overlapTokenLimit)
+    if (overlapLimit.value === snapshot.overlapLimit) {
+      overlapLimit.value = normalizeOverlapLimit(initialOverlapLimit(updated))
     }
     saveSucceeded = true
     emit('updated', { ...localChunk })
@@ -462,6 +510,10 @@ onBeforeUnmount(() => {
 .overlap-preview { display: grid; gap: 7px; }
 .overlap-preview__heading { display: flex; align-items: center; justify-content: space-between; color: var(--sea-deep); font-size: 12px; }
 .overlap-preview__heading span { color: var(--sea-muted); font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+.overlap-readonly { display: flex; flex-wrap: wrap; gap: 5px 14px; margin: 9px 0 0; }
+.overlap-readonly div { display: flex; gap: 5px; }
+.overlap-readonly dt { color: var(--sea-muted); font-size: 10px; }
+.overlap-readonly dd { margin: 0; color: var(--sea-ink); font-family: 'JetBrains Mono', monospace; font-size: 10px; }
 .overlap-content,
 .overlap-unavailable { margin: 0; color: var(--sea-muted); font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
 .overlap-unavailable { font-style: italic; }

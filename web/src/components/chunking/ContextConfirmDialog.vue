@@ -22,6 +22,7 @@
         <dd>{{ generatedCount }}</dd>
       </div>
     </dl>
+    <p v-if="unitSummary" class="unit-summary" data-testid="confirm-unit-summary">补充上限单位：{{ unitSummary }}</p>
     <div v-if="displayError" class="dialog-error" role="alert">
       <span>{{ displayError }}</span>
       <el-button
@@ -59,6 +60,7 @@ const props = defineProps({
   totalCount: { type: Number, default: 0 },
   enabledCount: { type: Number, default: 0 },
   generatedCount: { type: Number, default: 0 },
+  unitSummary: { type: String, default: '' },
 })
 
 const emit = defineEmits(['update:modelValue', 'confirm', 'reload'])
@@ -78,4 +80,5 @@ function confirm() {
 .confirm-summary dt { color: var(--sea-muted); font-size: 11px; }
 .confirm-summary dd { margin: 0; color: var(--sea-deep); font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 600; }
 .dialog-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 0; color: var(--sea-danger); font-size: 12px; }
+.unit-summary { margin: 10px 0 0; color: var(--sea-muted); font-size: 11px; }
 </style>

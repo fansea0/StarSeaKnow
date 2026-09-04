@@ -33,4 +33,11 @@ describe('ContextConfirmDialog', () => {
     expect(wrapper.emitted('confirm')?.[0]).toEqual([])
     wrapper.unmount()
   })
+
+  it('describes mixed overlap units without assuming every limit is tokens', async () => {
+    const wrapper = mountDialog({ unitSummary: '字符 2 块 / Token 1 块' })
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="confirm-unit-summary"]').textContent).toContain('字符 2 块 / Token 1 块')
+    wrapper.unmount()
+  })
 })

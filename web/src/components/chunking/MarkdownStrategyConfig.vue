@@ -8,15 +8,18 @@
     <div class="token-fields">
       <label data-testid="min-tokens">
         <span>最小 Token</span>
-        <el-input-number v-model="values.minTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" />
+        <el-input-number v-model="values.minTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" @change="$emit('field-change', 'minTokens')" />
+        <small v-if="serverFieldErrors.minTokens" class="config-error" role="alert">{{ serverFieldErrors.minTokens }}</small>
       </label>
       <label data-testid="target-tokens">
         <span>推荐 Token</span>
-        <el-input-number v-model="values.targetTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" />
+        <el-input-number v-model="values.targetTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" @change="$emit('field-change', 'targetTokens')" />
+        <small v-if="serverFieldErrors.targetTokens" class="config-error" role="alert">{{ serverFieldErrors.targetTokens }}</small>
       </label>
       <label data-testid="max-tokens">
         <span>最大 Token</span>
-        <el-input-number v-model="values.maxTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" />
+        <el-input-number v-model="values.maxTokens" :min="1" :max="9999" :disabled="disabled" controls-position="right" @change="$emit('field-change', 'maxTokens')" />
+        <small v-if="serverFieldErrors.maxTokens" class="config-error" role="alert">{{ serverFieldErrors.maxTokens }}</small>
       </label>
     </div>
 
@@ -31,9 +34,10 @@ import { computed, reactive, watch } from 'vue'
 const props = defineProps({
   initialValues: { type: Object, default: () => ({ minTokens: 100, targetTokens: 400, maxTokens: 512 }) },
   disabled: { type: Boolean, default: false },
+  serverFieldErrors: { type: Object, default: () => ({}) },
 })
 
-const emit = defineEmits(['config-change', 'validity-change'])
+const emit = defineEmits(['config-change', 'validity-change', 'field-change'])
 
 const values = reactive({
   minTokens: 100,
@@ -61,13 +65,13 @@ watch(
 )
 
 watch(
-  values,
+  [values, () => props.serverFieldErrors],
   () => {
-    const valid = !validationMessage.value
+    const valid = !validationMessage.value && Object.keys(props.serverFieldErrors).length === 0
     emit('validity-change', valid)
     if (valid) emit('config-change', { ...values })
   },
-  { immediate: true },
+  { immediate: true, deep: true },
 )
 </script>
 

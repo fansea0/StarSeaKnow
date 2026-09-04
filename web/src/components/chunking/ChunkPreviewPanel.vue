@@ -15,6 +15,8 @@
       <strong>{{ progress }}%</strong>
     </div>
 
+    <ChunkPreviewSummary :summary="summary" />
+
     <div v-if="loading" class="preview-empty" aria-live="polite">{{ loadingLabel }}</div>
     <div v-else-if="!chunks.length" class="preview-empty">
       <strong>尚无可预览分块</strong>
@@ -56,6 +58,7 @@
 
 <script setup>
 import ChunkCard from './ChunkCard.vue'
+import ChunkPreviewSummary from './ChunkPreviewSummary.vue'
 
 const props = defineProps({
   knowledgeId: { type: [String, Number], required: true },
@@ -73,6 +76,7 @@ const props = defineProps({
   showConfirm: { type: Boolean, default: true },
   reindexingIds: { type: Set, default: () => new Set() },
   reloadEpochs: { type: Object, default: () => ({}) },
+  summary: { type: Object, default: null },
 })
 
 defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm', 'save-state'])

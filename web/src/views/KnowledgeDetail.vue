@@ -193,12 +193,19 @@
                         size="small"
                         class="kb-action kb-action--primary"
                         :data-testid="`file-primary-action-${row.id}`"
-                        :disabled="!isMarkdown(row)"
+                        :disabled="!isChunkingAvailable(row)"
+                        :title="chunkingReason(row)"
+                        :aria-describedby="!isChunkingAvailable(row) ? `chunking-reason-${row.id}` : undefined"
                         @click="handleFileAction(row)"
                       >
                         <el-icon><MagicStick /></el-icon>
-                        <span>{{ isMarkdown(row) ? '分块管理' : '暂不支持' }}</span>
+                        <span>{{ isChunkingAvailable(row) ? '分块管理' : '暂不可用' }}</span>
                       </el-button>
+                      <span
+                        v-if="!isChunkingAvailable(row)"
+                        :id="`chunking-reason-${row.id}`"
+                        class="kb-action__reason"
+                      >{{ chunkingReason(row) }}</span>
                       <el-button
                         text
                         type="primary"
@@ -252,7 +259,7 @@
           <!-- 底部拖拽提示 -->
           <div class="kb-dropzone" aria-label="拖拽上传">
             <el-icon class="kb-dropzone__icon"><UploadFilled /></el-icon>
-            <span>拖拽文件到这里上传 · 支持 PDF / DOCX / MD / TXT</span>
+            <span>拖拽文件到这里上传 · 支持可提取文本的文档格式，具体以解析能力为准</span>
           </div>
         </div>
 
@@ -292,7 +299,6 @@
 <script>
 import axios from 'axios'
 import { apiUrl } from '../api/http'
-import { normalizeFileType } from '../features/chunking/normalization'
 import {
   Check,
   Close,
@@ -469,19 +475,18 @@ export default {
       this.$message.success('上传成功')
       await this.fetchDocList(context)
       if (!this.isCurrentRequest(context)) return
-      if (this.isMarkdown(uploadFile)) {
-        this.openChunkingWorkspace(fileId, context.knowledgeId)
-      }
+      const uploadedRow = this.docList.find(row => String(row.id) === String(fileId))
+      if (this.isChunkingAvailable(uploadedRow)) this.openChunkingWorkspace(fileId, context.knowledgeId)
     },
     onUploadError() {
       this.$message.error('上传失败')
     },
     handleFileAction(row) {
-      if (this.isMarkdown(row)) {
+      if (this.isChunkingAvailable(row)) {
         this.openChunkingWorkspace(row.id)
         return
       }
-      this.$message.info('当前仅支持 MD 自适应分块，其他文件类型暂不支持。')
+      this.$message.info(this.chunkingReason(row))
     },
     openChunkingWorkspace(fileId, knowledgeId = this.knowledgeId) {
       return this.$router.push({
@@ -489,11 +494,15 @@ export default {
         params: { knowledgeId: String(knowledgeId), fileId: String(fileId) },
       })
     },
-    isMarkdown(file) {
-      const type = normalizeFileType(file?.type)
-      if (type) return type === 'md' || type === 'markdown'
-      const name = String(file?.name || file?.fileName || '')
-      return /\.(md|markdown)$/i.test(name)
+    isChunkingAvailable(file) {
+      return file?.chunkingCapability?.available === true
+    },
+    chunkingReason(file) {
+      if (file?.chunkingCapability?.available === false) {
+        return String(file.chunkingCapability.reason || '').trim() || '当前文件暂不可分块'
+      }
+      if (!file?.chunkingCapability) return '尚未获得该文件的分块能力信息'
+      return ''
     },
     isUploadSuccessCode(code) {
       return code === 200 || (typeof code === 'string' && code.trim() === '200')
@@ -906,6 +915,7 @@ export default {
 
 /* 操作 */
 .kb-row__actions { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
+.kb-action__reason { max-width: 120px; color: var(--sea-muted); font-size: 10px; line-height: 1.35; text-align: left; }
 .kb-action { min-width: 0; min-height: 32px; }
 .kb-action--primary {
   padding-inline: 12px;

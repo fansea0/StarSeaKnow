@@ -1,16 +1,7 @@
 import { http } from './http'
-import { normalizeStrategyCode } from '../features/chunking/normalization'
-
-const localOnlyStrategyCodes = new Set(['GENERAL', 'PARENT_CHILD'])
 
 function filePath(knowledgeId, fileId, suffix = '') {
   return `/knowledge/${knowledgeId}/files/${fileId}${suffix}`
-}
-
-function requireBackendStrategy(strategyCode) {
-  if (localOnlyStrategyCodes.has(normalizeStrategyCode(strategyCode))) {
-    throw new Error('该分块策略暂未开放，不能提交到后端')
-  }
 }
 
 export function getStrategies(knowledgeId, fileId) {
@@ -18,7 +9,6 @@ export function getStrategies(knowledgeId, fileId) {
 }
 
 export function createPreview(knowledgeId, fileId, request) {
-  requireBackendStrategy(request?.strategyCode)
   return http.post(filePath(knowledgeId, fileId, '/chunk-preview'), request)
 }
 
@@ -34,7 +24,8 @@ export function updateChunk(knowledgeId, fileId, chunkPublicId, request) {
   return http.patch(filePath(knowledgeId, fileId, `/chunks/${chunkPublicId}`), {
     content: request?.content,
     overlapEnabled: request?.overlapEnabled,
-    overlapTokenLimit: request?.overlapTokenLimit,
+    overlapLimit: request?.overlapLimit,
+    overlapUnit: request?.overlapUnit,
     lockVersion: request?.lockVersion,
   })
 }

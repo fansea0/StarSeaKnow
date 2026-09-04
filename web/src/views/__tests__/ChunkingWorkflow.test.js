@@ -29,7 +29,7 @@ const originalChunks = [
     sectionPath: ['科大百事通', '招生录取类问题'],
     sourceLocator: { startLine: 1, endLine: 8 }, tokenCount: 18,
     status: 0, isModified: false, lockVersion: 1,
-    overlapEnabled: false, overlapTokenLimit: 40,
+    overlapEnabled: false, overlapLimit: 40,
     overlapContent: null, overlapTokenCount: 0, overlapUnavailableReason: null,
   },
   {
@@ -37,7 +37,7 @@ const originalChunks = [
     sectionPath: ['科大百事通', '校园生活类问题'],
     sourceLocator: { startLine: 11, endLine: 20 }, tokenCount: 16,
     status: 0, isModified: false, lockVersion: 1,
-    overlapEnabled: false, overlapTokenLimit: 40,
+    overlapEnabled: false, overlapLimit: 40,
     overlapContent: null, overlapTokenCount: 0, overlapUnavailableReason: null,
   },
 ]
@@ -73,6 +73,7 @@ describe('Markdown chunking workflow', () => {
         fileType: 'md',
         strategies: [{
           code: 'MARKDOWN_OPTIMIZED',
+          available: true,
           supportedFileTypes: ['md', 'markdown'],
           plannerVersion: 'markdown-adaptive-v1',
         }],
@@ -97,7 +98,8 @@ describe('Markdown chunking workflow', () => {
       Object.assign(chunk, {
         content: request.content,
         overlapEnabled: request.overlapEnabled,
-        overlapTokenLimit: request.overlapTokenLimit,
+        overlapLimit: request.overlapLimit,
+        overlapUnit: 'TOKENS',
         overlapContent: request.overlapEnabled ? '仅来自服务端的补充文本' : null,
         overlapTokenCount: request.overlapEnabled ? 7 : 0,
         overlapUnavailableReason: null,

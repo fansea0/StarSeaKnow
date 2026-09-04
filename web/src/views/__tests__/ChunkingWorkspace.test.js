@@ -27,7 +27,19 @@ vi.mock('../../api/chunking', () => ({
 const strategyResponse = {
   data: {
     fileType: 'md',
-    strategies: [{ code: 'MARKDOWN_OPTIMIZED', supportedFileTypes: ['md', 'markdown'], plannerVersion: 'v1' }],
+    strategies: [
+      {
+        code: 'GENERAL', scope: 'GLOBAL', available: true, plannerVersion: 'general-v1',
+        configFields: [
+          { key: 'delimiter', defaultValue: '\n' }, { key: 'delimiterMode', defaultValue: 'LITERAL' },
+          { key: 'maxCharacters', defaultValue: 500, min: 64, max: 4000 },
+          { key: 'collapseWhitespace', defaultValue: true }, { key: 'removeUrls', defaultValue: false },
+          { key: 'removeEmails', defaultValue: false },
+        ],
+        defaultContextConfig: { enabled: true, limit: 40, unit: 'CHARACTERS', mode: 'CHARACTER_TAIL' },
+      },
+      { code: 'MARKDOWN_OPTIMIZED', available: true, supportedFileTypes: ['md', 'markdown'], plannerVersion: 'v1', defaultContextConfig: { enabled: false, limit: 40 } },
+    ],
   },
 }
 
@@ -56,7 +68,8 @@ const draftChunk = {
   isModified: true,
   lockVersion: 5,
   overlapEnabled: false,
-  overlapTokenLimit: 40,
+  overlapLimit: 40,
+  overlapUnit: 'TOKENS',
   overlapContent: null,
   overlapTokenCount: 0,
   overlapUnavailableReason: null,
@@ -145,7 +158,8 @@ describe('ChunkingWorkspace', () => {
     expect(updateChunk).toHaveBeenCalledWith('11', '33', 'chunk-new', {
       content: '新文件已编辑',
       overlapEnabled: false,
-      overlapTokenLimit: 40,
+      overlapLimit: 40,
+      overlapUnit: 'TOKENS',
       lockVersion: 8,
     })
   })
@@ -181,9 +195,91 @@ describe('ChunkingWorkspace', () => {
 
     expect(getStrategies).toHaveBeenCalledWith('11', '22')
     expect(getProcessing).toHaveBeenCalledWith('11', '22')
-    expect(wrapper.get('[data-strategy="GENERAL"]').attributes('aria-disabled')).toBe('true')
+    expect(wrapper.get('[data-strategy="GENERAL"]').attributes('aria-disabled')).toBe('false')
     expect(wrapper.get('[data-strategy="PARENT_CHILD"]').attributes('aria-disabled')).toBe('true')
     expect(wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').classes()).toContain('is-selected')
+  })
+
+  it('keeps independent GENERAL and Markdown form state and submits actual delimiters with context', async () => {
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-strategy="GENERAL"]').trigger('click')
+    const delimiter = wrapper.get('[data-testid="general-delimiter"] input')
+    await delimiter.setValue('\\n\\n')
+    const maximum = wrapper.get('[data-testid="general-max"] input')
+    await maximum.setValue('800')
+    await maximum.trigger('change')
+    await wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').trigger('click')
+    const markdownMin = wrapper.get('[data-testid="min-tokens"] input')
+    await markdownMin.setValue('80')
+    await markdownMin.trigger('change')
+    await wrapper.get('[data-strategy="GENERAL"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="general-delimiter"] input').element.value).toBe('\\n\\n')
+    expect(wrapper.get('[data-testid="general-max"] input').element.value).toBe('800')
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(createPreview).toHaveBeenCalledWith('11', '22', {
+      strategyCode: 'GENERAL',
+      strategyConfig: {
+        delimiter: '\n\n', delimiterMode: 'LITERAL', maxCharacters: 800,
+        collapseWhitespace: true, removeUrls: false, removeEmails: false,
+      },
+      contextConfig: { enabled: true, limit: 40 },
+      replaceEditedDrafts: false,
+      lockVersion: 3,
+    })
+    await wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').trigger('click')
+    expect(wrapper.get('[data-testid="min-tokens"] input').element.value).toBe('80')
+  })
+
+  it('restores a matching GENERAL processing snapshot ahead of descriptor defaults', async () => {
+    getProcessing.mockResolvedValue(processing(2, {
+      strategyCode: 'GENERAL',
+      policySnapshot: { delimiter: '\n', delimiterMode: 'REGEX', maxCharacters: 720, collapseWhitespace: false, removeUrls: true, removeEmails: true },
+      contextPolicy: { enabled: true, limit: 65, unit: 'CHARACTERS', mode: 'CHARACTER_TAIL' },
+    }))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    expect(wrapper.get('[data-strategy="GENERAL"]').classes()).toContain('is-selected')
+    expect(wrapper.get('[data-testid="general-delimiter"] input').element.value).toBe('\\n')
+    expect(wrapper.get('[data-testid="general-max"] input').element.value).toBe('720')
+    expect(wrapper.get('[data-testid="general-overlap"] input').element.value).toBe('65')
+    expect(wrapper.get('[data-testid="delimiter-mode-regex"]').attributes('aria-pressed')).toBe('true')
+  })
+
+  it('renders backend field errors in GENERAL and clears them after editing the field', async () => {
+    createPreview.mockRejectedValueOnce({
+      response: { status: 422, data: { data: { fieldErrors: { delimiter: '分隔符正则无效' } }, msg: '配置无效' } },
+    })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+    await wrapper.get('[data-strategy="GENERAL"]').trigger('click')
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="field-error-delimiter"]').text()).toContain('分隔符正则无效')
+    await wrapper.get('[data-testid="general-delimiter"] input').setValue('---')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="field-error-delimiter"]').exists()).toBe(false)
+  })
+
+  it('renders only persisted processing summary values, including zero counts', async () => {
+    getProcessing.mockResolvedValue(processing(2, {
+      preprocessingSummary: { whitespaceMatches: 0, whitespaceCharactersRemoved: 0, urlMatches: 0, urlCharactersReplaced: 0, emailMatches: 0, emailCharactersReplaced: 0, controlCharactersRemoved: 0, emptySegmentsRemoved: 0 },
+      delimiterMatched: false,
+      forcedSplitCount: 0,
+      tokenLimitedSplitCount: 0,
+    }))
+    getChunks.mockResolvedValue({ data: [draftChunk] })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+    expect(wrapper.text()).toContain('分隔符未匹配，已按长度回退')
+    expect(wrapper.text()).toContain('强制切分 0')
   })
 
   it('keeps file submission disabled until the initial processing lockVersion is loaded', async () => {
@@ -285,6 +381,7 @@ describe('ChunkingWorkspace', () => {
     expect(createPreview).toHaveBeenCalledWith('11', '22', {
       strategyCode: 'MARKDOWN_OPTIMIZED',
       strategyConfig: { minTokens: 100, targetTokens: 400, maxTokens: 512 },
+      contextConfig: { enabled: false, limit: 40 },
       replaceEditedDrafts: true,
       lockVersion: 3,
     })
@@ -499,7 +596,8 @@ describe('ChunkingWorkspace', () => {
     expect(updateChunk).toHaveBeenLastCalledWith('11', '22', 'chunk-1', {
       content: '基于新版本编辑',
       overlapEnabled: false,
-      overlapTokenLimit: 40,
+      overlapLimit: 40,
+      overlapUnit: 'TOKENS',
       lockVersion: 9,
     })
   })

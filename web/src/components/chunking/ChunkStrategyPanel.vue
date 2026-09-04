@@ -32,9 +32,24 @@
     <MarkdownStrategyConfig
       v-if="selectedCode === 'MARKDOWN_OPTIMIZED'"
       :initial-values="strategyConfig"
+      :server-field-errors="serverFieldErrors"
       :disabled="configDisabled"
       @config-change="$emit('config-change', $event)"
       @validity-change="$emit('validity-change', $event)"
+      @field-change="$emit('field-change', $event)"
+    />
+
+    <GeneralStrategyConfig
+      v-if="selectedCode === 'GENERAL'"
+      :config-fields="selectedStrategy?.configFields"
+      :initial-values="strategyConfig"
+      :initial-context-config="contextConfig"
+      :server-field-errors="serverFieldErrors"
+      :disabled="configDisabled"
+      @config-change="$emit('config-change', $event)"
+      @context-change="$emit('context-change', $event)"
+      @validity-change="$emit('validity-change', $event)"
+      @field-change="$emit('field-change', $event)"
     />
 
     <p v-if="error" class="strategy-error" role="alert">{{ error }}</p>
@@ -53,12 +68,16 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
+import GeneralStrategyConfig from './GeneralStrategyConfig.vue'
 import MarkdownStrategyConfig from './MarkdownStrategyConfig.vue'
 
-defineProps({
+const props = defineProps({
   strategies: { type: Array, default: () => [] },
   selectedCode: { type: String, default: '' },
   strategyConfig: { type: Object, default: () => ({ minTokens: 100, targetTokens: 400, maxTokens: 512 }) },
+  contextConfig: { type: Object, default: () => ({ enabled: false, limit: 40 }) },
+  serverFieldErrors: { type: Object, default: () => ({}) },
   configDisabled: { type: Boolean, default: false },
   configValid: { type: Boolean, default: true },
   loading: { type: Boolean, default: false },
@@ -69,7 +88,8 @@ defineProps({
   error: { type: String, default: '' },
 })
 
-defineEmits(['select', 'config-change', 'validity-change', 'preview'])
+defineEmits(['select', 'config-change', 'context-change', 'validity-change', 'field-change', 'preview'])
+const selectedStrategy = computed(() => props.strategies.find(strategy => strategy.code === props.selectedCode))
 </script>
 
 <style scoped>
