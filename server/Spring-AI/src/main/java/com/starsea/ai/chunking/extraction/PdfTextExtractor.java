@@ -16,14 +16,26 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 public class PdfTextExtractor implements DocumentTextExtractor {
+
+    private static final int MAX_BLOCKING_WORKERS = 2;
+    private static final AtomicInteger WORKER_SEQUENCE = new AtomicInteger();
 
     private final long maxSourceBytes;
     private final int maxOutputCharacters;
     private final long timeoutMillis;
     private final long maxStorageBytes;
+    private final ThreadPoolExecutor blockingExecutor;
 
     @Autowired
     public PdfTextExtractor(
@@ -45,6 +57,14 @@ public class PdfTextExtractor implements DocumentTextExtractor {
         this.maxOutputCharacters = maxOutputCharacters;
         this.timeoutMillis = timeoutMillis;
         this.maxStorageBytes = maxStorageBytes;
+        if (timeoutMillis < 1) throw new IllegalArgumentException("timeoutMillis must be positive");
+        this.blockingExecutor = new ThreadPoolExecutor(0, MAX_BLOCKING_WORKERS,
+                1, TimeUnit.SECONDS, new SynchronousQueue<>(), runnable -> {
+                    Thread worker = new Thread(runnable,
+                            "pdf-extraction-" + WORKER_SEQUENCE.incrementAndGet());
+                    worker.setDaemon(true);
+                    return worker;
+                }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     @Override public String id() { return "pdfbox"; }
@@ -56,6 +76,38 @@ public class PdfTextExtractor implements DocumentTextExtractor {
     public ExtractedText extract(Path path, ExtractionCapability capability) {
         requireSourceLimit(path);
         requireStorageLimit(path);
+        final Future<ExtractedText> task;
+        try {
+            task = blockingExecutor.submit(() -> extractBlocking(path, capability));
+        } catch (RejectedExecutionException exhausted) {
+            throw new ExtractionException(FailureReason.TIMEOUT,
+                    "PDF extraction workers are occupied by timed-out parsers", exhausted);
+        }
+        try {
+            return task.get(timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException timeout) {
+            task.cancel(true);
+            throw new ExtractionException(FailureReason.TIMEOUT,
+                    "PDF extraction exceeded the time limit", timeout);
+        } catch (InterruptedException interrupted) {
+            task.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new ExtractionException(FailureReason.TIMEOUT,
+                    "PDF extraction was interrupted", interrupted);
+        } catch (ExecutionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof RuntimeException runtime) throw runtime;
+            throw new ExtractionException(FailureReason.CORRUPT,
+                    "The PDF is damaged or cannot be parsed", cause);
+        }
+    }
+
+    /**
+     * Runs inside a bounded daemon executor. The caller always regains control at the wall-clock
+     * deadline; interruption is best effort because third-party PDF code may ignore it. At most
+     * two such stalled parser calls can remain per extractor instance, and further work fails fast.
+     */
+    protected ExtractedText extractBlocking(Path path, ExtractionCapability capability) {
         long deadline = nanoTime() + timeoutMillis * 1_000_000L;
         try (PDDocument document = Loader.loadPDF(path.toFile(),
                 MemoryUsageSetting.setupTempFileOnly(maxStorageBytes).streamCache)) {

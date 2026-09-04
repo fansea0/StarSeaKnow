@@ -24,6 +24,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Component
 public class ManagedExtractionCache {
@@ -33,6 +36,7 @@ public class ManagedExtractionCache {
     private final DocumentTextExtractorRegistry registry;
     private final ObjectMapper objectMapper;
     private final Path root;
+    private final ConcurrentHashMap<CacheKey, LockEntry> keyLocks = new ConcurrentHashMap<>();
 
     @Autowired
     public ManagedExtractionCache(FileTextExtractionMapper mapper,
@@ -52,13 +56,20 @@ public class ManagedExtractionCache {
         this.root = Objects.requireNonNull(root, "root").toAbsolutePath().normalize();
     }
 
-    public synchronized ExtractedText getOrExtract(long tenantId, long fileId, String sourceHash,
-                                                   Path source, String suppliedType) {
+    public ExtractedText getOrExtract(long tenantId, long fileId, String sourceHash,
+                                      Path source, String suppliedType) {
         requirePositive(tenantId, "tenantId");
         requirePositive(fileId, "fileId");
         if (sourceHash == null || !sourceHash.matches("[0-9a-fA-F]{64}")) {
             throw new IllegalArgumentException("sourceHash must be a SHA-256 hex digest");
         }
+        try (KeyLease ignored = acquire(new CacheKey(tenantId, fileId))) {
+            return getOrExtractLocked(tenantId, fileId, sourceHash, source, suppliedType);
+        }
+    }
+
+    private ExtractedText getOrExtractLocked(long tenantId, long fileId, String sourceHash,
+                                             Path source, String suppliedType) {
         ExtractionCapability capability = registry.probe(source, suppliedType);
         if (!capability.available()) {
             throw new DocumentTextExtractor.ExtractionException(
@@ -99,29 +110,50 @@ public class ManagedExtractionCache {
         return extracted;
     }
 
-    public synchronized void deleteManagedFiles(long tenantId, long fileId) {
+    public void deleteManagedFiles(long tenantId, long fileId) {
         quarantineManagedFiles(tenantId, fileId).commit();
     }
 
-    public synchronized ManagedFileQuarantine quarantineManagedFiles(long tenantId, long fileId) {
+    public ManagedFileQuarantine quarantineManagedFiles(long tenantId, long fileId) {
         requirePositive(tenantId, "tenantId");
         requirePositive(fileId, "fileId");
-        FileTextExtraction existing = mapper.findScoped(tenantId, fileId);
-        if (existing == null) {
-            return new Quarantine(List.of(), tenantId, fileId);
-        }
-        Path directory = scopedDirectory(tenantId, fileId, false);
-        Path textPath = checkedManagedPath(Path.of(existing.getManagedTextPath()), directory);
-        Path mapPath = checkedManagedPath(Path.of(existing.getSourceMapPath()), directory);
+        KeyLease lease = acquire(new CacheKey(tenantId, fileId));
         List<QuarantinedFile> moved = new ArrayList<>();
         try {
+            FileTextExtraction existing = mapper.findScoped(tenantId, fileId);
+            if (existing == null) {
+                return new Quarantine(List.of(), tenantId, fileId, lease);
+            }
+            Path directory = scopedDirectory(tenantId, fileId, false);
+            Path textPath = checkedManagedPath(Path.of(existing.getManagedTextPath()), directory);
+            Path mapPath = checkedManagedPath(Path.of(existing.getSourceMapPath()), directory);
             quarantineIfPresent(textPath, moved);
             quarantineIfPresent(mapPath, moved);
-            return new Quarantine(List.copyOf(moved), tenantId, fileId);
+            return new Quarantine(List.copyOf(moved), tenantId, fileId, lease);
         } catch (RuntimeException failure) {
             restoreMoved(moved, failure);
+            lease.close();
             throw failure;
         }
+    }
+
+    private KeyLease acquire(CacheKey key) {
+        LockEntry entry = keyLocks.compute(key, (ignored, current) -> {
+            LockEntry selected = current == null ? new LockEntry() : current;
+            selected.users++;
+            return selected;
+        });
+        entry.lock.lock();
+        return new KeyLease(key, entry);
+    }
+
+    private void release(CacheKey key, LockEntry entry) {
+        entry.lock.unlock();
+        keyLocks.compute(key, (ignored, current) -> {
+            if (current != entry) return current;
+            entry.users--;
+            return entry.users == 0 ? null : entry;
+        });
     }
 
     private ExtractedText readValid(FileTextExtraction row, long tenantId, long fileId,
@@ -365,34 +397,50 @@ public class ManagedExtractionCache {
         private final List<QuarantinedFile> files;
         private final long tenantId;
         private final long fileId;
+        private final KeyLease lease;
         private boolean completed;
 
-        private Quarantine(List<QuarantinedFile> files, long tenantId, long fileId) {
+        private Quarantine(List<QuarantinedFile> files, long tenantId, long fileId, KeyLease lease) {
             this.files = files;
             this.tenantId = tenantId;
             this.fileId = fileId;
+            this.lease = lease;
         }
 
         @Override
         public synchronized void commit() {
             if (completed) return;
             RuntimeException failure = null;
-            for (QuarantinedFile file : files) {
-                try {
-                    Files.deleteIfExists(file.quarantined());
-                } catch (IOException exception) {
-                    if (failure == null) {
-                        failure = new IllegalStateException(
-                                "Managed extraction quarantine could not be removed", exception);
-                    } else {
-                        failure.addSuppressed(exception);
+            try {
+                for (QuarantinedFile file : files) {
+                    try {
+                        deleteQuarantined(file.quarantined());
+                    } catch (IOException exception) {
+                        if (failure == null) {
+                            failure = new IllegalStateException(
+                                    "Managed extraction quarantine could not be removed: "
+                                            + file.quarantined(), exception);
+                        } else {
+                            failure.addSuppressed(exception);
+                        }
                     }
                 }
+                if (failure != null) {
+                    try {
+                        Path obligation = persistCleanupObligation(files, tenantId, fileId);
+                        throw new IllegalStateException(
+                                "Managed extraction cleanup obligation persisted at " + obligation,
+                                failure);
+                    } catch (IOException obligationFailure) {
+                        failure.addSuppressed(obligationFailure);
+                        throw new IllegalStateException(
+                                "Managed extraction cleanup obligation could not be persisted", failure);
+                    }
+                }
+            } finally {
+                completed = true;
+                lease.close();
             }
-            if (failure != null) {
-                throw failure;
-            }
-            completed = true;
         }
 
         @Override
@@ -400,17 +448,73 @@ public class ManagedExtractionCache {
             if (completed) return;
             RuntimeException failure = new IllegalStateException(
                     "Managed extraction quarantine could not be restored");
-            restoreMoved(new ArrayList<>(files), failure);
-            if (failure.getSuppressed().length > 0) {
-                log.error("Unable to restore extraction cache deletion for tenant {} file {}",
-                        tenantId, fileId, failure);
-                throw failure;
+            try {
+                restoreMoved(new ArrayList<>(files), failure);
+                if (failure.getSuppressed().length > 0) {
+                    log.error("Unable to restore extraction cache deletion for tenant {} file {}",
+                            tenantId, fileId, failure);
+                    throw failure;
+                }
+            } finally {
+                completed = true;
+                lease.close();
             }
-            completed = true;
         }
     }
 
     private record QuarantinedFile(Path original, Path quarantined) {
+    }
+
+    protected void deleteQuarantined(Path path) throws IOException {
+        Files.deleteIfExists(path);
+    }
+
+    private Path persistCleanupObligation(List<QuarantinedFile> files,
+                                          long tenantId, long fileId) throws IOException {
+        Path securedRoot = secureRoot();
+        Path temporary = Files.createTempFile(securedRoot, ".cleanup-required-", ".tmp");
+        Path destination = securedRoot.resolve("cleanup-required-" + UUID.randomUUID() + ".json");
+        try {
+            List<String> remaining = files.stream()
+                    .map(QuarantinedFile::quarantined)
+                    .filter(path -> Files.exists(path, LinkOption.NOFOLLOW_LINKS))
+                    .map(Path::toString)
+                    .toList();
+            objectMapper.writeValue(temporary.toFile(), Map.of(
+                    "tenantId", tenantId,
+                    "fileId", fileId,
+                    "quarantinedPaths", remaining));
+            moveAtomically(temporary, destination);
+            return destination;
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private record CacheKey(long tenantId, long fileId) {
+    }
+
+    private static final class LockEntry {
+        private final ReentrantLock lock = new ReentrantLock();
+        private int users;
+    }
+
+    private final class KeyLease implements AutoCloseable {
+        private final CacheKey key;
+        private final LockEntry entry;
+        private final AtomicBoolean closed = new AtomicBoolean();
+
+        private KeyLease(CacheKey key, LockEntry entry) {
+            this.key = key;
+            this.entry = entry;
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                release(key, entry);
+            }
+        }
     }
 
     private FileTextExtraction metadata(long tenantId, long fileId, String sourceHash,

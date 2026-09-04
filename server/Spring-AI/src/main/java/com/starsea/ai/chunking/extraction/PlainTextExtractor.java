@@ -33,7 +33,7 @@ public class PlainTextExtractor implements DocumentTextExtractor {
     }
 
     @Override public String id() { return "plain-text"; }
-    @Override public String version() { return "1"; }
+    @Override public String version() { return "2"; }
     @Override public int priority() { return 300; }
     @Override public Set<String> supportedMediaTypes() { return MEDIA_TYPES; }
 
@@ -81,6 +81,39 @@ public class PlainTextExtractor implements DocumentTextExtractor {
             charset = StandardCharsets.UTF_16BE;
             offset = 2;
         }
+        if (offset > 0) {
+            Decoded decoded = decodedStrict(original, offset, charset);
+            if (plausibleText(decoded.text())) return decoded;
+            throw new ExtractionException(FailureReason.UNRELIABLE_ENCODING,
+                    "Text encoding could not be decoded reliably");
+        }
+        Decoded utf8 = tryDecodedStrict(original, StandardCharsets.UTF_8);
+        if (utf8 != null && plausibleText(utf8.text())) return utf8;
+
+        List<Decoded> candidates = java.util.stream.Stream.of(
+                        tryDecodedStrict(original, Charset.forName("GB18030")),
+                        tryDecodedStrict(original, Charset.forName("windows-1252")))
+                .filter(java.util.Objects::nonNull)
+                .filter(candidate -> plausibleText(candidate.text()))
+                .sorted(java.util.Comparator.comparingInt(
+                        (Decoded candidate) -> textScore(candidate.text())).reversed())
+                .toList();
+        if (candidates.isEmpty()) {
+            throw new ExtractionException(FailureReason.UNRELIABLE_ENCODING,
+                    "Text encoding could not be decoded reliably");
+        }
+        return candidates.get(0);
+    }
+
+    private Decoded tryDecodedStrict(byte[] original, Charset charset) {
+        try {
+            return decodedStrict(original, 0, charset);
+        } catch (ExtractionException ignored) {
+            return null;
+        }
+    }
+
+    private Decoded decodedStrict(byte[] original, int offset, Charset charset) {
         try {
             String text = charset.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
@@ -91,6 +124,50 @@ public class PlainTextExtractor implements DocumentTextExtractor {
             throw new ExtractionException(FailureReason.UNRELIABLE_ENCODING,
                     "Text encoding could not be decoded reliably", exception);
         }
+    }
+
+    private boolean plausibleText(String text) {
+        if (text.isEmpty()) return true;
+        int acceptable = 0;
+        int total = 0;
+        for (int offset = 0; offset < text.length();) {
+            int codePoint = text.codePointAt(offset);
+            int type = Character.getType(codePoint);
+            if (codePoint == 0 || type == Character.UNASSIGNED
+                    || type == Character.PRIVATE_USE || type == Character.SURROGATE) {
+                return false;
+            }
+            if (type == Character.CONTROL && codePoint != '\n' && codePoint != '\r'
+                    && codePoint != '\t' && codePoint != '\f') {
+                return false;
+            }
+            if (!Character.isISOControl(codePoint)
+                    || codePoint == '\n' || codePoint == '\r' || codePoint == '\t' || codePoint == '\f') {
+                acceptable++;
+            }
+            total++;
+            offset += Character.charCount(codePoint);
+        }
+        return acceptable * 100 >= total * 85;
+    }
+
+    private int textScore(String text) {
+        int score = 0;
+        for (int codePoint : text.codePoints().toArray()) {
+            if (isCjk(codePoint)) score += 6;
+            else if (Character.isLetterOrDigit(codePoint)) score += 2;
+            else if (Character.isWhitespace(codePoint)) score += 2;
+            else score++;
+        }
+        return score;
+    }
+
+    private boolean isCjk(int codePoint) {
+        Character.UnicodeScript script = Character.UnicodeScript.of(codePoint);
+        return script == Character.UnicodeScript.HAN
+                || script == Character.UnicodeScript.HIRAGANA
+                || script == Character.UnicodeScript.KATAKANA
+                || script == Character.UnicodeScript.HANGUL;
     }
 
     private boolean startsWith(byte[] value, byte... prefix) {

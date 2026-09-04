@@ -53,6 +53,21 @@ class GeneralBoundaryScannerTest {
     }
 
     @Test
+    void actual_crlf_delimiters_match_after_source_lf_normalization_in_both_modes() {
+        NormalizedText text = new TextNormalizer().normalize("alpha\r\nbeta\rgamma");
+
+        List<String> literal = new GeneralBoundaryScanner(
+                config("\r\n", DelimiterMode.LITERAL)).scan(text).stream()
+                .map(DelimitedSegment::text).toList();
+        List<String> regex = new GeneralBoundaryScanner(
+                config("(?:\r\n|\r)", DelimiterMode.REGEX)).scan(text).stream()
+                .map(DelimitedSegment::text).toList();
+
+        assertEquals(List.of("alpha", "beta", "gamma"), literal);
+        assertEquals(List.of("alpha", "beta", "gamma"), regex);
+    }
+
+    @Test
     void rejects_a_regex_that_produces_a_zero_width_match_on_real_input() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> new GeneralBoundaryScanner(config("x*", DelimiterMode.REGEX))

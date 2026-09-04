@@ -138,6 +138,34 @@ class GeneralChunkPlanningStrategyTest {
     }
 
     @Test
+    void rebalances_a_full_body_and_trailing_whitespace_into_useful_lossless_chunks() {
+        String body = "a".repeat(64);
+        GeneralChunkConfig config = new GeneralChunkConfig("|||", DelimiterMode.LITERAL, 64,
+                false, false, false);
+        NormalizedText normalized = new TextNormalizer().normalize(body + "|||   ");
+        CleaningResult cleaned = new GeneralTextCleaner().clean(
+                new GeneralBoundaryScanner(config).scan(normalized), config, normalized);
+        List<StructuredBlock> blocks = java.util.stream.IntStream.range(0, cleaned.segments().size())
+                .mapToObj(index -> cleaned.segments().get(index)
+                        .toStructuredBlock("retained-" + index,
+                                UnicodeText.length(cleaned.segments().get(index).text())))
+                .toList();
+
+        List<ChunkDraft> drafts = new GeneralChunkPlanningStrategy(codePointCounter()).plan(
+                new ChunkPlanningRequest(new ParsedStructure(null, blocks), config,
+                        disabledContext(), 512)).drafts();
+
+        assertEquals(2, drafts.size());
+        assertTrue(drafts.stream().noneMatch(draft -> draft.content().isBlank()));
+        assertEquals(body + "\n   ", drafts.stream().map(ChunkDraft::content)
+                .reduce("", String::concat));
+        assertEquals(0, drafts.get(0).sourceLocator().startOffset());
+        assertEquals(63, drafts.get(0).sourceLocator().endOffset());
+        assertEquals(63, drafts.get(1).sourceLocator().startOffset());
+        assertEquals(70, drafts.get(1).sourceLocator().endOffset());
+    }
+
+    @Test
     void indexed_planning_work_grows_linearly_for_ten_times_more_input() {
         AtomicInteger smallCalls = new AtomicInteger();
         AtomicInteger largeCalls = new AtomicInteger();

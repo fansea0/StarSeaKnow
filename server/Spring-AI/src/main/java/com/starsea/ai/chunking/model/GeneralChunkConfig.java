@@ -34,7 +34,10 @@ public final class GeneralChunkConfig implements ChunkStrategyConfig {
         if (delimiter == null || delimiter.isEmpty()) {
             throw new IllegalArgumentException("delimiter: 分隔符不能为空");
         }
-        if (delimiter.codePointCount(0, delimiter.length()) > MAX_DELIMITER_CODE_POINTS) {
+        String normalizedDelimiter = normalizeLineEndings(delimiter);
+        if (delimiter.codePointCount(0, delimiter.length()) > MAX_DELIMITER_CODE_POINTS
+                || normalizedDelimiter.codePointCount(0, normalizedDelimiter.length())
+                > MAX_DELIMITER_CODE_POINTS) {
             throw new IllegalArgumentException(
                     "delimiter: delimiter must contain at most 256 Unicode code points");
         }
@@ -44,12 +47,12 @@ public final class GeneralChunkConfig implements ChunkStrategyConfig {
             throw new IllegalArgumentException(
                     "maxCharacters: maxCharacters must be between 64 and 4000");
         }
-        this.delimiter = delimiter;
+        this.delimiter = normalizedDelimiter;
         this.maxCharacters = maxCharacters;
         this.collapseWhitespace = collapseWhitespace;
         this.removeUrls = removeUrls;
         this.removeEmails = removeEmails;
-        this.compiledDelimiterPattern = compileDelimiterPattern(delimiter, delimiterMode);
+        this.compiledDelimiterPattern = compileDelimiterPattern(normalizedDelimiter, delimiterMode);
     }
 
     public static GeneralChunkConfig defaults() {
@@ -104,6 +107,10 @@ public final class GeneralChunkConfig implements ChunkStrategyConfig {
             validateNoZeroWidthMatches(pattern, delimiter);
         }
         return pattern;
+    }
+
+    private static String normalizeLineEndings(String value) {
+        return value.replace("\r\n", "\n").replace('\r', '\n');
     }
 
     private static void validateNoZeroWidthMatches(Pattern pattern, String expression) {

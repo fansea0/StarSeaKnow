@@ -65,6 +65,13 @@ class GeneralChunkConfigTest {
     }
 
     @Test
+    void normalizes_actual_cr_and_crlf_delimiters_to_the_lf_text_contract() {
+        assertEquals("\n", config("\r", DelimiterMode.LITERAL, 500).delimiter());
+        assertEquals("\n", config("\r\n", DelimiterMode.LITERAL, 500).delimiter());
+        assertEquals("(?:\n|\n)", config("(?:\r\n|\r)", DelimiterMode.REGEX, 500).delimiter());
+    }
+
+    @Test
     void applies_unit_specific_context_constraints() {
         assertEquals(new ContextConfig(true, 40, OverlapUnit.CHARACTERS, ContextMode.CHARACTER_TAIL),
                 ContextConfig.generalDefaults());

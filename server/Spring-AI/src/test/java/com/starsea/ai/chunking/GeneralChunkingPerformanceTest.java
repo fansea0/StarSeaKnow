@@ -15,18 +15,20 @@ import com.starsea.ai.chunking.general.NormalizedText;
 import com.starsea.ai.chunking.general.TextNormalizer;
 import com.starsea.ai.chunking.model.ChunkPlanningRequest;
 import com.starsea.ai.chunking.model.ContextConfig;
-import com.starsea.ai.chunking.model.ContextMode;
 import com.starsea.ai.chunking.model.DelimiterMode;
 import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
-import com.starsea.ai.chunking.model.OverlapUnit;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.StructuredBlock;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -59,16 +61,40 @@ class GeneralChunkingPerformanceTest {
     @TempDir
     Path tempDir;
 
-    static Stream<Arguments> fixtures() {
-        return Stream.of("txt", "html", "pdf")
-                .flatMap(type -> Stream.of(1_000_000, 10_000_000)
-                        .map(size -> Arguments.of(type, size)));
+    static Stream<String> formats() {
+        return Stream.of("txt", "html", "pdf");
     }
 
-    @ParameterizedTest(name = "{0} {1} bytes")
-    @MethodSource("fixtures")
-    void real_general_pipeline_completes_large_fixture_with_recorded_stage_metrics(
-            String type, int sourceBytes) throws Exception {
+    @ParameterizedTest(name = "{0}: 1M/10M source and parser path growth")
+    @MethodSource("formats")
+    void source_and_parser_pipeline_has_bounded_ten_x_growth(String type) throws Exception {
+        PipelineMetrics small = runPipeline(type, 1_000_000);
+        PipelineMetrics large = runPipeline(type, 10_000_000);
+
+        assertGrowth("extraction", small.extraction(), large.extraction());
+        assertGrowth("normalization", small.normalization(), large.normalization());
+        assertGrowth("cleaning", small.cleaning(), large.cleaning());
+        assertGrowth("planning", small.planning(), large.planning());
+        assertTrue(large.chunks() >= small.chunks());
+    }
+
+    @org.junit.jupiter.api.Test
+    void pdf_parser_extracts_a_meaningful_text_workload_separate_from_padded_source_coverage()
+            throws Exception {
+        Path source = tempDir.resolve("text-heavy.pdf");
+        String line = "meaningful extracted PDF text workload " + "x".repeat(40);
+        writeTextHeavyPdf(source, line, 1_000);
+        PdfTextExtractor extractor = new PdfTextExtractor(
+                2_000_000, 200_000, 30_000, 4_000_000);
+
+        ExtractedText extracted = extractor.extract(source,
+                extractor.probe(source, "application/pdf"));
+
+        assertTrue(extracted.text().length() >= line.length() * 900,
+                "PDF parser must process substantial extracted text rather than only source padding");
+    }
+
+    private PipelineMetrics runPipeline(String type, int sourceBytes) throws Exception {
         Path source = tempDir.resolve("performance-" + sourceBytes + "." + type);
         writeExactFixture(source, type, sourceBytes);
         assertEquals(sourceBytes, Files.size(source));
@@ -81,8 +107,7 @@ class GeneralChunkingPerformanceTest {
                         120_000, 8, 44_000_000)));
         GeneralChunkConfig config = new GeneralChunkConfig("\n\n", DelimiterMode.LITERAL,
                 4000, false, false, false);
-        ContextConfig context = new ContextConfig(
-                false, 0, OverlapUnit.CHARACTERS, ContextMode.CHARACTER_TAIL);
+        ContextConfig context = ContextConfig.generalDefaults();
 
         long extractionStart = System.nanoTime();
         var capability = registry.probe(source, type);
@@ -116,6 +141,21 @@ class GeneralChunkingPerformanceTest {
         Duration planning = elapsed(planningStart);
 
         assertFalse(planned.drafts().isEmpty());
+        for (int index = 0; index < planned.drafts().size(); index++) {
+            int characterBudget = index == 0 ? 4000 : 3955;
+            assertTrue(planned.drafts().get(index).content().codePointCount(
+                    0, planned.drafts().get(index).content().length()) <= characterBudget);
+            assertTrue(COUNTER.count(planned.drafts().get(index).content()) <= 512);
+        }
+        if (!"pdf".equals(type)) {
+            assertTrue(planned.drafts().stream().anyMatch(draft ->
+                            COUNTER.count(draft.content()) >= 450),
+                    "large text fixtures must exercise high-token planning");
+            assertTrue(scanner.delimiterMatched(), "large text fixtures are delimiter-dense");
+        } else {
+            assertTrue(extracted.text().length() < 1_000,
+                    "padded PDF fixture covers source-size and parser paths, not extracted-text scale");
+        }
         assertTrue(extraction.compareTo(EXTRACTION_LIMIT) < 0,
                 "extraction completed outside the generous CI limit: " + extraction);
         assertTrue(normalization.compareTo(STAGE_LIMIT) < 0,
@@ -129,10 +169,19 @@ class GeneralChunkingPerformanceTest {
                 type, sourceBytes, normalized.codePointCount(), extraction.toMillis(),
                 normalization.toMillis(), cleaning.toMillis(), planning.toMillis(),
                 planned.drafts().size());
+        return new PipelineMetrics(extraction, normalization, cleaning, planning,
+                planned.drafts().size());
     }
 
     private Duration elapsed(long start) {
         return Duration.ofNanos(System.nanoTime() - start);
+    }
+
+    private void assertGrowth(String stage, Duration small, Duration large) {
+        long generousLimit = small.toNanos() * 40L + Duration.ofSeconds(5).toNanos();
+        assertTrue(large.toNanos() <= generousLimit,
+                () -> stage + " growth exceeded the generous 10x workload bound: small="
+                        + small + ", large=" + large);
     }
 
     private void writeExactFixture(Path path, String type, int bytes) throws Exception {
@@ -153,14 +202,47 @@ class GeneralChunkingPerformanceTest {
         byte[] data = new byte[bytes];
         int offset = 0;
         offset = copyAscii(prefix, data, offset);
-        java.util.Arrays.fill(data, offset, offset + contentBytes, (byte) 'a');
-        copyAscii(suffix, data, offset + contentBytes);
+        byte[] pattern = ("a".repeat(3798) + "\n\n").getBytes(StandardCharsets.US_ASCII);
+        int contentEnd = offset + contentBytes;
+        while (offset < contentEnd) {
+            int copied = Math.min(pattern.length, contentEnd - offset);
+            System.arraycopy(pattern, 0, data, offset, copied);
+            offset += copied;
+        }
+        copyAscii(suffix, data, contentEnd);
         Files.write(path, data);
+    }
+
+    private void writeTextHeavyPdf(Path path, String line, int lines) throws Exception {
+        try (PDDocument document = new PDDocument()) {
+            int remaining = lines;
+            while (remaining > 0) {
+                PDPage page = new PDPage();
+                document.addPage(page);
+                try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                    content.beginText();
+                    content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 10);
+                    content.newLineAtOffset(36, 750);
+                    int linesOnPage = Math.min(50, remaining);
+                    for (int index = 0; index < linesOnPage; index++) {
+                        content.showText(line);
+                        content.newLineAtOffset(0, -14);
+                    }
+                    content.endText();
+                    remaining -= linesOnPage;
+                }
+            }
+            document.save(path.toFile());
+        }
     }
 
     private int copyAscii(String value, byte[] target, int offset) {
         byte[] bytes = value.getBytes(StandardCharsets.US_ASCII);
         System.arraycopy(bytes, 0, target, offset, bytes.length);
         return offset + bytes.length;
+    }
+
+    private record PipelineMetrics(Duration extraction, Duration normalization,
+                                   Duration cleaning, Duration planning, int chunks) {
     }
 }

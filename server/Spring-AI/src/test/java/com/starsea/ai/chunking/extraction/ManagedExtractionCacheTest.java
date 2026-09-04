@@ -13,6 +13,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -210,6 +216,135 @@ class ManagedExtractionCacheTest {
         assertTrue(Files.isRegularFile(sourceMap));
     }
 
+    @Test
+    void extraction_for_an_unrelated_tenant_file_key_does_not_wait_on_a_stalled_key() throws Exception {
+        Path firstSource = cacheRoot.resolve("first.txt");
+        Path secondSource = cacheRoot.resolve("second.txt");
+        Files.writeString(firstSource, "first");
+        Files.writeString(secondSource, "second");
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        DocumentTextExtractor extractor = new DocumentTextExtractor() {
+            @Override public String id() { return "per-key"; }
+            @Override public String version() { return "v1"; }
+            @Override public int priority() { return 100; }
+            @Override public Set<String> supportedMediaTypes() { return Set.of("text/plain"); }
+            @Override public ExtractedText extract(Path path, ExtractionCapability capability) {
+                if (path.equals(firstSource)) {
+                    firstEntered.countDown();
+                    try {
+                        if (!releaseFirst.await(2, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("test release timed out");
+                        }
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(exception);
+                    }
+                }
+                String text = path.equals(firstSource) ? "first body" : "second body";
+                return new ExtractedText(text, "text/plain", id(), version(),
+                        List.of(new SourceSpan(0, text.length(), Map.of())), Map.of());
+            }
+        };
+        KeyedMapper mapper = new KeyedMapper();
+        ManagedExtractionCache cache = new ManagedExtractionCache(mapper.proxy(),
+                new DocumentTextExtractorRegistry(List.of(extractor)), new ObjectMapper(),
+                cacheRoot.resolve("managed"));
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> cache.getOrExtract(
+                    1L, 9L, "a".repeat(64), firstSource, "text/plain"));
+            assertTrue(firstEntered.await(1, TimeUnit.SECONDS));
+
+            var second = executor.submit(() -> cache.getOrExtract(
+                    1L, 10L, "b".repeat(64), secondSource, "text/plain"));
+            assertEquals("second body", second.get(1, TimeUnit.SECONDS).text());
+
+            releaseFirst.countDown();
+            assertEquals("first body", first.get(1, TimeUnit.SECONDS).text());
+        } finally {
+            releaseFirst.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void quarantine_holds_the_file_key_until_database_delete_and_cleanup_finish() throws Exception {
+        Path source = cacheRoot.resolve("delete-race.txt");
+        Files.writeString(source, "source");
+        AtomicInteger calls = new AtomicInteger();
+        KeyedMapper mapper = new KeyedMapper();
+        ManagedExtractionCache cache = new ManagedExtractionCache(mapper.proxy(),
+                new DocumentTextExtractorRegistry(List.of(countingExtractor(calls))),
+                new ObjectMapper(), cacheRoot.resolve("managed"));
+        cache.getOrExtract(1L, 9L, "a".repeat(64), source, "text/plain");
+        ManagedExtractionCache.ManagedFileQuarantine quarantine =
+                cache.quarantineManagedFiles(1L, 9L);
+        var executor = Executors.newSingleThreadExecutor();
+        CountDownLatch racingPreviewStarted = new CountDownLatch(1);
+        boolean committed = false;
+        try {
+            var racingPreview = executor.submit(() -> {
+                racingPreviewStarted.countDown();
+                return cache.getOrExtract(
+                        1L, 9L, "b".repeat(64), source, "text/plain");
+            });
+
+            assertTrue(racingPreviewStarted.await(1, TimeUnit.SECONDS));
+            assertThrows(TimeoutException.class,
+                    () -> racingPreview.get(250, TimeUnit.MILLISECONDS));
+            assertEquals(1, calls.get(), "preview must not re-enter extraction while deletion owns the key");
+
+            Files.delete(source);
+            mapper.remove(1L, 9L); // Model the file-row delete and extraction-row cascade.
+            quarantine.commit();
+            committed = true;
+            ExecutionException failure = assertThrows(ExecutionException.class,
+                    () -> racingPreview.get(1, TimeUnit.SECONDS));
+            assertTrue(failure.getCause() instanceof DocumentTextExtractor.ExtractionException);
+            assertEquals(1, calls.get());
+            try (var files = Files.walk(cacheRoot.resolve("managed/1/9"))) {
+                assertEquals(0, files.filter(Files::isRegularFile).count());
+            }
+        } finally {
+            if (!committed) quarantine.restore();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void failed_post_commit_plaintext_cleanup_persists_a_retry_obligation() throws Exception {
+        Path source = cacheRoot.resolve("cleanup-obligation.txt");
+        Files.writeString(source, "source");
+        StatefulMapper mapper = new StatefulMapper();
+        Path managedRoot = cacheRoot.resolve("managed");
+        ManagedExtractionCache cache = new ManagedExtractionCache(mapper.proxy(),
+                new DocumentTextExtractorRegistry(List.of(countingExtractor(new AtomicInteger()))),
+                new ObjectMapper(), managedRoot) {
+            @Override
+            protected void deleteQuarantined(Path path) throws java.io.IOException {
+                throw new java.io.IOException("deliberate cleanup failure");
+            }
+        };
+        cache.getOrExtract(1L, 9L, "c".repeat(64), source, "text/plain");
+        ManagedExtractionCache.ManagedFileQuarantine quarantine =
+                cache.quarantineManagedFiles(1L, 9L);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, quarantine::commit);
+
+        assertTrue(failure.getMessage().contains("cleanup obligation"));
+        try (var files = Files.list(managedRoot)) {
+            List<Path> obligations = files
+                    .filter(path -> path.getFileName().toString().startsWith("cleanup-required-"))
+                    .toList();
+            assertEquals(1, obligations.size());
+            String persisted = Files.readString(obligations.get(0));
+            assertTrue(persisted.contains("\"tenantId\":1"));
+            assertTrue(persisted.contains("\"fileId\":9"));
+            assertTrue(persisted.contains(".deleting-"));
+        }
+    }
+
     private DocumentTextExtractor countingExtractor(AtomicInteger calls) {
         return new DocumentTextExtractor() {
             @Override public String id() { return "counting"; }
@@ -254,6 +389,35 @@ class ManagedExtractionCacheTest {
                 return 1;
             });
             return delegate;
+        }
+    }
+
+    private static final class KeyedMapper {
+        private final Map<String, FileTextExtraction> rows = new ConcurrentHashMap<>();
+        private final FileTextExtractionMapper delegate = mock(FileTextExtractionMapper.class);
+
+        private FileTextExtractionMapper proxy() {
+            when(delegate.findScoped(any(Long.class), any(Long.class))).thenAnswer(inv ->
+                    rows.get(key(inv.getArgument(0), inv.getArgument(1))));
+            when(delegate.insert(any(FileTextExtraction.class))).thenAnswer(inv -> {
+                FileTextExtraction row = inv.getArgument(0);
+                rows.put(key(row.getTenantId(), row.getFileId()), row);
+                return 1;
+            });
+            when(delegate.updateScoped(any(FileTextExtraction.class))).thenAnswer(inv -> {
+                FileTextExtraction row = inv.getArgument(0);
+                rows.put(key(row.getTenantId(), row.getFileId()), row);
+                return 1;
+            });
+            return delegate;
+        }
+
+        private void remove(long tenantId, long fileId) {
+            rows.remove(key(tenantId, fileId));
+        }
+
+        private static String key(long tenantId, long fileId) {
+            return tenantId + ":" + fileId;
         }
     }
 }

@@ -77,6 +77,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -185,7 +186,7 @@ class GeneralChunkingWorkflowTest {
                     .allMatch(chunk -> chunk.getStatus() == ChunkStatus.ACTIVE.code()));
             assertEquals(previewSnapshots, snapshotIndexFields(repository.chunks),
                     "confirmation must not mutate preview index or overlap data");
-            repository.vectorStore.assertDocumentTexts(previewSnapshots);
+            repository.vectorStore.assertDocumentTexts(previewSnapshots, repository.chunks);
             RetrievedChunk retrieved = retrieve(repository, editMarker.trim());
             assertEquals(savedFirst.getPublicId(), retrieved.chunkId());
             assertEquals(savedFirst.getIndexContent(), retrieved.content(),
@@ -211,6 +212,7 @@ class GeneralChunkingWorkflowTest {
             DocumentChunk reindexed = repository.byPublicId(last.getPublicId());
             assertEquals(ChunkStatus.ACTIVE.code(), reindexed.getStatus());
             assertTrue(reindexed.getIndexContent().contains(reindexMarker.trim()));
+            repository.vectorStore.assertActiveVector(reindexed, reindexed.getIndexContent());
             RetrievedChunk afterReindex = retrieve(repository, reindexMarker.trim());
             assertEquals(reindexed.getPublicId(), afterReindex.chunkId());
             assertEquals(reindexed.getIndexContent(), afterReindex.content());
@@ -283,8 +285,67 @@ class GeneralChunkingWorkflowTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void preview_persists_full_budget_body_and_retained_trailing_spaces_without_a_blank_draft()
+            throws IOException {
+        AuthContext.set(businessContext(TENANT_ID));
+        String expected = "a".repeat(64) + "\n   ";
+        Path uploadedSource = tempDir.resolve("retained-whitespace.txt");
+        java.nio.file.Files.writeString(uploadedSource, expected);
+
+        try (ExactCounter exact = exactCounter()) {
+            WorkflowRepository repository = new WorkflowRepository(uploadedSource, "txt");
+            WorkflowServices services = workflowServices(repository, exact.counter(), "txt");
+
+            services.preview().startPreview(KNOWLEDGE_ID, FILE_ID, new PreviewRequest(
+                    "GENERAL",
+                    Map.of("delimiter", "\n", "delimiterMode", "LITERAL",
+                            "maxCharacters", 64, "collapseWhitespace", false,
+                            "removeUrls", false, "removeEmails", false),
+                    Map.of("enabled", false, "limit", 0), false, 0));
+
+            assertEquals(PipelineState.CHUNKED.code(), repository.processing.getPipelineState(),
+                    repository.processing.getLastError());
+            assertEquals(2, repository.chunks.size());
+            assertTrue(repository.chunks.stream().noneMatch(chunk -> chunk.getContent().isBlank()));
+            assertEquals(expected, repository.chunks.stream()
+                    .sorted(Comparator.comparing(DocumentChunk::getPosition))
+                    .map(DocumentChunk::getContent).reduce("", String::concat));
+            assertEquals(0, repository.chunks.get(0).getSourceLocator().get("startOffset"));
+            assertEquals(68, repository.chunks.get(1).getSourceLocator().get("endOffset"));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void preview_records_typed_source_limit_failure_without_opening_an_oversized_source()
+            throws IOException {
+        AuthContext.set(businessContext(TENANT_ID));
+        Path uploadedSource = tempDir.resolve("oversized-preview.txt");
+        java.nio.file.Files.writeString(uploadedSource, "0123456789");
+        AtomicInteger sourceOpens = new AtomicInteger();
+
+        try (ExactCounter exact = exactCounter()) {
+            WorkflowRepository repository = new WorkflowRepository(uploadedSource, "txt");
+            WorkflowServices services = workflowServices(
+                    repository, exact.counter(), "txt", 5L, sourceOpens);
+
+            services.preview().startPreview(KNOWLEDGE_ID, FILE_ID, generalPreviewRequest());
+
+            assertEquals(PipelineState.FAILED.code(), repository.processing.getPipelineState());
+            assertTrue(repository.processing.getLastError().startsWith("SOURCE_TOO_LARGE:"));
+            assertEquals(0, sourceOpens.get());
+            assertTrue(repository.chunks.isEmpty());
+        }
+    }
+
     private WorkflowServices workflowServices(
             WorkflowRepository repository, TokenCounter counter, String fileType) {
+        return workflowServices(repository, counter, fileType, null, null);
+    }
+
+    private WorkflowServices workflowServices(
+            WorkflowRepository repository, TokenCounter counter, String fileType,
+            Long previewMaxSourceBytes, AtomicInteger sourceOpens) {
         FileProcessingService states = new FileProcessingService(repository.processingMapper);
         ChunkStrategyRegistry strategies = new ChunkStrategyRegistry(
                 List.of(new GeneralChunkPlanningStrategy(counter)));
@@ -312,9 +373,19 @@ class GeneralChunkingWorkflowTest {
         ChunkPreviewPersistenceService persistence = new ChunkPreviewPersistenceService(
                 repository.chunkMapper, repository.processingMapper, states,
                 new StrategyAwareChunkContextEnricher(counter));
-        ChunkPreviewWorker previewWorker = new ChunkPreviewWorker(
-                repository.fileMapper, repository.processingMapper, parsers, inputs, strategies,
-                counter, persistence, states);
+        ChunkPreviewWorker previewWorker = previewMaxSourceBytes == null
+                ? new ChunkPreviewWorker(
+                        repository.fileMapper, repository.processingMapper, parsers, inputs, strategies,
+                        counter, persistence, states)
+                : new ChunkPreviewWorker(
+                        repository.fileMapper, repository.processingMapper, parsers, inputs, strategies,
+                        counter, persistence, states, previewMaxSourceBytes) {
+                    @Override
+                    protected java.io.InputStream openSource(Path source) throws IOException {
+                        sourceOpens.incrementAndGet();
+                        return super.openSource(source);
+                    }
+                };
         Executor executor = command -> {
             AuthContext before = AuthContext.current();
             command.run();
@@ -921,18 +992,35 @@ class GeneralChunkingWorkflowTest {
             return Map.copyOf(texts);
         }
 
-        private void assertDocumentTexts(Map<UUID, ChunkIndexSnapshot> expected) {
+        private void assertDocumentTexts(Map<UUID, ChunkIndexSnapshot> expected,
+                                         List<DocumentChunk> chunks) {
             assertEquals(expected.size(), documents.size());
             assertEquals(expected.size(), sentDocuments.size());
-            Map<String, Document> sentById = sentDocuments.stream().collect(
-                    java.util.stream.Collectors.toMap(Document::getId, value -> value));
+            Map<UUID, DocumentChunk> chunksByPublicId = chunks.stream().collect(
+                    java.util.stream.Collectors.toMap(DocumentChunk::getPublicId, value -> value));
             expected.forEach((publicId, snapshot) -> {
-                Document document = sentById.get(publicId.toString());
+                Document document = sentDocuments.stream()
+                        .filter(value -> publicId.toString().equals(
+                                value.getMetadata().get("documentChunkId")))
+                        .findFirst().orElse(null);
                 assertNotNull(document, () -> "missing vector document " + publicId);
+                DocumentChunk chunk = chunksByPublicId.get(publicId);
+                assertNotNull(chunk);
+                assertNotNull(chunk.getVectorId());
+                assertEquals(chunk.getVectorId().toString(), document.getId());
                 assertEquals(snapshot.indexContent(), document.getText(),
                         () -> "vector text differs from preview snapshot for " + publicId);
-                assertEquals(snapshot.indexContent(), documents.get(publicId.toString()).getText());
+                assertActiveVector(chunk, snapshot.indexContent());
             });
+        }
+
+        private void assertActiveVector(DocumentChunk chunk, String expectedText) {
+            assertNotNull(chunk.getVectorId());
+            Document document = documents.get(chunk.getVectorId().toString());
+            assertNotNull(document, () -> "missing active vector generation " + chunk.getVectorId());
+            assertEquals(chunk.getPublicId().toString(),
+                    document.getMetadata().get("documentChunkId"));
+            assertEquals(expectedText, document.getText());
         }
     }
 }

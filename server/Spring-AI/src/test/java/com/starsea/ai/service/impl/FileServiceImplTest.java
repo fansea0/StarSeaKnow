@@ -303,6 +303,11 @@ class FileServiceImplTest {
         ManagedExtractionCache.ManagedFileQuarantine quarantine =
                 mock(ManagedExtractionCache.ManagedFileQuarantine.class);
         when(extractionCache.quarantineManagedFiles(1L, 20L)).thenReturn(quarantine);
+        doAnswer(invocation -> {
+            assertFalse(Files.exists(source),
+                    "source cleanup must finish before cache commit releases the file-key lease");
+            return null;
+        }).when(quarantine).commit();
 
         assertTrue(service.deleteFile(20L));
 

@@ -15,6 +15,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Executors;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
@@ -67,6 +70,60 @@ class DocumentTextExtractorContractTest {
 
         assertEquals("plain-text", result.extractorId());
         assertEquals(markdown, result.text());
+    }
+
+    @ParameterizedTest(name = "BOM-less {0} plain text is detected deterministically")
+    @MethodSource("bomlessTextEncodings")
+    void detects_supported_bomless_plain_text_encodings(
+            String expectedEncoding, java.nio.charset.Charset charset, String content) throws Exception {
+        Path source = tempDir.resolve("bomless-" + expectedEncoding + ".txt");
+        Files.write(source, content.getBytes(charset));
+        PlainTextExtractor extractor = new PlainTextExtractor(10_000, 10_000);
+
+        ExtractedText result = extractor.extract(source, extractor.probe(source, "text/plain"));
+
+        assertEquals(content, result.text());
+        assertEquals(expectedEncoding, result.metadata().get("encoding"));
+        assertEquals(expectedEncoding, result.sourceSpans().get(0).source().get("encoding"));
+    }
+
+    @Test
+    void rejects_bomless_binary_that_happens_to_be_decodable_as_a_legacy_charset() throws Exception {
+        Path source = tempDir.resolve("binary.txt");
+        Files.write(source, new byte[]{0, 1, 2, 3, 4, (byte) 0x93, (byte) 0x94, 0});
+        PlainTextExtractor extractor = new PlainTextExtractor(10_000, 10_000);
+
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> extractor.extract(source, extractor.probe(source, "text/plain")));
+
+        assertEquals(DocumentTextExtractor.FailureReason.UNRELIABLE_ENCODING, failure.reason());
+    }
+
+    @Test
+    void rejects_binary_content_even_when_it_starts_with_a_valid_text_bom() throws Exception {
+        Path source = tempDir.resolve("bom-binary.txt");
+        Files.write(source, new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF, 0, 1, 2});
+        PlainTextExtractor extractor = new PlainTextExtractor(10_000, 10_000);
+
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> extractor.extract(source, extractor.probe(source, "text/plain")));
+
+        assertEquals(DocumentTextExtractor.FailureReason.UNRELIABLE_ENCODING, failure.reason());
+    }
+
+    @Test
+    void all_whitespace_plain_text_is_explicitly_a_no_text_failure() throws Exception {
+        Path source = tempDir.resolve("whitespace.txt");
+        Files.writeString(source, " \t\r\n  ");
+        PlainTextExtractor extractor = new PlainTextExtractor(10_000, 10_000);
+
+        DocumentTextExtractor.ExtractionException failure = assertThrows(
+                DocumentTextExtractor.ExtractionException.class,
+                () -> extractor.extract(source, extractor.probe(source, "text/plain")));
+
+        assertEquals(DocumentTextExtractor.FailureReason.NO_TEXT, failure.reason());
     }
 
     @Test
@@ -201,6 +258,97 @@ class DocumentTextExtractorContractTest {
     }
 
     @Test
+    void pdf_wall_clock_deadline_returns_while_a_blocking_parser_hook_is_stalled() throws Exception {
+        Path source = tempDir.resolve("stalled.pdf");
+        writePdf(source, "stalled-parser");
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        PdfTextExtractor extractor = new PdfTextExtractor(100_000, 10_000, 50, 100_000) {
+            @Override
+            protected ExtractedText extractBlocking(Path ignored, ExtractionCapability capability) {
+                entered.countDown();
+                while (release.getCount() > 0) {
+                    try {
+                        release.await();
+                    } catch (InterruptedException ignoredInterruption) {
+                        // Deliberately model a third-party parser that ignores interruption.
+                    }
+                }
+                return new ExtractedText("late", capability.detectedMediaType(), id(), version(),
+                        List.of(), Map.of());
+            }
+        };
+        ExtractionCapability capability = extractor.probe(source, "application/pdf");
+        long started = System.nanoTime();
+        try {
+            DocumentTextExtractor.ExtractionException failure = assertThrows(
+                    DocumentTextExtractor.ExtractionException.class,
+                    () -> extractor.extract(source, capability));
+
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            assertEquals(DocumentTextExtractor.FailureReason.TIMEOUT, failure.reason());
+            assertTrue(java.time.Duration.ofNanos(System.nanoTime() - started)
+                    .compareTo(java.time.Duration.ofSeconds(2)) < 0);
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void stalled_pdf_parsers_consume_only_the_bounded_worker_capacity() throws Exception {
+        Path source = tempDir.resolve("bounded-stalls.pdf");
+        writePdf(source, "bounded-stalls");
+        CountDownLatch entered = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maximumActive = new AtomicInteger();
+        PdfTextExtractor extractor = new PdfTextExtractor(100_000, 10_000, 200, 100_000) {
+            @Override
+            protected ExtractedText extractBlocking(Path ignored, ExtractionCapability capability) {
+                int current = active.incrementAndGet();
+                maximumActive.accumulateAndGet(current, Math::max);
+                entered.countDown();
+                try {
+                    while (release.getCount() > 0) {
+                        try {
+                            release.await();
+                        } catch (InterruptedException ignoredInterruption) {
+                            // Deliberately ignore cancellation to model an uncooperative parser.
+                        }
+                    }
+                    return new ExtractedText("late", capability.detectedMediaType(), id(), version(),
+                            List.of(), Map.of());
+                } finally {
+                    active.decrementAndGet();
+                }
+            }
+        };
+        ExtractionCapability capability = extractor.probe(source, "application/pdf");
+        var callers = Executors.newFixedThreadPool(2);
+        try {
+            var first = callers.submit(() -> assertThrows(DocumentTextExtractor.ExtractionException.class,
+                    () -> extractor.extract(source, capability)));
+            var second = callers.submit(() -> assertThrows(DocumentTextExtractor.ExtractionException.class,
+                    () -> extractor.extract(source, capability)));
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+
+            DocumentTextExtractor.ExtractionException saturated = assertThrows(
+                    DocumentTextExtractor.ExtractionException.class,
+                    () -> extractor.extract(source, capability));
+
+            assertEquals(DocumentTextExtractor.FailureReason.TIMEOUT, saturated.reason());
+            assertEquals(2, maximumActive.get());
+            assertEquals(DocumentTextExtractor.FailureReason.TIMEOUT,
+                    first.get(1, TimeUnit.SECONDS).reason());
+            assertEquals(DocumentTextExtractor.FailureReason.TIMEOUT,
+                    second.get(1, TimeUnit.SECONDS).reason());
+        } finally {
+            release.countDown();
+            callers.shutdownNow();
+        }
+    }
+
+    @Test
     void pdf_temp_storage_limit_returns_typed_limit_failure() {
         Path source = tempDir.resolve("storage.pdf");
         writePdf(source, "storage-limit");
@@ -266,6 +414,17 @@ class DocumentTextExtractorContractTest {
                 Arguments.of("docx", (BiConsumer<Path, String>) DocumentFixtureFactory::writeDocx),
                 Arguments.of("xlsx", (BiConsumer<Path, String>) DocumentFixtureFactory::writeXlsx),
                 Arguments.of("pptx", (BiConsumer<Path, String>) DocumentFixtureFactory::writePptx));
+    }
+
+    private static Stream<Arguments> bomlessTextEncodings() {
+        return Stream.of(
+                Arguments.of("UTF-8", StandardCharsets.UTF_8, "UTF-8 中文 café"),
+                Arguments.of("GB18030", java.nio.charset.Charset.forName("GB18030"),
+                        "GB18030 中文分块测试"),
+                Arguments.of("GB18030", java.nio.charset.Charset.forName("GBK"),
+                        "GBK 中文兼容测试"),
+                Arguments.of("windows-1252", java.nio.charset.Charset.forName("windows-1252"),
+                        "Windows résumé — café €"));
     }
 
     private static ExtractionCapability directTikaCapability(

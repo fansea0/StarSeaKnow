@@ -219,20 +219,23 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
     private void finalizeCommittedDeletion(
             ManagedExtractionCache.ManagedFileQuarantine cacheQuarantine,
             Path sourceQuarantine, long tenantId, long fileId) {
-        int failureCount = 0;
-        try {
-            cacheQuarantine.commit();
-        } catch (RuntimeException cleanupFailure) {
-            failureCount++;
-        }
+        RuntimeException cleanupFailure = null;
         try {
             Files.deleteIfExists(sourceQuarantine);
-        } catch (IOException | RuntimeException cleanupFailure) {
-            failureCount++;
+        } catch (IOException | RuntimeException failure) {
+            cleanupFailure = new IllegalStateException(
+                    "Committed source quarantine could not be removed: " + sourceQuarantine,
+                    failure);
         }
-        if (failureCount > 0) {
-            log.warn("Post-commit file cleanup incomplete for tenant {} file {}; failures={}",
-                    tenantId, fileId, failureCount);
+        try {
+            cacheQuarantine.commit();
+        } catch (RuntimeException failure) {
+            if (cleanupFailure == null) cleanupFailure = failure;
+            else cleanupFailure.addSuppressed(failure);
+        }
+        if (cleanupFailure != null) {
+            log.warn("Post-commit file cleanup incomplete for tenant {} file {}; retry obligation retained",
+                    tenantId, fileId, cleanupFailure);
         }
     }
 

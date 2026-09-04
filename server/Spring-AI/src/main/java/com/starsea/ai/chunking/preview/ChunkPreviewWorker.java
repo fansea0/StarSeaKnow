@@ -30,10 +30,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
@@ -48,6 +52,7 @@ import java.util.UUID;
 public class ChunkPreviewWorker {
 
     private static final Logger log = LoggerFactory.getLogger(ChunkPreviewWorker.class);
+    private static final long DEFAULT_MAX_SOURCE_BYTES = 52_428_800L;
 
     private final FileMapper fileMapper;
     private final FileProcessingMapper processingMapper;
@@ -57,6 +62,7 @@ public class ChunkPreviewWorker {
     private final TokenCounter tokenCounter;
     private final ChunkPreviewPersistenceService persistence;
     private final FileProcessingService processingService;
+    private final long maxSourceBytes;
 
     @Autowired
     public ChunkPreviewWorker(FileMapper fileMapper,
@@ -66,7 +72,8 @@ public class ChunkPreviewWorker {
                               ChunkStrategyRegistry strategyRegistry,
                               TokenCounter tokenCounter,
                               ChunkPreviewPersistenceService persistence,
-                              FileProcessingService processingService) {
+                              FileProcessingService processingService,
+                              @Value("${chunking.extraction.max-source-bytes:52428800}") long maxSourceBytes) {
         this.fileMapper = fileMapper;
         this.processingMapper = processingMapper;
         this.parserRegistry = parserRegistry;
@@ -75,6 +82,20 @@ public class ChunkPreviewWorker {
         this.tokenCounter = tokenCounter;
         this.persistence = persistence;
         this.processingService = processingService;
+        if (maxSourceBytes < 1) throw new IllegalArgumentException("maxSourceBytes must be positive");
+        this.maxSourceBytes = maxSourceBytes;
+    }
+
+    public ChunkPreviewWorker(FileMapper fileMapper,
+                              FileProcessingMapper processingMapper,
+                              DocumentStructureParserRegistry parserRegistry,
+                              ChunkInputProviderRegistry inputProviderRegistry,
+                              ChunkStrategyRegistry strategyRegistry,
+                              TokenCounter tokenCounter,
+                              ChunkPreviewPersistenceService persistence,
+                              FileProcessingService processingService) {
+        this(fileMapper, processingMapper, parserRegistry, inputProviderRegistry, strategyRegistry,
+                tokenCounter, persistence, processingService, DEFAULT_MAX_SOURCE_BYTES);
     }
 
     /** Compatibility constructor for isolated Markdown tests. */
@@ -86,7 +107,7 @@ public class ChunkPreviewWorker {
                               ChunkPreviewPersistenceService persistence,
                               FileProcessingService processingService) {
         this(fileMapper, processingMapper, parserRegistry, null, strategyRegistry,
-                tokenCounter, persistence, processingService);
+                tokenCounter, persistence, processingService, DEFAULT_MAX_SOURCE_BYTES);
     }
 
     public void generate(Job job) {
@@ -94,12 +115,10 @@ public class ChunkPreviewWorker {
         Path snapshotPath = null;
         try {
             ScopedSource source = requireScopedSource(job);
-            byte[] exactSource = Files.readAllBytes(source.path());
-            if (exactSource.length == 0) {
-                throw new IllegalArgumentException("The source document is empty");
-            }
-            String sourceHash = sha256(exactSource);
-            snapshotPath = createSnapshot(job.fileId(), source.file().getType(), exactSource);
+            SourceSnapshot snapshot = createSnapshot(
+                    job.fileId(), source.file().getType(), source.path());
+            snapshotPath = snapshot.path();
+            String sourceHash = snapshot.sha256();
             ChunkPlanningStrategy planner = strategyRegistry.require(job.strategyCode(), source.file().getType());
             if (!planner.plannerVersion().equals(job.plannerVersion())) {
                 throw new FileProcessingService.StateConflictException("Chunk planner version changed");
@@ -150,14 +169,38 @@ public class ChunkPreviewWorker {
         persistence.replace(job, sourceHash, planner.plannerVersion(), policySnapshot(policy), drafts);
     }
 
-    private Path createSnapshot(long fileId, String fileType, byte[] exactSource) throws IOException {
+    private SourceSnapshot createSnapshot(long fileId, String fileType, Path source) throws IOException {
+        requireSourceSize(source);
         String normalizedType = fileType == null ? "" : fileType.replaceAll("[^A-Za-z0-9]", "");
         String suffix = normalizedType.isBlank() ? ".snapshot" : "." + normalizedType;
         Path snapshot = Files.createTempFile("chunk-preview-" + fileId + "-", suffix);
         try {
-            Files.write(snapshot, exactSource);
-            return snapshot;
-        } catch (IOException writeFailure) {
+            MessageDigest digest = sha256Digest();
+            long copied = 0;
+            byte[] buffer = new byte[8192];
+            try (InputStream input = openSource(source);
+                 OutputStream output = Files.newOutputStream(snapshot,
+                         StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                while (true) {
+                    long remaining = maxSourceBytes - copied;
+                    int requested = remaining >= buffer.length
+                            ? buffer.length : Math.toIntExact(remaining + 1);
+                    int read = input.read(buffer, 0, requested);
+                    if (read < 0) break;
+                    if (read == 0) continue;
+                    if (read > remaining) {
+                        throw sourceTooLarge();
+                    }
+                    output.write(buffer, 0, read);
+                    digest.update(buffer, 0, read);
+                    copied += read;
+                }
+            }
+            if (copied == 0) {
+                throw new IllegalArgumentException("The source document is empty");
+            }
+            return new SourceSnapshot(snapshot, HexFormat.of().formatHex(digest.digest()));
+        } catch (IOException | RuntimeException writeFailure) {
             try {
                 Files.deleteIfExists(snapshot);
             } catch (IOException cleanupFailure) {
@@ -165,6 +208,22 @@ public class ChunkPreviewWorker {
             }
             throw writeFailure;
         }
+    }
+
+    protected InputStream openSource(Path path) throws IOException {
+        return Files.newInputStream(path);
+    }
+
+    private void requireSourceSize(Path source) throws IOException {
+        if (Files.size(source) > maxSourceBytes) {
+            throw sourceTooLarge();
+        }
+    }
+
+    private com.starsea.ai.chunking.extraction.DocumentTextExtractor.ExtractionException sourceTooLarge() {
+        return new com.starsea.ai.chunking.extraction.DocumentTextExtractor.ExtractionException(
+                com.starsea.ai.chunking.extraction.DocumentTextExtractor.FailureReason.SOURCE_TOO_LARGE,
+                "Source document exceeds the extraction size limit");
     }
 
     private void deleteSnapshot(Path snapshotPath, long fileId) {
@@ -252,7 +311,24 @@ public class ChunkPreviewWorker {
     }
 
     private void verifyUnchangedSource(Path source, String expectedHash) throws IOException {
-        if (!expectedHash.equals(sha256(Files.readAllBytes(source)))) {
+        requireSourceSize(source);
+        MessageDigest digest = sha256Digest();
+        long readTotal = 0;
+        byte[] buffer = new byte[8192];
+        try (InputStream input = openSource(source)) {
+            while (true) {
+                long remaining = maxSourceBytes - readTotal;
+                int requested = remaining >= buffer.length
+                        ? buffer.length : Math.toIntExact(remaining + 1);
+                int read = input.read(buffer, 0, requested);
+                if (read < 0) break;
+                if (read == 0) continue;
+                if (read > remaining) throw sourceTooLarge();
+                digest.update(buffer, 0, read);
+                readTotal += read;
+            }
+        }
+        if (!expectedHash.equals(HexFormat.of().formatHex(digest.digest()))) {
             throw com.starsea.ai.chunking.api.ChunkingException.sourceChanged();
         }
     }
@@ -268,6 +344,10 @@ public class ChunkPreviewWorker {
     }
 
     private String failureSummary(Exception exception) {
+        if (exception instanceof com.starsea.ai.chunking.extraction.DocumentTextExtractor.ExtractionException
+                extraction) {
+            return extraction.reason().name() + ": " + extraction.getMessage();
+        }
         String message = exception.getMessage();
         if (message == null || message.isBlank()) {
             message = exception.getClass().getSimpleName();
@@ -275,9 +355,9 @@ public class ChunkPreviewWorker {
         return message.length() <= 500 ? message : message.substring(0, 500);
     }
 
-    private String sha256(byte[] content) {
+    private MessageDigest sha256Digest() {
         try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+            return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 is unavailable", exception);
         }
@@ -332,5 +412,8 @@ public class ChunkPreviewWorker {
     }
 
     private record ScopedSource(FileProcessing processing, File file, Path path) {
+    }
+
+    private record SourceSnapshot(Path path, String sha256) {
     }
 }

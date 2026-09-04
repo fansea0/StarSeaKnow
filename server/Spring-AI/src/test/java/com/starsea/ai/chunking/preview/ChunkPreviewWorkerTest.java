@@ -185,6 +185,32 @@ class ChunkPreviewWorkerTest {
     }
 
     @Test
+    void oversized_source_fails_with_typed_reason_before_the_source_stream_is_opened() throws Exception {
+        Files.write(source, "0123456789".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        java.util.concurrent.atomic.AtomicInteger sourceOpens = new java.util.concurrent.atomic.AtomicInteger();
+        TokenCounter counter = mock(TokenCounter.class);
+        when(counter.id()).thenReturn("bounded-source-test");
+        ChunkPreviewWorker boundedWorker = new ChunkPreviewWorker(
+                fileMapper, processingMapper, new DocumentStructureParserRegistry(List.of(parser)),
+                null, new ChunkStrategyRegistry(List.of(planner)), counter, persistence,
+                processingService, 5) {
+            @Override
+            protected java.io.InputStream openSource(Path path) throws java.io.IOException {
+                sourceOpens.incrementAndGet();
+                return super.openSource(path);
+            }
+        };
+
+        boundedWorker.generate(job());
+
+        assertEquals(0, sourceOpens.get());
+        verify(parser, never()).parse(any());
+        verify(persistence, never()).replace(any(), any(), any(), any(), any());
+        verify(processingService).fail(eq(10L), eq(20L), eq(PipelineState.CHUNKING),
+                eq(1), eq(0), org.mockito.ArgumentMatchers.contains("SOURCE_TOO_LARGE"));
+    }
+
+    @Test
     void non_empty_source_with_whitespace_bytes_reaches_the_registered_parser() throws Exception {
         Files.write(source, new byte[]{0x20, 0x0a, 0x0d});
         FileResource resource = new FileResource(1L, 10L, 20L, null, "source.md", "md", source);
