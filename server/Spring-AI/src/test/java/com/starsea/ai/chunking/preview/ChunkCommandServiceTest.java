@@ -7,6 +7,7 @@ import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
+import com.starsea.ai.chunking.indexing.ChunkVectorLifecycle;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.OverlapUnit;
 import com.starsea.ai.chunking.model.PipelineState;
@@ -222,6 +223,44 @@ class ChunkCommandServiceTest {
         assertEquals(OverlapUnit.CHARACTERS, patch.getValue().getOverlapUnit());
         assertEquals(4, patch.getValue().getOverlapCharacterCount());
         assertEquals("上文：TAIL\n\nEdited", patch.getValue().getIndexContent());
+    }
+
+    @Test
+    void general_edit_never_persists_a_blank_tail_that_the_index_formatter_omits() {
+        ChunkContextEnricher enricher =
+                new StrategyAwareChunkContextEnricher(new CharacterTokenCounter());
+        ChunkCommandService generalService = new ChunkCommandService(
+                chunkMapper, processingMapper, stateService, new CharacterTokenCounter(),
+                new ChunkIndexContentBuilder(), vectorGateway, enricher);
+        FileProcessing general = processing(PipelineState.CHUNKED, 5, Map.of(
+                "delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 64,
+                "collapseWhitespace", true, "removeUrls", false, "removeEmails", false));
+        general.setStrategyCode("GENERAL");
+        general.setContextPolicy(Map.of("enabled", true, "limit", 2,
+                "unit", "CHARACTERS", "mode", "CHARACTER_TAIL"));
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(general);
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
+        target.setOverlapEnabled(true);
+        target.setOverlapLimit(2);
+        target.setOverlapUnit(OverlapUnit.CHARACTERS);
+        DocumentChunk previous = chunk(30L, UUID.randomUUID(), 3,
+                ChunkStatus.ACTIVE, 1, "A ");
+        previous.setOverlapUnit(OverlapUnit.CHARACTERS);
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+        when(chunkMapper.findScopedByPosition(FILE_ID, TENANT_ID, KNOWLEDGE_ID, 3))
+                .thenReturn(previous);
+
+        var response = generalService.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                new EditChunkRequest("x".repeat(60), true, 2,
+                        OverlapUnit.CHARACTERS, 2));
+
+        assertEquals(null, response.overlapContent());
+        var patch = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
+        verify(chunkMapper).update(patch.capture(), any());
+        assertEquals(null, patch.getValue().getOverlapContent());
+        assertEquals("x".repeat(60), patch.getValue().getIndexContent());
     }
 
     @Test
@@ -687,6 +726,55 @@ class ChunkCommandServiceTest {
         assertEquals(ChunkStatus.DRAFT.code(), database.get(0).getStatus());
         assertEquals(ChunkStatus.DRAFT.code(), database.get(1).getStatus());
         assertEquals(List.of(CHUNK_ID, NEXT_ID), cleaned);
+    }
+
+    @Test
+    void mutable_transaction_persists_cleanup_obligations_before_commit_and_drains_after_commit() {
+        List<DocumentChunk> database = activeTargetAndDependent();
+        DocumentChunkMapper mutableMapper = mutableChunkMapper(database);
+        AtomicBoolean committed = new AtomicBoolean();
+        List<ChunkVectorLifecycle.CleanupObligation> queued = new ArrayList<>();
+        AtomicInteger drains = new AtomicInteger();
+        ChunkVectorLifecycle lifecycle = new ChunkVectorLifecycle() {
+            @Override
+            public void enqueue(java.util.Collection<CleanupObligation> obligations) {
+                assertFalse(committed.get(), "cleanup outbox must join the mutation transaction");
+                queued.addAll(obligations);
+            }
+
+            @Override
+            public void enqueuePendingOwner(long tenantId, long knowledgeId, long fileId,
+                                            int indexingLockVersion) {
+            }
+
+            @Override
+            public void resetAbandonedClaims() {
+            }
+
+            @Override
+            public void drain() {
+                assertTrue(committed.get(), "external deletion must begin after commit");
+                drains.incrementAndGet();
+            }
+        };
+        ChunkCommandService target = new ChunkCommandService(
+                mutableMapper, processingMapper, stateService, new CharacterTokenCounter(),
+                new ChunkIndexContentBuilder(), vectorGateway,
+                new StrategyAwareChunkContextEnricher(new CharacterTokenCounter()), millis -> { },
+                new com.starsea.ai.chunking.runtime.ChunkRuntimePolicyResolver(), lifecycle);
+        StateTransactionManager transactionManager = new StateTransactionManager(database, committed);
+        ChunkCommandService transactional = transactionalProxy(target, transactionManager);
+
+        transactional.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                new EditChunkRequest("Edited", 2));
+
+        assertEquals(List.of(
+                new ChunkVectorLifecycle.CleanupObligation(
+                        CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID, CHUNK_ID),
+                new ChunkVectorLifecycle.CleanupObligation(
+                        NEXT_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID, NEXT_ID)), queued);
+        assertEquals(1, drains.get());
+        verify(vectorGateway, never()).delete(any());
     }
 
     @Test

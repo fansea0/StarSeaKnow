@@ -56,8 +56,24 @@ public class ChunkVectorWorker {
     private final TransactionTemplate transactions;
     private final ChunkRuntimePolicyResolver runtimePolicyResolver;
     private final SourceHashReader sourceHashReader;
+    private final ChunkVectorLifecycle vectorLifecycle;
 
     @Autowired
+    public ChunkVectorWorker(FileProcessingMapper processingMapper,
+                             FileMapper fileMapper,
+                             DocumentChunkMapper chunkMapper,
+                             FileProcessingService stateService,
+                             ChunkContextEnricher enricher,
+                             TokenCounter tokenCounter,
+                             ChunkVectorGateway gateway,
+                             TransactionTemplate transactions,
+                             ChunkRuntimePolicyResolver runtimePolicyResolver,
+                             DurableChunkVectorLifecycle vectorLifecycle) {
+        this(processingMapper, fileMapper, chunkMapper, stateService, enricher,
+                tokenCounter, gateway, transactions, runtimePolicyResolver,
+                SourceHashing::sha256, vectorLifecycle);
+    }
+
     public ChunkVectorWorker(FileProcessingMapper processingMapper,
                              FileMapper fileMapper,
                              DocumentChunkMapper chunkMapper,
@@ -69,7 +85,7 @@ public class ChunkVectorWorker {
                              ChunkRuntimePolicyResolver runtimePolicyResolver) {
         this(processingMapper, fileMapper, chunkMapper, stateService, enricher,
                 tokenCounter, gateway, transactions, runtimePolicyResolver,
-                SourceHashing::sha256);
+                SourceHashing::sha256, directLifecycle(gateway));
     }
 
     ChunkVectorWorker(FileProcessingMapper processingMapper,
@@ -82,6 +98,22 @@ public class ChunkVectorWorker {
                       TransactionTemplate transactions,
                       ChunkRuntimePolicyResolver runtimePolicyResolver,
                       SourceHashReader sourceHashReader) {
+        this(processingMapper, fileMapper, chunkMapper, stateService, enricher,
+                tokenCounter, gateway, transactions, runtimePolicyResolver,
+                sourceHashReader, directLifecycle(gateway));
+    }
+
+    ChunkVectorWorker(FileProcessingMapper processingMapper,
+                      FileMapper fileMapper,
+                      DocumentChunkMapper chunkMapper,
+                      FileProcessingService stateService,
+                      ChunkContextEnricher enricher,
+                      TokenCounter tokenCounter,
+                      ChunkVectorGateway gateway,
+                      TransactionTemplate transactions,
+                      ChunkRuntimePolicyResolver runtimePolicyResolver,
+                      SourceHashReader sourceHashReader,
+                      ChunkVectorLifecycle vectorLifecycle) {
         this.processingMapper = processingMapper;
         this.fileMapper = fileMapper;
         this.chunkMapper = chunkMapper;
@@ -92,6 +124,7 @@ public class ChunkVectorWorker {
         this.transactions = transactions;
         this.runtimePolicyResolver = Objects.requireNonNull(runtimePolicyResolver, "runtimePolicyResolver");
         this.sourceHashReader = Objects.requireNonNull(sourceHashReader, "sourceHashReader");
+        this.vectorLifecycle = Objects.requireNonNull(vectorLifecycle, "vectorLifecycle");
     }
 
     public ChunkVectorWorker(FileProcessingMapper processingMapper,
@@ -118,10 +151,13 @@ public class ChunkVectorWorker {
             writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
             validateSourceBytes(job.file(), job.sourceHash(), job.processing());
             transactions.executeWithoutResult(status -> completeBatch(job, prepared));
-            cleanupPreviousVectors(job.chunks());
+            vectorLifecycle.drain();
         } catch (RuntimeException failure) {
-            if (vectorMutationStarted.get()) cleanupEvery(job.vectorIds().values(), failure);
-            restoreBatch(job, failure);
+            if (!vectorMutationStarted.get()
+                    || enqueueFailed(job.obligations(), failure)) {
+                restoreBatch(job, failure);
+            }
+            drainAfterFailure(failure);
         }
     }
 
@@ -137,20 +173,25 @@ public class ChunkVectorWorker {
             writeVectors(prepared, job.vectorIds(), vectorMutationStarted);
             validateSourceBytes(job.file(), job.sourceHash(), job.processing());
             transactions.executeWithoutResult(status -> completeSingle(job, prepared));
-            cleanupPreviousVectors(List.of(job.chunk()));
+            vectorLifecycle.drain();
         } catch (RuntimeException failure) {
-            if (vectorMutationStarted.get()) cleanupEvery(job.vectorIds().values(), failure);
-            restoreSingle(job, failure);
+            if (!vectorMutationStarted.get()
+                    || enqueueFailed(job.obligations(), failure)) {
+                restoreSingle(job, failure);
+            }
+            drainAfterFailure(failure);
             throw failure;
         }
     }
 
     public void failBatchDispatch(BatchJob job, RuntimeException failure) {
         restoreBatch(job, failure);
+        drainAfterFailure(failure);
     }
 
     public void failSingleDispatch(SingleJob job, RuntimeException failure) {
         restoreSingle(job, failure);
+        drainAfterFailure(failure);
     }
 
     private PreparedBatch enrich(List<ChunkSnapshot> allSnapshots,
@@ -389,6 +430,7 @@ public class ChunkVectorWorker {
         patch.setIndexContent(enriched.indexContent());
         UpdateWrapper<DocumentChunk> update = chunkScope(current, snapshot)
                 .set("last_error", null)
+                .set("pending_vector_id", null)
                 .set("indexing_lock_version", null)
                 .setSql("lock_version = lock_version + 1");
         if (enriched.overlapContent() == null) {
@@ -403,7 +445,13 @@ public class ChunkVectorWorker {
         if (chunkMapper.update(patch, update) != 1) {
             throw ChunkingException.conflict("Chunk changed before vector activation");
         }
+        if (snapshot.vectorId() != null && !snapshot.vectorId().equals(vectorId)) {
+            vectorLifecycle.enqueue(List.of(new ChunkVectorLifecycle.CleanupObligation(
+                    snapshot.vectorId(), snapshot.tenantId(), snapshot.knowledgeId(),
+                    snapshot.fileId(), snapshot.publicId())));
+        }
         current.setVectorId(vectorId);
+        current.setPendingVectorId(null);
         current.setIndexingLockVersion(null);
     }
 
@@ -473,6 +521,7 @@ public class ChunkVectorWorker {
                     .set("overlap_character_count", 0)
                     .set("overlap_reduction_reason", null)
                     .set("index_content", null)
+                    .set("pending_vector_id", null)
                     .set("indexing_lock_version", null)
                     .setSql("lock_version = lock_version + 1");
             if (lastError == null) {
@@ -481,33 +530,30 @@ public class ChunkVectorWorker {
             if (chunkMapper.update(patch, update) != 1) {
                 throw ChunkingException.conflict("Chunk changed before failure restoration");
             }
+            current.setPendingVectorId(null);
             current.setIndexingLockVersion(null);
         }
     }
 
-    private void cleanupEvery(Collection<UUID> vectorIds, RuntimeException original) {
-        for (UUID vectorId : vectorIds) {
-            try {
-                gateway.delete(vectorId);
-            } catch (RuntimeException cleanupFailure) {
-                addSuppressedUnlessSame(original, cleanupFailure);
-                log.error("Unable to delete vector after indexing failure for chunk {}",
-                        vectorId, cleanupFailure);
-            }
+    private boolean enqueueFailed(
+            Collection<ChunkVectorLifecycle.CleanupObligation> obligations,
+            RuntimeException original) {
+        try {
+            vectorLifecycle.enqueue(obligations);
+            return true;
+        } catch (RuntimeException enqueueFailure) {
+            addSuppressedUnlessSame(original, enqueueFailure);
+            log.error("Unable to persist vector cleanup obligations", enqueueFailure);
+            return false;
         }
     }
 
-    private void cleanupPreviousVectors(List<ChunkSnapshot> snapshots) {
-        for (ChunkSnapshot snapshot : snapshots) {
-            if (snapshot.vectorId() == null) {
-                continue;
-            }
-            try {
-                gateway.delete(snapshot.vectorId());
-            } catch (RuntimeException cleanupFailure) {
-                log.warn("Unable to delete superseded vector generation {} for chunk {}",
-                        snapshot.vectorId(), snapshot.publicId(), cleanupFailure);
-            }
+    private void drainAfterFailure(RuntimeException original) {
+        try {
+            vectorLifecycle.drain();
+        } catch (RuntimeException cleanupFailure) {
+            addSuppressedUnlessSame(original, cleanupFailure);
+            log.error("Unable to drain persisted vector cleanup obligations", cleanupFailure);
         }
     }
 
@@ -617,6 +663,7 @@ public class ChunkVectorWorker {
                 || !Objects.equals(current.getTokenCount(), expected.tokenCount())
                 || !Objects.equals(current.getIsModified(), expected.isModified())
                 || !Objects.equals(current.getVectorId(), expected.vectorId())
+                || !Objects.equals(current.getPendingVectorId(), expected.pendingVectorId())
                 || !Objects.equals(current.getIndexingLockVersion(), expected.indexingLockVersion())
                 || !Objects.equals(current.getStatus(), expected.status())) {
             throw ChunkingException.conflict("Chunk state or content snapshot changed during vectorization");
@@ -645,6 +692,7 @@ public class ChunkVectorWorker {
                 || !Objects.equals(current.getTokenCount(), expected.tokenCount())
                 || !Objects.equals(current.getIsModified(), expected.isModified())
                 || !Objects.equals(current.getVectorId(), expected.vectorId())
+                || !Objects.equals(current.getPendingVectorId(), expected.pendingVectorId())
                 || !Objects.equals(current.getIndexingLockVersion(), expected.indexingLockVersion())
                 || !Objects.equals(current.getStatus(), expected.status())) {
             throw ChunkingException.conflict(
@@ -677,6 +725,9 @@ public class ChunkVectorWorker {
                 .eq("indexing_lock_version", snapshot.indexingLockVersion());
         update = snapshot.vectorId() == null
                 ? update.isNull("vector_id") : update.eq("vector_id", snapshot.vectorId());
+        update = snapshot.pendingVectorId() == null
+                ? update.isNull("pending_vector_id")
+                : update.eq("pending_vector_id", snapshot.pendingVectorId());
         return snapshot.contentHash() == null
                 ? update.isNull("content_hash")
                 : update.eq("content_hash", snapshot.contentHash());
@@ -747,6 +798,7 @@ public class ChunkVectorWorker {
             Integer status,
             Boolean isModified,
             UUID vectorId,
+            UUID pendingVectorId,
             Integer indexingLockVersion,
             int lockVersion) {
 
@@ -758,14 +810,22 @@ public class ChunkVectorWorker {
             boundaryReason = immutableMap(boundaryReason);
         }
 
-        public static ChunkSnapshot afterMarking(DocumentChunk chunk, int indexingLockVersion) {
+        public static ChunkSnapshot afterMarking(DocumentChunk chunk, int indexingLockVersion,
+                                                 UUID pendingVectorId) {
             return from(chunk, chunk.getLockVersion() + 1,
-                    ChunkStatus.INDEXING.code(), indexingLockVersion);
+                    ChunkStatus.INDEXING.code(), indexingLockVersion, pendingVectorId);
+        }
+
+        public static ChunkSnapshot afterMarking(DocumentChunk chunk, int indexingLockVersion) {
+            UUID pendingVectorId = vectorGenerationId(chunk.getTenantId(), chunk.getKnowledgeId(),
+                    chunk.getFileId(), indexingLockVersion, chunk.getPublicId(),
+                    chunk.getLockVersion() + 1);
+            return afterMarking(chunk, indexingLockVersion, pendingVectorId);
         }
 
         public static ChunkSnapshot current(DocumentChunk chunk) {
             return from(chunk, chunk.getLockVersion(), chunk.getStatus(),
-                    chunk.getIndexingLockVersion());
+                    chunk.getIndexingLockVersion(), chunk.getPendingVectorId());
         }
 
         public static ChunkSnapshot fromIndexing(DocumentChunk chunk) {
@@ -773,14 +833,15 @@ public class ChunkVectorWorker {
         }
 
         private static ChunkSnapshot from(DocumentChunk chunk, int lockVersion,
-                                          Integer status, Integer indexingLockVersion) {
+                                          Integer status, Integer indexingLockVersion,
+                                          UUID pendingVectorId) {
             return new ChunkSnapshot(
                     chunk.getId(), chunk.getPublicId(), chunk.getTenantId(), chunk.getKnowledgeId(),
                     chunk.getFileId(), chunk.getPosition(), chunk.getContent(), chunk.getContentHash(),
                     chunk.getOverlapEnabled(), chunk.getOverlapLimit(), chunk.getOverlapUnit(),
                     chunk.getSectionPath(), chunk.getSourceLocator(), chunk.getBoundaryReason(),
                     chunk.getTokenCount(), status, chunk.getIsModified(), chunk.getVectorId(),
-                    indexingLockVersion, lockVersion);
+                    pendingVectorId, indexingLockVersion, lockVersion);
         }
 
         DocumentChunk detached() {
@@ -803,6 +864,7 @@ public class ChunkVectorWorker {
             chunk.setStatus(status);
             chunk.setIsModified(isModified);
             chunk.setVectorId(vectorId);
+            chunk.setPendingVectorId(pendingVectorId);
             chunk.setIndexingLockVersion(indexingLockVersion);
             chunk.setLockVersion(lockVersion);
             return chunk;
@@ -875,12 +937,21 @@ public class ChunkVectorWorker {
 
         Map<Long, UUID> vectorIds() {
             return chunks.stream().collect(Collectors.toUnmodifiableMap(
-                    ChunkSnapshot::id, snapshot -> vectorGenerationId(
-                            tenantId, knowledgeId, fileId, fileLockVersion, snapshot)));
+                    ChunkSnapshot::id, snapshot -> snapshot.pendingVectorId() == null
+                            ? vectorGenerationId(tenantId, knowledgeId, fileId, fileLockVersion,
+                            snapshot.publicId(), snapshot.lockVersion())
+                            : snapshot.pendingVectorId()));
         }
 
         UUID vectorId(long id) {
             return Objects.requireNonNull(vectorIds().get(id), "vectorId");
+        }
+
+        List<ChunkVectorLifecycle.CleanupObligation> obligations() {
+            Map<Long, UUID> ids = vectorIds();
+            return chunks.stream().map(snapshot -> new ChunkVectorLifecycle.CleanupObligation(
+                    ids.get(snapshot.id()), tenantId, knowledgeId, fileId, snapshot.publicId()))
+                    .toList();
         }
     }
 
@@ -907,8 +978,9 @@ public class ChunkVectorWorker {
         }
 
         Map<Long, UUID> vectorIds() {
-            return Map.of(chunk.id(), vectorGenerationId(
-                    tenantId, knowledgeId, fileId, fileLockVersion, chunk));
+            return Map.of(chunk.id(), chunk.pendingVectorId() == null
+                    ? vectorGenerationId(tenantId, knowledgeId, fileId, fileLockVersion,
+                    chunk.publicId(), chunk.lockVersion()) : chunk.pendingVectorId());
         }
 
         UUID vectorId(long id) {
@@ -917,14 +989,60 @@ public class ChunkVectorWorker {
             }
             return vectorIds().get(id);
         }
+
+        List<ChunkVectorLifecycle.CleanupObligation> obligations() {
+            return List.of(new ChunkVectorLifecycle.CleanupObligation(vectorId(chunk.id()),
+                    tenantId, knowledgeId, fileId, chunk.publicId()));
+        }
     }
 
-    private static UUID vectorGenerationId(long tenantId, long knowledgeId, long fileId,
-                                           int fileLockVersion, ChunkSnapshot snapshot) {
+    static UUID vectorGenerationId(long tenantId, long knowledgeId, long fileId,
+                                   int fileLockVersion, UUID publicId, int chunkLockVersion) {
         String identity = "starseaknow-vector-v1|" + tenantId + '|' + knowledgeId + '|'
-                + fileId + '|' + snapshot.publicId() + '|' + fileLockVersion + '|'
-                + snapshot.lockVersion();
+                + fileId + '|' + publicId + '|' + fileLockVersion + '|'
+                + chunkLockVersion;
         return UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static ChunkVectorLifecycle directLifecycle(ChunkVectorGateway gateway) {
+        return new ChunkVectorLifecycle() {
+            private final Set<CleanupObligation> queued =
+                    java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+            @Override
+            public void enqueue(Collection<CleanupObligation> obligations) {
+                queued.addAll(obligations);
+            }
+
+            @Override
+            public void enqueuePendingOwner(long tenantId, long knowledgeId, long fileId,
+                                            int indexingLockVersion) {
+            }
+
+            @Override
+            public void resetAbandonedClaims() {
+            }
+
+            @Override
+            public void drain() {
+                RuntimeException firstFailure = null;
+                for (CleanupObligation obligation : List.copyOf(queued)) {
+                    try {
+                        gateway.delete(obligation.vectorId());
+                        queued.remove(obligation);
+                    } catch (RuntimeException failure) {
+                        if (firstFailure == null) {
+                            firstFailure = failure;
+                        } else if (firstFailure != failure) {
+                            firstFailure.addSuppressed(failure);
+                        }
+                    }
+                }
+                if (firstFailure != null) {
+                    throw firstFailure;
+                }
+            }
+        };
     }
 
     public record ProcessingSnapshot(String strategyCode, String plannerVersion,

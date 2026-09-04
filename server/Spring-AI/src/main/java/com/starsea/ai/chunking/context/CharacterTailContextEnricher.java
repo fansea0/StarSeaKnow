@@ -3,6 +3,7 @@ package com.starsea.ai.chunking.context;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
 import com.starsea.ai.chunking.model.OverlapUnit;
+import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.runtime.ChunkRuntimePolicy;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.domain.DocumentChunk;
@@ -51,8 +52,9 @@ public final class CharacterTailContextEnricher {
         String body = current.getContent() == null ? "" : current.getContent();
         String base = contentBuilder.build(current.getSectionPath(), null, body);
         int baseCharacters = codePoints(base);
+        int effectiveMaxTokens = Math.min(maxTokens, ChunkPolicy.MAX_ALLOWED_TOKENS);
         int baseTokens = tokenCounter.count(base);
-        if (baseCharacters > maxCharacters || baseTokens > maxTokens) {
+        if (baseCharacters > maxCharacters || baseTokens > effectiveMaxTokens) {
             throw new IllegalArgumentException("Current index text exceeds GENERAL policy limits");
         }
 
@@ -77,34 +79,44 @@ public final class CharacterTailContextEnricher {
         }
 
         int configuredLength = Math.min(limit, sourceLength);
-        String oneCharacterIndex = contentBuilder.build(
-                current.getSectionPath(), tail(source, 1), body);
-        int formatCharacters = codePoints(oneCharacterIndex) - baseCharacters - 1;
-        int characterMaximum = Math.min(configuredLength,
-                Math.max(0, maxCharacters - baseCharacters - formatCharacters));
-        if (characterMaximum == 0 || baseTokens >= maxTokens) {
+        if (baseCharacters >= maxCharacters || baseTokens >= effectiveMaxTokens) {
             return empty(current, base, OverlapReductionReason.FORMAT_OVERHEAD);
         }
 
-        int low = 1;
-        int high = characterMaximum;
+        List<SuffixCandidate> candidates = new ArrayList<>(configuredLength);
+        for (int length = 1; length <= configuredLength; length++) {
+            String overlap = tail(source, length);
+            if (unicodeBlank(overlap)) {
+                continue;
+            }
+            String index = contentBuilder.build(current.getSectionPath(), overlap, body);
+            if (index.equals(base) || codePoints(index) > maxCharacters) {
+                continue;
+            }
+            candidates.add(new SuffixCandidate(length, overlap, index));
+        }
+        if (candidates.isEmpty()) {
+            return empty(current, base, OverlapReductionReason.FORMAT_OVERHEAD);
+        }
+        List<Integer> tokenCounts = tokenCounter.countBatch(
+                candidates.stream().map(SuffixCandidate::index).toList());
+        if (tokenCounts.size() != candidates.size()) {
+            throw new IllegalStateException("Token counter returned an incomplete batch");
+        }
         int acceptedLength = 0;
         int acceptedTokens = 0;
         String acceptedOverlap = null;
         String acceptedIndex = null;
-        while (low <= high) {
-            int candidateLength = low + (high - low) / 2;
-            String candidate = tail(source, candidateLength);
-            String index = contentBuilder.build(current.getSectionPath(), candidate, body);
-            int tokens = tokenCounter.count(index);
-            if (tokens <= maxTokens) {
-                acceptedLength = candidateLength;
+        int characterMaximum = 0;
+        for (int index = 0; index < candidates.size(); index++) {
+            SuffixCandidate candidate = candidates.get(index);
+            characterMaximum = Math.max(characterMaximum, candidate.length());
+            int tokens = tokenCounts.get(index);
+            if (tokens <= effectiveMaxTokens && candidate.length() > acceptedLength) {
+                acceptedLength = candidate.length();
                 acceptedTokens = tokens;
-                acceptedOverlap = candidate;
-                acceptedIndex = index;
-                low = candidateLength + 1;
-            } else {
-                high = candidateLength - 1;
+                acceptedOverlap = candidate.overlap();
+                acceptedIndex = candidate.index();
             }
         }
         if (acceptedLength == 0) {
@@ -121,7 +133,7 @@ public final class CharacterTailContextEnricher {
             reason = OverlapReductionReason.CHARACTER_LIMIT;
         }
         return enriched(current, previous.getId(), acceptedOverlap,
-                acceptedTokens - baseTokens, acceptedIndex, reason);
+                Math.max(0, acceptedTokens - baseTokens), acceptedIndex, reason);
     }
 
     private EnrichedChunk enriched(DocumentChunk current, Long sourceId, String overlap,
@@ -146,5 +158,13 @@ public final class CharacterTailContextEnricher {
     private String tail(String value, int codePoints) {
         int start = value.offsetByCodePoints(value.length(), -codePoints);
         return value.substring(start);
+    }
+
+    private boolean unicodeBlank(String value) {
+        return value.codePoints().allMatch(codePoint -> Character.isWhitespace(codePoint)
+                || Character.isSpaceChar(codePoint));
+    }
+
+    private record SuffixCandidate(int length, String overlap, String index) {
     }
 }

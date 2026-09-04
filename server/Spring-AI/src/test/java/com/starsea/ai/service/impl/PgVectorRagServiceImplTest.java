@@ -20,6 +20,7 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -97,7 +98,7 @@ class PgVectorRagServiceImplTest {
                 result.get(0).sourceLocator());
         ArgumentCaptor<SearchRequest> search = ArgumentCaptor.forClass(SearchRequest.class);
         verify(fixture.vectorStore).similaritySearch(search.capture());
-        assertEquals(6, search.getValue().getTopK());
+        assertEquals(256, search.getValue().getTopK());
         String filter = search.getValue().getFilterExpression().toString();
         assertTrue(filter.contains("tenantId"));
         assertTrue(filter.contains("knowledgeId"));
@@ -130,6 +131,34 @@ class PgVectorRagServiceImplTest {
         assertEquals(1, result.size());
         assertEquals(FIRST_CHUNK_ID, result.get(0).chunkId());
         assertEquals(0.91, result.get(0).score());
+    }
+
+    @Test
+    void requests_enough_candidates_for_the_current_generation_after_many_stale_ones() {
+        Fixture fixture = fixture();
+        UUID currentVectorId = UUID.fromString("99999999-9999-9999-9999-999999999999");
+        List<Document> generations = new ArrayList<>();
+        for (int index = 0; index < 200; index++) {
+            generations.add(candidate(UUID.nameUUIDFromBytes(("stale-" + index).getBytes()),
+                    FIRST_CHUNK_ID, "stale " + index, 0.99 - index / 10_000.0));
+        }
+        generations.add(candidate(currentVectorId, FIRST_CHUNK_ID, "current", 0.80));
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(generations);
+        DocumentChunk current = chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                ChunkStatus.ACTIVE, 0, "database current");
+        current.setVectorId(currentVectorId);
+        when(fixture.chunkMapper.findActiveByPublicIds(eq(TENANT_ID), eq(Set.of(KNOWLEDGE_ID)), any()))
+                .thenReturn(List.of(current));
+
+        List<RetrievedChunk> result = fixture.service.retrieve(
+                new RetrievalQuery("stars", Set.of(KNOWLEDGE_ID), 1, 0.0));
+
+        assertEquals(List.of(FIRST_CHUNK_ID),
+                result.stream().map(RetrievedChunk::chunkId).toList());
+        ArgumentCaptor<SearchRequest> request = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore).similaritySearch(request.capture());
+        assertTrue(request.getValue().getTopK() > 200);
     }
 
     @Test
@@ -352,7 +381,7 @@ class PgVectorRagServiceImplTest {
     }
 
     @Test
-    void top_k_twenty_overfetches_sixty_without_arithmetic_or_store_overflow() {
+    void top_k_twenty_uses_the_stale_generation_candidate_floor() {
         Fixture fixture = fixture();
         when(fixture.vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
 
@@ -360,7 +389,7 @@ class PgVectorRagServiceImplTest {
 
         ArgumentCaptor<SearchRequest> search = ArgumentCaptor.forClass(SearchRequest.class);
         verify(fixture.vectorStore).similaritySearch(search.capture());
-        assertEquals(60, search.getValue().getTopK());
+        assertEquals(256, search.getValue().getTopK());
     }
 
     @Test

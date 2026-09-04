@@ -1,6 +1,7 @@
 package com.starsea.ai.chunking.indexing;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.EnrichedChunk;
@@ -25,9 +26,12 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -106,6 +110,8 @@ class ChunkVectorWorkerIsolationTest {
         FileProcessing processing = processing(5);
         processing.setSourceHash(sourceHash);
         DocumentChunk chunk = chunk("A body", "hash-a", 1, 5);
+        chunk.setPendingVectorId(ChunkVectorWorker.vectorGenerationId(
+                TENANT_ID, KNOWLEDGE_ID, FILE_ID, 5, CHUNK_PUBLIC_ID, 1));
         File file = new File();
         file.setId(FILE_ID);
         file.setPublicId(FILE_PUBLIC_ID);
@@ -137,7 +143,8 @@ class ChunkVectorWorkerIsolationTest {
             return null;
         }).when(transactions).executeWithoutResult(any());
         when(chunkMapper.update(any(DocumentChunk.class), any(Wrapper.class)))
-                .thenAnswer(invocation -> applyChunkPatch(chunk, invocation.getArgument(0)));
+                .thenAnswer(invocation -> applyChunkPatch(
+                        chunk, invocation.getArgument(0), invocation.getArgument(1)));
         when(stateService.transition(anyLong(), anyLong(), any(), any(), anyInt()))
                 .thenAnswer(invocation -> transition(processing, invocation.getArgument(2),
                         invocation.getArgument(3), invocation.getArgument(4)));
@@ -166,9 +173,17 @@ class ChunkVectorWorkerIsolationTest {
                 ChunkVectorWorker.ProcessingSnapshot.from(processing, resolver), List.of(prepared));
     }
 
-    private static int applyChunkPatch(DocumentChunk chunk, DocumentChunk patch) {
+    private static int applyChunkPatch(DocumentChunk chunk, DocumentChunk patch,
+                                       Wrapper<?> wrapper) {
         synchronized (chunk) {
-            if (!Integer.valueOf(ChunkStatus.INDEXING.code()).equals(chunk.getStatus())) {
+            UUID expectedPending = ChunkVectorWorker.vectorGenerationId(
+                    chunk.getTenantId(), chunk.getKnowledgeId(), chunk.getFileId(),
+                    chunk.getIndexingLockVersion(), chunk.getPublicId(), chunk.getLockVersion());
+            if (!Integer.valueOf(ChunkStatus.INDEXING.code()).equals(chunk.getStatus())
+                    || !expectedPending.equals(chunk.getPendingVectorId())
+                    || !matchesCurrentOwner(wrapper, chunk)
+                    || (Integer.valueOf(ChunkStatus.ACTIVE.code()).equals(patch.getStatus())
+                    && !expectedPending.equals(patch.getVectorId()))) {
                 return 0;
             }
             chunk.setStatus(patch.getStatus());
@@ -177,11 +192,43 @@ class ChunkVectorWorkerIsolationTest {
             if (Integer.valueOf(ChunkStatus.ACTIVE.code()).equals(patch.getStatus())
                     || Integer.valueOf(ChunkStatus.DRAFT.code()).equals(patch.getStatus())) {
                 chunk.setIndexingLockVersion(null);
+                chunk.setPendingVectorId(null);
             }
             chunk.setLastError(patch.getLastError());
             chunk.setLockVersion(chunk.getLockVersion() + 1);
             return 1;
         }
+    }
+
+    private static boolean matchesCurrentOwner(Wrapper<?> wrapper, DocumentChunk chunk) {
+        if (!(wrapper instanceof AbstractWrapper<?, ?, ?> abstractWrapper)) {
+            return false;
+        }
+        Map<String, Object> required = new LinkedHashMap<>();
+        required.put("id", chunk.getId());
+        required.put("tenant_id", chunk.getTenantId());
+        required.put("knowledge_id", chunk.getKnowledgeId());
+        required.put("file_id", chunk.getFileId());
+        required.put("public_id", chunk.getPublicId());
+        required.put("status", chunk.getStatus());
+        required.put("lock_version", chunk.getLockVersion());
+        required.put("indexing_lock_version", chunk.getIndexingLockVersion());
+        required.put("vector_id", chunk.getVectorId());
+        required.put("pending_vector_id", chunk.getPendingVectorId());
+        required.put("content_hash", chunk.getContentHash());
+        String sql = wrapper.getSqlSegment();
+        Map<String, Object> parameters = abstractWrapper.getParamNameValuePairs();
+        for (Map.Entry<String, Object> condition : required.entrySet()) {
+            Pattern pattern = Pattern.compile("(?i)(?:^|[^a-z0-9_])"
+                    + Pattern.quote(condition.getKey())
+                    + "\\s*=\\s*#\\{ew\\.paramNameValuePairs\\.(MPGENVAL\\d+)}");
+            Matcher matcher = pattern.matcher(sql);
+            if (!matcher.find()
+                    || !Objects.equals(parameters.get(matcher.group(1)), condition.getValue())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static FileProcessingService.Transition transition(
@@ -270,6 +317,8 @@ class ChunkVectorWorkerIsolationTest {
             chunk.setIndexContent(null);
             chunk.setLockVersion(3);
             chunk.setIndexingLockVersion(7);
+            chunk.setPendingVectorId(ChunkVectorWorker.vectorGenerationId(
+                    TENANT_ID, KNOWLEDGE_ID, FILE_ID, 7, CHUNK_PUBLIC_ID, 3));
             processing.setPipelineState(PipelineState.VECTORIZING.code());
             processing.setFailedFromState(null);
             processing.setLockVersion(7);

@@ -169,7 +169,7 @@ public class PgVectorRagServiceImpl implements RagService {
         if (topK < 1) {
             throw new IllegalArgumentException("topK must be positive");
         }
-        return (int) Math.min((long) topK * 3L, 100L);
+        return (int) Math.min(Math.max((long) topK * 8L, 256L), 1_024L);
     }
 
     private static double normalizeScore(Double score) {

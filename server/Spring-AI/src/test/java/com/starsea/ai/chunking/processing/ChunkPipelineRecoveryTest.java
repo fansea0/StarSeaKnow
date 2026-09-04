@@ -2,6 +2,7 @@ package com.starsea.ai.chunking.processing;
 
 import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import com.starsea.ai.chunking.model.PipelineState;
+import com.starsea.ai.chunking.indexing.ChunkVectorLifecycle;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.mapper.DocumentChunkMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
@@ -37,6 +38,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.inOrder;
 
 class ChunkPipelineRecoveryTest {
 
@@ -83,6 +85,7 @@ class ChunkPipelineRecoveryTest {
             assertEquals(true, restore.contains("overlap_character_count = 0"));
             assertEquals(true, restore.contains("overlap_reduction_reason = null"));
             assertEquals(true, restore.contains("index_content = null"));
+            assertEquals(true, restore.contains("pending_vector_id = null"));
             assertEquals(true, restore.contains("indexing_lock_version = null"));
             assertEquals(true, restore.contains("indexing_lock_version = #{indexinglockversion}"));
         }
@@ -121,6 +124,31 @@ class ChunkPipelineRecoveryTest {
         assertEquals(1, summary.filesRecovered());
         assertEquals(2, summary.chunksRecovered());
         verify(chunkMapper).restoreIndexingByFile(20L, 1L, 10L, 8);
+    }
+
+    @Test
+    void hard_crash_recovery_durably_queues_pending_generations_before_clearing_chunks() {
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        ChunkVectorLifecycle lifecycle = mock(ChunkVectorLifecycle.class);
+        FileProcessing stale = stale(PipelineState.VECTORIZING, 8);
+        OffsetDateTime cutoff = OffsetDateTime.ofInstant(
+                NOW.minus(Duration.ofMinutes(10)), ZoneOffset.UTC);
+        when(processingMapper.findTimedOutAsync(cutoff)).thenReturn(List.of(stale));
+        when(processingMapper.transition(20L, 1L, 10L, 5, 7, 0, 8, 5,
+                "VECTORIZING timed out during recovery scan")).thenReturn(1);
+        when(chunkMapper.restoreIndexingByFile(20L, 1L, 10L, 8)).thenReturn(1);
+
+        ChunkPipelineRecovery.RecoverySummary summary = recovery(
+                processingMapper, chunkMapper, lifecycle)
+                .recoverTimedOut();
+
+        assertEquals(1, summary.filesRecovered());
+        var order = inOrder(processingMapper, lifecycle, chunkMapper);
+        order.verify(processingMapper).transition(20L, 1L, 10L, 5, 7, 0, 8, 5,
+                "VECTORIZING timed out during recovery scan");
+        order.verify(lifecycle).enqueuePendingOwner(1L, 10L, 20L, 8);
+        order.verify(chunkMapper).restoreIndexingByFile(20L, 1L, 10L, 8);
     }
 
     @Test
@@ -206,13 +234,19 @@ class ChunkPipelineRecoveryTest {
 
     private ChunkPipelineRecovery recovery(FileProcessingMapper processingMapper,
                                             DocumentChunkMapper chunkMapper) {
+        return recovery(processingMapper, chunkMapper, ChunkVectorLifecycle.NOOP);
+    }
+
+    private ChunkPipelineRecovery recovery(FileProcessingMapper processingMapper,
+                                            DocumentChunkMapper chunkMapper,
+                                            ChunkVectorLifecycle lifecycle) {
         TaskScheduler scheduler = mock(TaskScheduler.class);
         doReturn(mock(ScheduledFuture.class)).when(scheduler)
                 .scheduleWithFixedDelay(any(Runnable.class), any(Instant.class), any(Duration.class));
         return new ChunkPipelineRecovery(processingMapper, chunkMapper,
                 new ImmediateTransactions(), scheduler,
                 Duration.ofMinutes(10), Duration.ofMinutes(1), Duration.ofMinutes(1),
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                Clock.fixed(NOW, ZoneOffset.UTC), lifecycle);
     }
 
     private FileProcessing stale(PipelineState state, int lockVersion) {

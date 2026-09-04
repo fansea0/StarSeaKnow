@@ -28,6 +28,7 @@
         <result property="boundaryReason" column="boundary_reason" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
         <result property="status" column="status" jdbcType="SMALLINT"/>
         <result property="vectorId" column="vector_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
+        <result property="pendingVectorId" column="pending_vector_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
         <result property="indexingLockVersion" column="indexing_lock_version" jdbcType="INTEGER"/>
         <result property="isModified" column="is_modified" jdbcType="BOOLEAN"/>
         <result property="lastError" column="last_error" jdbcType="LONGVARCHAR"/>
@@ -45,6 +46,7 @@
         UPDATE document_chunk
         SET status = 0,
             indexing_lock_version = NULL,
+            pending_vector_id = NULL,
             overlap_content = NULL,
             overlap_source_chunk_id = NULL,
             overlap_token_count = 0,

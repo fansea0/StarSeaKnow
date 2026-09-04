@@ -57,6 +57,8 @@ public class DocumentChunk implements Serializable {
 
     @TableField(value = "vector_id", typeHandler = UuidTypeHandler.class, jdbcType = JdbcType.OTHER)
     private UUID vectorId;
+    @TableField(value = "pending_vector_id", typeHandler = UuidTypeHandler.class, jdbcType = JdbcType.OTHER)
+    private UUID pendingVectorId;
     private Integer indexingLockVersion;
 
     @TableField("is_modified")

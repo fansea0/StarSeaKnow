@@ -8,6 +8,8 @@ import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
+import com.starsea.ai.chunking.indexing.ChunkVectorLifecycle;
+import com.starsea.ai.chunking.indexing.DurableChunkVectorLifecycle;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
@@ -54,6 +56,7 @@ public class ChunkCommandService {
     private final ChunkIndexContentBuilder contentBuilder;
     private final ChunkContextEnricher contextEnricher;
     private final ChunkVectorGateway vectorGateway;
+    private final ChunkVectorLifecycle vectorLifecycle;
     private final RetrySleeper retrySleeper;
     private final ChunkRuntimePolicyResolver runtimePolicyResolver;
 
@@ -65,9 +68,11 @@ public class ChunkCommandService {
                                ChunkIndexContentBuilder contentBuilder,
                                ChunkVectorGateway vectorGateway,
                                ChunkContextEnricher contextEnricher,
-                               ChunkRuntimePolicyResolver runtimePolicyResolver) {
+                               ChunkRuntimePolicyResolver runtimePolicyResolver,
+                               DurableChunkVectorLifecycle vectorLifecycle) {
         this(chunkMapper, processingMapper, stateService, tokenCounter,
-                contentBuilder, vectorGateway, contextEnricher, Thread::sleep, runtimePolicyResolver);
+                contentBuilder, vectorGateway, contextEnricher, Thread::sleep, runtimePolicyResolver,
+                vectorLifecycle);
     }
 
     public ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -79,7 +84,7 @@ public class ChunkCommandService {
                                ChunkContextEnricher contextEnricher) {
         this(chunkMapper, processingMapper, stateService, tokenCounter,
                 contentBuilder, vectorGateway, contextEnricher, Thread::sleep,
-                new ChunkRuntimePolicyResolver());
+                new ChunkRuntimePolicyResolver(), ChunkVectorLifecycle.NOOP);
     }
 
     public ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -90,7 +95,7 @@ public class ChunkCommandService {
                                ChunkVectorGateway vectorGateway) {
         this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
                 vectorGateway, new StrategyAwareChunkContextEnricher(tokenCounter), Thread::sleep,
-                new ChunkRuntimePolicyResolver());
+                new ChunkRuntimePolicyResolver(), ChunkVectorLifecycle.NOOP);
     }
 
     ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -102,7 +107,7 @@ public class ChunkCommandService {
                         RetrySleeper retrySleeper) {
         this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
                 vectorGateway, new StrategyAwareChunkContextEnricher(tokenCounter), retrySleeper,
-                new ChunkRuntimePolicyResolver());
+                new ChunkRuntimePolicyResolver(), ChunkVectorLifecycle.NOOP);
     }
 
     ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -114,7 +119,8 @@ public class ChunkCommandService {
                         ChunkContextEnricher contextEnricher,
                         RetrySleeper retrySleeper) {
         this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
-                vectorGateway, contextEnricher, retrySleeper, new ChunkRuntimePolicyResolver());
+                vectorGateway, contextEnricher, retrySleeper, new ChunkRuntimePolicyResolver(),
+                ChunkVectorLifecycle.NOOP);
     }
 
     ChunkCommandService(DocumentChunkMapper chunkMapper,
@@ -126,6 +132,21 @@ public class ChunkCommandService {
                         ChunkContextEnricher contextEnricher,
                         RetrySleeper retrySleeper,
                         ChunkRuntimePolicyResolver runtimePolicyResolver) {
+        this(chunkMapper, processingMapper, stateService, tokenCounter, contentBuilder,
+                vectorGateway, contextEnricher, retrySleeper, runtimePolicyResolver,
+                ChunkVectorLifecycle.NOOP);
+    }
+
+    ChunkCommandService(DocumentChunkMapper chunkMapper,
+                        FileProcessingMapper processingMapper,
+                        FileProcessingService stateService,
+                        TokenCounter tokenCounter,
+                        ChunkIndexContentBuilder contentBuilder,
+                        ChunkVectorGateway vectorGateway,
+                        ChunkContextEnricher contextEnricher,
+                        RetrySleeper retrySleeper,
+                        ChunkRuntimePolicyResolver runtimePolicyResolver,
+                        ChunkVectorLifecycle vectorLifecycle) {
         this.chunkMapper = chunkMapper;
         this.processingMapper = processingMapper;
         this.stateService = stateService;
@@ -133,6 +154,7 @@ public class ChunkCommandService {
         this.contentBuilder = contentBuilder;
         this.contextEnricher = contextEnricher;
         this.vectorGateway = vectorGateway;
+        this.vectorLifecycle = Objects.requireNonNull(vectorLifecycle, "vectorLifecycle");
         this.retrySleeper = retrySleeper;
         this.runtimePolicyResolver = Objects.requireNonNull(runtimePolicyResolver, "runtimePolicyResolver");
     }
@@ -204,7 +226,7 @@ public class ChunkCommandService {
         }
         int adjustingLockVersion = moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
         scheduleVectorCleanup(tenantId, knowledgeId, fileId, adjustingLockVersion,
-                vectorIds(target, dependent));
+                vectorObligations(tenantId, knowledgeId, fileId, target, dependent));
 
         return toResponse(edited);
     }
@@ -231,7 +253,7 @@ public class ChunkCommandService {
         }
         int adjustingLockVersion = moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
         scheduleVectorCleanup(tenantId, knowledgeId, fileId, adjustingLockVersion,
-                vectorIds(target, dependent));
+                vectorObligations(tenantId, knowledgeId, fileId, target, dependent));
     }
 
     /** Task 9 calls this before confirmation so an empty set can never be vectorized. */
@@ -566,17 +588,23 @@ public class ChunkCommandService {
                 "maxIndexTokens", maxTokens));
     }
 
-    private List<UUID> vectorIds(DocumentChunk target, DocumentChunk dependent) {
-        LinkedHashSet<UUID> ids = new LinkedHashSet<>();
-        UUID targetVectorId = currentVectorId(target);
-        if (targetVectorId != null) {
-            ids.add(targetVectorId);
+    private List<ChunkVectorLifecycle.CleanupObligation> vectorObligations(
+            long tenantId, long knowledgeId, long fileId,
+            DocumentChunk target, DocumentChunk dependent) {
+        LinkedHashSet<ChunkVectorLifecycle.CleanupObligation> obligations = new LinkedHashSet<>();
+        addVectorObligation(obligations, tenantId, knowledgeId, fileId, target);
+        addVectorObligation(obligations, tenantId, knowledgeId, fileId, dependent);
+        return List.copyOf(obligations);
+    }
+
+    private void addVectorObligation(
+            LinkedHashSet<ChunkVectorLifecycle.CleanupObligation> obligations,
+            long tenantId, long knowledgeId, long fileId, DocumentChunk chunk) {
+        UUID vectorId = currentVectorId(chunk);
+        if (vectorId != null) {
+            obligations.add(new ChunkVectorLifecycle.CleanupObligation(
+                    vectorId, tenantId, knowledgeId, fileId, chunk.getPublicId()));
         }
-        UUID dependentVectorId = currentVectorId(dependent);
-        if (dependentVectorId != null) {
-            ids.add(dependentVectorId);
-        }
-        return List.copyOf(ids);
     }
 
     private UUID currentVectorId(DocumentChunk chunk) {
@@ -587,12 +615,22 @@ public class ChunkCommandService {
     }
 
     private void scheduleVectorCleanup(long tenantId, long knowledgeId, long fileId,
-                                       int adjustingLockVersion, List<UUID> publicIds) {
-        if (publicIds.isEmpty()) {
+                                       int adjustingLockVersion,
+                                       List<ChunkVectorLifecycle.CleanupObligation> obligations) {
+        if (obligations.isEmpty()) {
             return;
         }
-        Runnable cleanup = () -> publicIds.forEach(id -> deleteVectorWithRetry(
-                tenantId, knowledgeId, fileId, adjustingLockVersion, id));
+        if (vectorLifecycle != ChunkVectorLifecycle.NOOP) {
+            vectorLifecycle.enqueue(obligations);
+            scheduleAfterCommit(vectorLifecycle::drain);
+            return;
+        }
+        Runnable cleanup = () -> obligations.forEach(obligation -> deleteVectorWithRetry(
+                tenantId, knowledgeId, fileId, adjustingLockVersion, obligation.vectorId()));
+        scheduleAfterCommit(cleanup);
+    }
+
+    private void scheduleAfterCommit(Runnable cleanup) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             cleanup.run();
             return;

@@ -311,10 +311,15 @@ public class ChunkVectorService {
     private ChunkVectorWorker.ChunkSnapshot markIndexing(DocumentChunk chunk, long tenantId,
                                                           long knowledgeId, long fileId,
                                                           int indexingLockVersion) {
+        UUID pendingVectorId = ChunkVectorWorker.vectorGenerationId(
+                tenantId, knowledgeId, fileId, indexingLockVersion,
+                chunk.getPublicId(), value(chunk.getLockVersion()) + 1);
         ChunkVectorWorker.ChunkSnapshot snapshot =
-                ChunkVectorWorker.ChunkSnapshot.afterMarking(chunk, indexingLockVersion);
+                ChunkVectorWorker.ChunkSnapshot.afterMarking(
+                        chunk, indexingLockVersion, pendingVectorId);
         DocumentChunk patch = new DocumentChunk();
         patch.setStatus(ChunkStatus.INDEXING.code());
+        patch.setPendingVectorId(pendingVectorId);
         patch.setIndexingLockVersion(indexingLockVersion);
         int updated = chunkMapper.update(patch, new UpdateWrapper<DocumentChunk>()
                 .eq("id", chunk.getId())
@@ -325,11 +330,13 @@ public class ChunkVectorService {
                 .eq("status", chunk.getStatus())
                 .eq("lock_version", chunk.getLockVersion())
                 .set("last_error", null)
+                .set("pending_vector_id", pendingVectorId)
                 .set("indexing_lock_version", indexingLockVersion)
                 .setSql("lock_version = lock_version + 1"));
         if (updated != 1) {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
         }
+        chunk.setPendingVectorId(pendingVectorId);
         chunk.setIndexingLockVersion(indexingLockVersion);
         return snapshot;
     }

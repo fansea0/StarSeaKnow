@@ -1,6 +1,8 @@
 package com.starsea.ai.chunking.processing;
 
 import com.starsea.ai.chunking.model.PipelineState;
+import com.starsea.ai.chunking.indexing.DurableChunkVectorLifecycle;
+import com.starsea.ai.chunking.indexing.ChunkVectorLifecycle;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.mapper.DocumentChunkMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
@@ -38,6 +40,7 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
     private final Duration initialDelay;
     private final Duration fixedDelay;
     private final Clock clock;
+    private final ChunkVectorLifecycle vectorLifecycle;
     private final AtomicBoolean scanInProgress = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
     private ScheduledFuture<?> scheduledTask;
@@ -49,9 +52,10 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
                                  @Qualifier("chunkingRecoveryScheduler") TaskScheduler scheduler,
                                  @Value("${chunking.recovery.timeout:10m}") Duration timeout,
                                  @Value("${chunking.recovery.initial-delay:1m}") Duration initialDelay,
-                                 @Value("${chunking.recovery.fixed-delay:1m}") Duration fixedDelay) {
+                                 @Value("${chunking.recovery.fixed-delay:1m}") Duration fixedDelay,
+                                 DurableChunkVectorLifecycle vectorLifecycle) {
         this(processingMapper, chunkMapper, new TransactionTemplate(transactionManager),
-                scheduler, timeout, initialDelay, fixedDelay, Clock.systemUTC());
+                scheduler, timeout, initialDelay, fixedDelay, Clock.systemUTC(), vectorLifecycle);
     }
 
     ChunkPipelineRecovery(FileProcessingMapper processingMapper,
@@ -62,6 +66,19 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
                           Duration initialDelay,
                           Duration fixedDelay,
                           Clock clock) {
+        this(processingMapper, chunkMapper, transactions, scheduler, timeout,
+                initialDelay, fixedDelay, clock, ChunkVectorLifecycle.NOOP);
+    }
+
+    ChunkPipelineRecovery(FileProcessingMapper processingMapper,
+                          DocumentChunkMapper chunkMapper,
+                          TransactionOperations transactions,
+                          TaskScheduler scheduler,
+                          Duration timeout,
+                          Duration initialDelay,
+                          Duration fixedDelay,
+                          Clock clock,
+                          ChunkVectorLifecycle vectorLifecycle) {
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("chunking recovery timeout must be positive");
         }
@@ -79,10 +96,12 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
         this.initialDelay = initialDelay;
         this.fixedDelay = fixedDelay;
         this.clock = clock;
+        this.vectorLifecycle = vectorLifecycle;
     }
 
     @Override
     public void run(ApplicationArguments args) {
+        vectorLifecycle.resetAbandonedClaims();
         scanScheduled();
         synchronized (this) {
             if (closed.get()) {
@@ -102,6 +121,7 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
         }
         try {
             logSummary(recoverTimedOut());
+            vectorLifecycle.drain();
         } catch (RuntimeException failure) {
             log.error("Unable to complete chunking recovery scan", failure);
         } finally {
@@ -159,6 +179,10 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
                 state.code(), error);
         if (updated != 1) {
             return RecoverySummary.NONE;
+        }
+        if (state == PipelineState.VECTORIZING) {
+            vectorLifecycle.enqueuePendingOwner(candidate.getTenantId(), candidate.getKnowledgeId(),
+                    candidate.getFileId(), candidate.getLockVersion());
         }
         int chunks = state == PipelineState.VECTORIZING
                 ? chunkMapper.restoreIndexingByFile(candidate.getFileId(), candidate.getTenantId(),

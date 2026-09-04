@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.starsea.ai.mapper.ChunkVectorCleanupMapper">
+
+    <resultMap id="CleanupResultMap" type="com.starsea.ai.domain.ChunkVectorCleanup">
+        <id property="id" column="id" jdbcType="BIGINT"/>
+        <result property="vectorId" column="vector_id" jdbcType="OTHER"
+                typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
+        <result property="tenantId" column="tenant_id" jdbcType="BIGINT"/>
+        <result property="knowledgeId" column="knowledge_id" jdbcType="BIGINT"/>
+        <result property="fileId" column="file_id" jdbcType="BIGINT"/>
+        <result property="chunkPublicId" column="chunk_public_id" jdbcType="OTHER"
+                typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
+        <result property="state" column="state" jdbcType="SMALLINT"/>
+        <result property="retryCount" column="retry_count" jdbcType="INTEGER"/>
+        <result property="lastError" column="last_error" jdbcType="LONGVARCHAR"/>
+        <result property="createTime" column="create_time" jdbcType="TIMESTAMP_WITH_TIMEZONE"/>
+        <result property="updateTime" column="update_time" jdbcType="TIMESTAMP_WITH_TIMEZONE"/>
+    </resultMap>
+
+    <insert id="enqueue">
+        INSERT INTO chunk_vector_cleanup
+            (vector_id, tenant_id, knowledge_id, file_id, chunk_public_id)
+        VALUES
+            (#{vectorId}, #{tenantId}, #{knowledgeId}, #{fileId}, #{chunkPublicId})
+        ON CONFLICT (vector_id) DO NOTHING
+    </insert>
+
+    <insert id="enqueuePendingByOwner">
+        INSERT INTO chunk_vector_cleanup
+            (vector_id, tenant_id, knowledge_id, file_id, chunk_public_id)
+        SELECT pending_vector_id, tenant_id, knowledge_id, file_id, public_id
+        FROM document_chunk
+        WHERE tenant_id = #{tenantId}
+          AND knowledge_id = #{knowledgeId}
+          AND file_id = #{fileId}
+          AND status = 1
+          AND indexing_lock_version = #{indexingLockVersion}
+          AND pending_vector_id IS NOT NULL
+        ON CONFLICT (vector_id) DO NOTHING
+    </insert>
+
+    <select id="findDrainable" resultMap="CleanupResultMap">
+        SELECT q.*
+        FROM chunk_vector_cleanup q
+        WHERE q.state = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM document_chunk dc
+              WHERE (dc.status = 2 AND dc.vector_id = q.vector_id)
+                 OR dc.pending_vector_id = q.vector_id
+          )
+        ORDER BY q.create_time, q.id
+        LIMIT #{limit}
+    </select>
+
+    <update id="claim">
+        UPDATE chunk_vector_cleanup q
+        SET state = 1,
+            update_time = CURRENT_TIMESTAMP
+        WHERE q.vector_id = #{vectorId}
+          AND q.state = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM document_chunk dc
+              WHERE (dc.status = 2 AND dc.vector_id = q.vector_id)
+                 OR dc.pending_vector_id = q.vector_id
+          )
+    </update>
+
+    <delete id="deleteClaimed">
+        DELETE FROM chunk_vector_cleanup
+        WHERE vector_id = #{vectorId}
+          AND state = 1
+          AND NOT EXISTS (
+              SELECT 1 FROM document_chunk dc
+              WHERE (dc.status = 2
+                     AND dc.vector_id = chunk_vector_cleanup.vector_id)
+                 OR dc.pending_vector_id = chunk_vector_cleanup.vector_id
+          )
+    </delete>
+
+    <update id="release">
+        UPDATE chunk_vector_cleanup
+        SET state = 0,
+            retry_count = retry_count + 1,
+            last_error = LEFT(#{lastError}, 500),
+            update_time = CURRENT_TIMESTAMP
+        WHERE vector_id = #{vectorId}
+          AND state = 1
+    </update>
+
+    <delete id="removeActiveObligations">
+        DELETE FROM chunk_vector_cleanup q
+        WHERE EXISTS (
+            SELECT 1 FROM document_chunk dc
+            WHERE dc.status = 2 AND dc.vector_id = q.vector_id
+        )
+    </delete>
+
+    <update id="resetAbandonedClaims">
+        UPDATE chunk_vector_cleanup
+        SET state = 0,
+            update_time = CURRENT_TIMESTAMP
+        WHERE state = 1
+          AND update_time &lt; CURRENT_TIMESTAMP - INTERVAL '1 minute'
+    </update>
+</mapper>
