@@ -1,6 +1,10 @@
 package com.starsea.ai.chunking.model;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+
+import java.util.stream.StreamSupport;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -44,6 +48,20 @@ class GeneralChunkConfigTest {
                 () -> config("a*", DelimiterMode.REGEX, 500));
         assertThrows(IllegalArgumentException.class,
                 () -> config("(?=a)", DelimiterMode.REGEX, 500));
+    }
+
+    @Test
+    void serialized_config_contains_only_the_persisted_policy_contract() throws Exception {
+        GeneralChunkConfig config = config("\\|{2,3}", DelimiterMode.REGEX, 500);
+
+        JsonNode json = new ObjectMapper().valueToTree(config);
+
+        assertEquals(java.util.Set.of("delimiter", "delimiterMode", "maxCharacters",
+                        "collapseWhitespace", "removeUrls", "removeEmails"),
+                StreamSupport.stream(
+                                ((Iterable<String>) json::fieldNames).spliterator(), false)
+                        .collect(java.util.stream.Collectors.toSet()));
+        assertEquals("\\|{2,3}", json.get("delimiter").asText());
     }
 
     @Test

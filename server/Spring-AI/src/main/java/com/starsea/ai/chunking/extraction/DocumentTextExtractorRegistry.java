@@ -20,7 +20,8 @@ public class DocumentTextExtractorRegistry {
         for (DocumentTextExtractor extractor : extractors) {
             Objects.requireNonNull(extractor, "extractor");
             for (String mediaType : extractor.supportedMediaTypes()) {
-                String key = mediaType.trim().toLowerCase() + "@" + extractor.priority();
+                String key = MediaTypeCanonicalizer.canonicalize(mediaType)
+                        + "@" + extractor.priority();
                 if (!registrations.add(key)) {
                     throw new IllegalArgumentException(
                             "Duplicate document text extractor registration for " + key);
@@ -61,7 +62,9 @@ public class DocumentTextExtractorRegistry {
         DocumentTextExtractor selected = extractors.stream()
                 .filter(extractor -> extractor.id().equals(capability.extractorId())
                         && extractor.version().equals(capability.extractorVersion())
-                        && extractor.priority() == capability.priority())
+                        && extractor.priority() == capability.priority()
+                        && MediaTypeCanonicalizer.supports(
+                                extractor, capability.detectedMediaType()))
                 .findFirst()
                 .orElseThrow(() -> new DocumentTextExtractor.ExtractionException(
                         DocumentTextExtractor.FailureReason.UNSUPPORTED,

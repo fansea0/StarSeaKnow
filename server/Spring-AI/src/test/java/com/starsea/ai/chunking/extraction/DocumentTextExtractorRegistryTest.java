@@ -41,6 +41,34 @@ class DocumentTextExtractorRegistryTest {
     }
 
     @Test
+    void parameterized_media_types_share_the_canonical_duplicate_registration_key() {
+        DocumentTextExtractor first = extractor(
+                "first", 100, Set.of("Text/Plain; charset=UTF-8"), "first");
+        DocumentTextExtractor second = extractor(
+                "second", 100, Set.of("text/plain ; format=flowed"), "second");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new DocumentTextExtractorRegistry(List.of(first, second)));
+    }
+
+    @Test
+    void selection_with_shared_identity_requires_support_for_the_detected_media_type() throws Exception {
+        Path source = tempDir.resolve("source.txt");
+        Files.writeString(source, "content");
+        DocumentTextExtractor xml = extractor(
+                "shared", 100, Set.of("application/xml"), "xml");
+        DocumentTextExtractor plain = extractor(
+                "shared", 100, Set.of("Text/Plain; charset=UTF-8"), "plain");
+        DocumentTextExtractorRegistry registry = new DocumentTextExtractorRegistry(List.of(xml, plain));
+
+        ExtractionCapability capability = registry.probe(source, "text/plain; charset=UTF-8");
+        ExtractedText extracted = registry.extract(source, capability);
+
+        assertEquals("text/plain", capability.detectedMediaType());
+        assertEquals("plain", extracted.text());
+    }
+
+    @Test
     void selected_extractor_failure_is_returned_without_falling_through() throws Exception {
         Path source = tempDir.resolve("source.txt");
         Files.writeString(source, "content");

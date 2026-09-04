@@ -2,7 +2,6 @@ package com.starsea.ai.chunking.general;
 
 import com.google.re2j.Matcher;
 import com.google.re2j.Pattern;
-import com.starsea.ai.chunking.model.DelimiterMode;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
 import com.starsea.ai.chunking.model.SourceLocator;
 
@@ -16,10 +15,7 @@ public final class GeneralBoundaryScanner {
     private boolean delimiterMatched;
 
     public GeneralBoundaryScanner(GeneralChunkConfig config) {
-        Objects.requireNonNull(config, "config");
-        String expression = config.delimiterMode() == DelimiterMode.LITERAL
-                ? Pattern.quote(config.delimiter()) : config.delimiter();
-        this.pattern = Pattern.compile(expression);
+        this.pattern = Objects.requireNonNull(config, "config").compiledDelimiterPattern();
     }
 
     public List<DelimitedSegment> scan(NormalizedText normalized) {
@@ -57,7 +53,9 @@ public final class GeneralBoundaryScanner {
             int codePoint = codePoints[index];
             if (codePoint == '\n') line = index + 1;
             if (isSentenceEnd(codePoint)) sentence = index + 1;
-            if (Character.isWhitespace(codePoint)) whitespace = index + 1;
+            if (Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint)) {
+                whitespace = index + 1;
+            }
         }
         int end;
         BoundaryKind kind;

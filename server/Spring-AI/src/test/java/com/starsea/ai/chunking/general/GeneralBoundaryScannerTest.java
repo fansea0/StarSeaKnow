@@ -4,10 +4,13 @@ import com.starsea.ai.chunking.model.DelimiterMode;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -77,6 +80,40 @@ class GeneralBoundaryScannerTest {
         assertEquals("a".repeat(20) + "。" + "b".repeat(20) + "\n", unit.text());
         assertEquals(BoundaryKind.LINE_BREAK, unit.boundaryAfter());
         assertEquals(42, unit.cleanedEnd());
+    }
+
+    @Test
+    void fallback_scan_treats_non_breaking_space_as_whitespace_and_keeps_it() {
+        BoundaryUnit unit = GeneralBoundaryScanner.scanFallback("alpha\u00a0omega", 6, null);
+
+        assertEquals("alpha\u00a0", unit.text());
+        assertEquals(BoundaryKind.WHITESPACE, unit.boundaryAfter());
+        assertEquals(6, unit.cleanedEnd());
+    }
+
+    @Test
+    void scanner_reuses_the_pattern_compiled_while_validating_the_config() throws Exception {
+        GeneralChunkConfig config = config("\\|{2,3}", DelimiterMode.REGEX);
+        GeneralBoundaryScanner scanner = new GeneralBoundaryScanner(config);
+
+        com.google.re2j.Pattern validatedPattern = patternField(config);
+        com.google.re2j.Pattern scannerPattern = patternField(scanner);
+
+        assertNotNull(validatedPattern, "validated config must retain its compiled delimiter pattern");
+        assertSame(validatedPattern, scannerPattern);
+        assertEquals(List.of("a", "b", "c"), scanner.scan(
+                new TextNormalizer().normalize("a||b|||c")).stream()
+                .map(DelimitedSegment::text).toList());
+    }
+
+    private com.google.re2j.Pattern patternField(Object owner) throws IllegalAccessException {
+        java.lang.reflect.Field field = Arrays.stream(owner.getClass().getDeclaredFields())
+                .filter(candidate -> candidate.getType() == com.google.re2j.Pattern.class)
+                .findFirst()
+                .orElse(null);
+        if (field == null) return null;
+        field.setAccessible(true);
+        return (com.google.re2j.Pattern) field.get(owner);
     }
 
     private GeneralChunkConfig config(String delimiter, DelimiterMode mode) {

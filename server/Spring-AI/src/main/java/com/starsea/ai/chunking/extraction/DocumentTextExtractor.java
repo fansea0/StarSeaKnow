@@ -8,7 +8,6 @@ import org.apache.tika.metadata.TikaCoreProperties;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Locale;
 import java.util.Set;
 
 public interface DocumentTextExtractor {
@@ -31,10 +30,7 @@ public interface DocumentTextExtractor {
         } catch (IOException exception) {
             return ExtractionCapability.unavailable(null, "Source media type cannot be detected");
         }
-        boolean supported = supportedMediaTypes().stream()
-                .map(DocumentTextExtractor::normalizeMediaType)
-                .anyMatch(mediaType::equals);
-        if (!supported) {
+        if (!MediaTypeCanonicalizer.supports(this, mediaType)) {
             return ExtractionCapability.unavailable(mediaType, "Media type is not supported by this extractor");
         }
         return new ExtractionCapability(true, mediaType, id(), version(), priority(), null);
@@ -46,18 +42,13 @@ public interface DocumentTextExtractor {
         Metadata metadata = new Metadata();
         metadata.set(TikaCoreProperties.RESOURCE_NAME_KEY, path.getFileName().toString());
         if (suppliedType != null && !suppliedType.isBlank()) {
-            metadata.set(TikaCoreProperties.CONTENT_TYPE_HINT, normalizeMediaType(suppliedType));
+            metadata.set(TikaCoreProperties.CONTENT_TYPE_HINT,
+                    MediaTypeCanonicalizer.canonicalize(suppliedType));
         }
         try (TikaInputStream input = TikaInputStream.get(path)) {
-            return normalizeMediaType(TikaConfig.getDefaultConfig().getDetector()
+            return MediaTypeCanonicalizer.canonicalize(TikaConfig.getDefaultConfig().getDetector()
                     .detect(input, metadata).toString());
         }
-    }
-
-    private static String normalizeMediaType(String value) {
-        int parameters = value.indexOf(';');
-        String base = parameters >= 0 ? value.substring(0, parameters) : value;
-        return base.trim().toLowerCase(Locale.ROOT);
     }
 
     enum FailureReason {
