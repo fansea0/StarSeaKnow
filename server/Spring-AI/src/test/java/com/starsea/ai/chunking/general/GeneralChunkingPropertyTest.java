@@ -26,6 +26,7 @@ class GeneralChunkingPropertyTest {
     private static final String DELIMITER = "|||";
     private static final String URL = "https://drop.test";
     private static final String EMAIL = "user@example.com";
+    private static final String WHITESPACE_SENTINEL = " \t\n";
 
     @Test
     void generated_full_pipeline_inputs_are_lossless_bounded_mapped_and_deterministic() {
@@ -36,7 +37,7 @@ class GeneralChunkingPropertyTest {
         for (int sample = 0; sample < 160; sample++) {
             String source = generatedDocument(random);
             int maxCharacters = 64 + random.nextInt(65);
-            boolean collapseWhitespace = random.nextBoolean();
+            boolean collapseWhitespace = sample % 2 == 0;
             boolean removeUrls = random.nextBoolean();
             boolean removeEmails = random.nextBoolean();
             boolean overlapEnabled = random.nextBoolean();
@@ -63,6 +64,9 @@ class GeneralChunkingPropertyTest {
                     collapseWhitespace, removeUrls, removeEmails));
 
             assertTrue(scanner.delimiterMatched(), "sample " + sample);
+            assertEquals(!collapseWhitespace, cleaned.segments().stream()
+                    .anyMatch(segment -> WHITESPACE_SENTINEL.equals(segment.text())),
+                    "whitespace-only segment branch, sample " + sample);
             assertEquals(expected, reconstruct(first.drafts()), "sample " + sample);
             assertEquals(first, second, "sample " + sample);
             for (int index = 0; index < first.drafts().size(); index++) {
@@ -102,7 +106,8 @@ class GeneralChunkingPropertyTest {
 
     private String generatedDocument(Random random) {
         int segments = 2 + random.nextInt(5);
-        StringBuilder result = new StringBuilder();
+        StringBuilder result = new StringBuilder("anchor")
+                .append(DELIMITER).append(WHITESPACE_SENTINEL).append(DELIMITER);
         for (int segment = 0; segment < segments; segment++) {
             if (segment > 0) result.append(DELIMITER);
             result.append(segment % 2 == 0 ? " \t" : "");
