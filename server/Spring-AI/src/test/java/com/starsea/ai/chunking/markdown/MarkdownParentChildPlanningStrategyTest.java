@@ -111,6 +111,26 @@ class MarkdownParentChildPlanningStrategyTest {
         assertEquals(32, strategy.descriptor().configFields().get(3).defaultValue());
     }
 
+    @Test
+    void paragraph_parent_capacity_uses_the_same_child_order_as_the_rendered_parent() {
+        MarkdownParentChildPlanningStrategy orderSensitiveStrategy =
+                new MarkdownParentChildPlanningStrategy(new OrderSensitiveTokenCounter());
+        ParsedStructure structure = structure(List.of(
+                block("first", BlockType.PARAGRAPH, "first child", "first child", null, List.of("Section")),
+                block("second", BlockType.PARAGRAPH, "second child", "second child", null, List.of("Section"))));
+
+        ChunkPlan plan = orderSensitiveStrategy.planConfigured(structure, Map.of(
+                "parentMaxTokens", 128,
+                "childMaxTokens", 32,
+                "childOverlapTokens", 0));
+
+        List<PlannedChunk> parents = plan.chunks().stream()
+                .filter(chunk -> chunk.type() == ChunkType.PARENT).toList();
+        assertEquals(1, parents.size());
+        assertEquals("first child\n\nsecond child", parents.get(0).draft().content());
+        assertEquals(2, plan.chunks().stream().filter(chunk -> chunk.type() == ChunkType.CHILD).count());
+    }
+
     private void assertEveryChildReferencesEarlierParent(ChunkPlan plan) {
         for (int index = 0; index < plan.chunks().size(); index++) {
             PlannedChunk chunk = plan.chunks().get(index);
@@ -143,6 +163,11 @@ class MarkdownParentChildPlanningStrategyTest {
                 block("b2", BlockType.PARAGRAPH, "d".repeat(80), "d".repeat(80), null, List.of("Beta"))));
     }
 
+    private ParsedStructure structure(List<StructuredBlock> blocks) {
+        return new ParsedStructure(new FileResource(1, 2, 3,
+                UUID.fromString("00000000-0000-0000-0000-000000000003"), "test.md", "md", Path.of("test.md")), blocks);
+    }
+
     private StructuredBlock block(String id, BlockType type, String rawText, String plainText,
                                   Integer headingLevel, List<String> path) {
         return new StructuredBlock(id, type, rawText, plainText, headingLevel, path,
@@ -159,6 +184,24 @@ class MarkdownParentChildPlanningStrategyTest {
         @Override
         public String id() {
             return "test-code-point-counter";
+        }
+    }
+
+    private static final class OrderSensitiveTokenCounter implements TokenCounter {
+        @Override
+        public int count(String text) {
+            if (text != null && text.contains("first child\n\nsecond child")) {
+                return 128;
+            }
+            if (text != null && text.contains("second child\n\nfirst child")) {
+                return 129;
+            }
+            return text == null ? 0 : text.codePointCount(0, text.length());
+        }
+
+        @Override
+        public String id() {
+            return "test-order-sensitive-counter";
         }
     }
 }

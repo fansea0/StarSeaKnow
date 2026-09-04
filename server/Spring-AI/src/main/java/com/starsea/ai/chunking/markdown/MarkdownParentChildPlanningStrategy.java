@@ -172,7 +172,9 @@ public final class MarkdownParentChildPlanningStrategy implements ChunkPlanningS
 
     private int parentTokens(List<ChunkDraft> existing, ChunkDraft next) {
         String content = existing.stream().map(ChunkDraft::content)
-                .reduce(next.content(), (left, right) -> left + "\n\n" + right);
+                .reduce((left, right) -> left + "\n\n" + right)
+                .map(current -> current + "\n\n" + next.content())
+                .orElse(next.content());
         return tokenCounter.count(MarkdownChunkPlanningStrategy.previewIndexText(
                 existing.get(0).sectionPath(), content));
     }
