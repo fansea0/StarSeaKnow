@@ -21,13 +21,13 @@
       <span>选择可用策略并生成预览后，在这里逐块检查。</span>
     </div>
     <div v-else class="chunk-stack">
-      <div v-if="hierarchy.orphanChildren.length" class="hierarchy-integrity" role="alert">
+      <div v-if="effectiveHierarchy.orphanChildren.length" class="hierarchy-integrity" role="alert">
         <span>分块层级数据异常：发现无法关联父块的检索子块。请刷新预览后重试。</span>
         <el-button link type="danger" @click="$emit('reload')">刷新预览</el-button>
       </div>
-      <template v-if="hierarchy.hierarchical">
+      <template v-if="effectiveHierarchy.hierarchical">
         <ParentChunkGroup
-          v-for="group in hierarchy.parents"
+          v-for="group in effectiveHierarchy.parents"
           :key="group.parent.publicId"
           :knowledge-id="knowledgeId"
           :file-id="fileId"
@@ -46,7 +46,7 @@
         />
       </template>
       <ChunkCard
-        v-for="chunk in hierarchy.singles"
+        v-for="chunk in effectiveHierarchy.singles"
         :key="chunk.publicId"
         :knowledge-id="knowledgeId"
         :file-id="fileId"
@@ -66,7 +66,7 @@
     <footer v-if="chunks.length && showConfirm" class="preview-panel__footer">
       <div>
         <strong>检查完成</strong>
-        <span>确认后开始为当前文件建立 {{ hierarchy.vectorCount }} 个检索单元的向量索引。</span>
+        <span>确认后开始为当前文件建立 {{ effectiveHierarchy.vectorCount }} 个检索单元的向量索引。</span>
       </div>
       <el-button
         type="primary"
@@ -82,15 +82,13 @@
 import { computed } from 'vue'
 import ChunkCard from './ChunkCard.vue'
 import ParentChunkGroup from './ParentChunkGroup.vue'
+import { groupChunks } from '../../features/chunking/chunkHierarchy'
 
 const props = defineProps({
   knowledgeId: { type: [String, Number], required: true },
   fileId: { type: [String, Number], required: true },
   chunks: { type: Array, default: () => [] },
-  hierarchy: {
-    type: Object,
-    default: () => ({ hierarchical: false, parents: [], singles: [], orphanChildren: [], parentCount: 0, childCount: 0, vectorCount: 0 }),
-  },
+  hierarchy: { type: Object, default: undefined },
   loading: { type: Boolean, default: false },
   fileState: { type: Number, default: 0 },
   progress: { type: Number, default: 0 },
@@ -107,9 +105,22 @@ const props = defineProps({
 
 defineEmits(['updated', 'deleted', 'reload', 'reindex', 'confirm', 'save-state'])
 
-const countLabel = computed(() => props.hierarchy.hierarchical
-  ? `${props.hierarchy.parentCount} 父块 · ${props.hierarchy.childCount} 子块`
-  : `${props.hierarchy.vectorCount} 块`)
+const effectiveHierarchy = computed(() => isHierarchy(props.hierarchy)
+  ? props.hierarchy
+  : groupChunks(props.chunks))
+const countLabel = computed(() => effectiveHierarchy.value.hierarchical
+  ? `${effectiveHierarchy.value.parentCount} 父块 · ${effectiveHierarchy.value.childCount} 子块`
+  : `${effectiveHierarchy.value.vectorCount} 块`)
+
+function isHierarchy(value) {
+  return value && typeof value === 'object'
+    && Array.isArray(value.parents)
+    && Array.isArray(value.singles)
+    && Array.isArray(value.orphanChildren)
+    && Number.isFinite(value.parentCount)
+    && Number.isFinite(value.childCount)
+    && Number.isFinite(value.vectorCount)
+}
 
 function canReindex(chunk) {
   return [3, 6].includes(Number(props.fileState))
