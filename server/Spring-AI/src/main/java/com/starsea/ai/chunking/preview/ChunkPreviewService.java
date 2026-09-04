@@ -5,9 +5,14 @@ import com.starsea.ai.chunking.api.ChunkingApiModels.PreviewRequest;
 import com.starsea.ai.chunking.api.ChunkingApiModels.ProcessingResponse;
 import com.starsea.ai.chunking.api.ChunkingApiModels.StrategyResponse;
 import com.starsea.ai.chunking.api.ChunkingException;
+import com.starsea.ai.chunking.api.StrategyCapabilityResponse;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.PipelineState;
+import com.starsea.ai.chunking.model.PreviewSummary;
+import com.starsea.ai.chunking.model.ValidatedPreviewConfig;
 import com.starsea.ai.chunking.processing.ChunkTaskDispatcher;
+import com.starsea.ai.chunking.registry.ChunkInputProviderRegistry;
 import com.starsea.ai.chunking.registry.ChunkStrategyNotFoundException;
 import com.starsea.ai.chunking.registry.ChunkStrategyRegistry;
 import com.starsea.ai.chunking.registry.DocumentStructureParserRegistry;
@@ -18,6 +23,7 @@ import com.starsea.ai.mapper.DocumentChunkMapper;
 import com.starsea.ai.mapper.FileMapper;
 import com.starsea.ai.mapper.FileProcessingMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -35,15 +41,18 @@ public class ChunkPreviewService {
     private final FileMapper fileMapper;
     private final DocumentChunkMapper chunkMapper;
     private final ChunkStrategyRegistry strategyRegistry;
+    private final ChunkInputProviderRegistry inputProviderRegistry;
     private final DocumentStructureParserRegistry parserRegistry;
     private final ChunkTaskDispatcher dispatcher;
     private final ChunkPreviewWorker worker;
 
+    @Autowired
     public ChunkPreviewService(FileProcessingMapper processingMapper,
                                FileMapper fileMapper,
                                DocumentChunkMapper chunkMapper,
                                ChunkStrategyRegistry strategyRegistry,
                                DocumentStructureParserRegistry parserRegistry,
+                               ChunkInputProviderRegistry inputProviderRegistry,
                                ChunkTaskDispatcher dispatcher,
                                ChunkPreviewWorker worker) {
         this.processingMapper = processingMapper;
@@ -51,24 +60,36 @@ public class ChunkPreviewService {
         this.chunkMapper = chunkMapper;
         this.strategyRegistry = strategyRegistry;
         this.parserRegistry = parserRegistry;
+        this.inputProviderRegistry = inputProviderRegistry;
         this.dispatcher = dispatcher;
         this.worker = worker;
     }
 
+    /** Compatibility constructor retained for isolated tests while production uses input providers. */
+    public ChunkPreviewService(FileProcessingMapper processingMapper,
+                               FileMapper fileMapper,
+                               DocumentChunkMapper chunkMapper,
+                               ChunkStrategyRegistry strategyRegistry,
+                               DocumentStructureParserRegistry parserRegistry,
+                               ChunkTaskDispatcher dispatcher,
+                               ChunkPreviewWorker worker) {
+        this(processingMapper, fileMapper, chunkMapper, strategyRegistry, parserRegistry,
+                null, dispatcher, worker);
+    }
+
     public StrategyResponse strategies(long knowledgeId, long fileId) {
         ScopedFile scoped = requireScopedFile(knowledgeId, fileId);
-        List<com.starsea.ai.chunking.registry.ChunkStrategyDescriptor> strategies;
-        try {
-            strategies = List.of(strategyRegistry.require(MARKDOWN_STRATEGY, scoped.fileType()).descriptor());
-        } catch (ChunkStrategyNotFoundException exception) {
-            strategies = List.of();
-        }
+        FileResource resource = resource(scoped);
+        List<StrategyCapabilityResponse> strategies = strategyRegistry.matching(scoped.fileType()).stream()
+                .map(strategy -> capability(strategy.descriptor(), resource))
+                .toList();
         return new StrategyResponse(scoped.fileType(), strategies);
     }
 
     public ProcessingResponse processing(long knowledgeId, long fileId) {
         ScopedFile scoped = requireScopedFile(knowledgeId, fileId);
         FileProcessing processing = scoped.processing();
+        PreviewSummary summary = PreviewSummary.fromMap(processing.getPreviewSummary());
         return new ProcessingResponse(
                 processing.getPipelineState(),
                 processing.getFailedFromState(),
@@ -77,16 +98,28 @@ public class ChunkPreviewService {
                 processing.getLockVersion(),
                 processing.getStrategyCode(),
                 processing.getPolicySnapshot(),
-                processing.getContextPolicy());
+                processing.getContextPolicy(),
+                summary == null ? null : summary.preprocessingSummary(),
+                summary == null ? null : summary.delimiterMatched(),
+                summary == null ? null : summary.forcedSplitCount(),
+                summary == null ? null : summary.tokenLimitedSplitCount());
     }
 
     public void startPreview(long knowledgeId, long fileId, PreviewRequest request) {
-        if (request == null || request.strategyConfig() == null) {
+        if (request == null) {
             throw ChunkingException.unprocessable("A chunk strategy and token budget are required");
         }
         ScopedFile scoped = requireScopedFile(knowledgeId, fileId);
-        requireRegisteredStrategy(request.strategyCode(), scoped.fileType());
-        requireRegisteredParser(scoped.fileType());
+        ValidatedPreviewConfig validated = strategyRegistry.validatePreviewConfig(
+                request.strategyCode(), scoped.fileType(), request.strategyConfig(), request.contextConfig());
+        if (inputProviderRegistry != null) {
+            var capability = inputProviderRegistry.capability(request.strategyCode(), resource(scoped));
+            if (!capability.available()) {
+                throw ChunkingException.unprocessable(capability.reason());
+            }
+        } else if (MARKDOWN_STRATEGY.equalsIgnoreCase(request.strategyCode())) {
+            requireRegisteredParser(scoped.fileType());
+        }
         requireUsableSource(scoped.file());
         List<ChunkPreviewWorker.ExistingChunkSnapshot> existingChunks =
                 requireReplaceableDrafts(scoped, request.replaceEditedDrafts());
@@ -101,12 +134,38 @@ public class ChunkPreviewService {
                 knowledgeId,
                 fileId,
                 request.strategyCode().trim().toUpperCase(Locale.ROOT),
-                request.strategyConfig(),
+                validated.strategyConfig(),
+                validated.contextConfig(),
+                strategyRegistry.require(request.strategyCode(), scoped.fileType()).plannerVersion(),
+                validated.maxIndexTokens(),
                 request.replaceEditedDrafts(),
                 request.lockVersion() + 1,
                 existingChunks);
         dispatcher.dispatch(knowledgeId, fileId, current, PipelineState.CHUNKING,
                 request.lockVersion(), () -> worker.generate(job));
+    }
+
+    private StrategyCapabilityResponse capability(
+            com.starsea.ai.chunking.registry.ChunkStrategyDescriptor descriptor,
+            FileResource resource) {
+        if (inputProviderRegistry == null) {
+            return new StrategyCapabilityResponse(descriptor, true, null);
+        }
+        var capability = inputProviderRegistry.capability(descriptor.code(), resource);
+        return new StrategyCapabilityResponse(descriptor, capability.available(), capability.reason());
+    }
+
+    private FileResource resource(ScopedFile scoped) {
+        File file = scoped.file();
+        Path path;
+        try {
+            path = Path.of(file.getPath());
+        } catch (InvalidPathException | NullPointerException exception) {
+            path = Path.of(".").resolve("unreadable-source");
+        }
+        return new FileResource(scoped.tenantId(), scoped.processing().getKnowledgeId(),
+                scoped.processing().getFileId(), file.getPublicId(), file.getFileName(),
+                scoped.fileType(), path);
     }
 
     private void requireRegisteredStrategy(String code, String fileType) {

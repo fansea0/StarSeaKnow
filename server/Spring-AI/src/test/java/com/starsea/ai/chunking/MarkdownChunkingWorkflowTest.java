@@ -152,7 +152,8 @@ class MarkdownChunkingWorkflowTest {
             assertEquals(PipelineState.COMPLETED.code(), repository.processing.getPipelineState());
             assertEquals(6, repository.processing.getLockVersion(),
                     "six legal file transitions must each increment the lock version");
-            assertEquals(Map.of(), repository.processing.getContextPolicy());
+            assertEquals(Map.of("enabled", false, "mode", "COMPLETE_SENTENCE",
+                    "limit", 40, "unit", "TOKENS"), repository.processing.getContextPolicy());
             assertTrue(repository.chunks.stream()
                     .allMatch(chunk -> chunk.getStatus() == ChunkStatus.ACTIVE.code()));
             repository.assertSuccessfulCasCoverage();
@@ -440,7 +441,8 @@ class MarkdownChunkingWorkflowTest {
                     .thenAnswer(invocation -> {
                         FileProcessing patch = invocation.getArgument(0);
                         Wrapper<?> wrapper = invocation.getArgument(1);
-                        boolean contextUpdate = patch.getContextPolicy() != null;
+                        boolean contextUpdate = patch.getSourceHash() == null
+                                && patch.getContextPolicy() != null;
                         Map<String, Object> required = new LinkedHashMap<>();
                         required.put("file_id", processing.getFileId());
                         required.put("tenant_id", processing.getTenantId());

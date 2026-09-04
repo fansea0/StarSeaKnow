@@ -7,6 +7,7 @@ import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.OverlapUnit;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.spi.TokenCounter;
@@ -150,6 +151,21 @@ class ChunkCommandServiceTest {
         assertEquals("Edited", patch.getValue().getContent());
         assertEquals("Source sentence.", patch.getValue().getOverlapContent());
         assertEquals("上文：Source sentence.\n\nEdited", patch.getValue().getIndexContent());
+    }
+
+    @Test
+    void legacy_token_overlap_alias_cannot_be_applied_to_a_character_chunk() {
+        DocumentChunk target = chunk(31L, CHUNK_ID, 4, ChunkStatus.DRAFT, 2, "Old");
+        target.setOverlapUnit(OverlapUnit.CHARACTERS);
+        when(chunkMapper.findScopedByPublicIdForUpdate(
+                FILE_ID, TENANT_ID, KNOWLEDGE_ID, CHUNK_ID)).thenReturn(target);
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> service.edit(KNOWLEDGE_ID, FILE_ID, CHUNK_ID,
+                        new EditChunkRequest("Edited", true, 40, 2)));
+
+        assertEquals(422, failure.status().value());
+        verify(chunkMapper, never()).update(any(DocumentChunk.class), any());
     }
 
     @Test

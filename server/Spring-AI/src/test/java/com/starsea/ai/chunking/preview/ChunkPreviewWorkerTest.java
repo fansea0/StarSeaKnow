@@ -6,16 +6,25 @@ import com.baomidou.mybatisplus.extension.plugins.inner.TenantLineInnerIntercept
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkDraft;
+import com.starsea.ai.chunking.model.ChunkInputResult;
+import com.starsea.ai.chunking.model.ChunkPlanningResult;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ContextConfig;
+import com.starsea.ai.chunking.model.GeneralChunkConfig;
+import com.starsea.ai.chunking.model.OverlapUnit;
+import com.starsea.ai.chunking.model.PreprocessingSummary;
 import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.model.SourceLocator;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.registry.ChunkStrategyRegistry;
+import com.starsea.ai.chunking.registry.ChunkInputProviderRegistry;
+import com.starsea.ai.chunking.registry.ChunkStrategyDescriptor;
 import com.starsea.ai.chunking.registry.DocumentStructureParserRegistry;
 import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
+import com.starsea.ai.chunking.spi.ChunkInputProvider;
 import com.starsea.ai.chunking.spi.DocumentStructureParser;
 import com.starsea.ai.chunking.spi.TokenCounter;
 import com.starsea.ai.config.TenantLineHandlerImpl;
@@ -248,6 +257,97 @@ class ChunkPreviewWorkerTest {
     }
 
     @Test
+    void strategy_aware_worker_merges_provider_and_planner_measurements_before_persistence() {
+        ChunkInputProvider provider = mock(ChunkInputProvider.class);
+        when(provider.strategyCode()).thenReturn("GENERAL");
+        when(provider.supportedFileTypes()).thenReturn(Set.of("*"));
+        when(provider.global()).thenReturn(true);
+        ChunkPlanningStrategy generalPlanner = mock(ChunkPlanningStrategy.class);
+        when(generalPlanner.code()).thenReturn("GENERAL");
+        when(generalPlanner.supportedFileTypes()).thenReturn(Set.of("*"));
+        when(generalPlanner.plannerVersion()).thenReturn("general-deterministic-v1");
+        when(generalPlanner.descriptor()).thenReturn(new ChunkStrategyDescriptor(
+                "GENERAL", "GLOBAL", Set.of("*"), "general-deterministic-v1",
+                List.of(), ContextConfig.generalDefaults()));
+        TokenCounter counter = mock(TokenCounter.class);
+        when(counter.id()).thenReturn("tokenizer@test");
+        when(counter.count(anyString())).thenAnswer(invocation ->
+                ((String) invocation.getArgument(0)).codePointCount(0,
+                        ((String) invocation.getArgument(0)).length()));
+        FileResource providerResource = new FileResource(1L, 10L, 20L, null,
+                "source.md", "md", source);
+        ParsedStructure structure = new ParsedStructure(providerResource, List.of());
+        PreprocessingSummary preprocessing = new PreprocessingSummary(
+                2, 14, 1, 8, 3, 4, 0, 1);
+        when(provider.provide(any(FileResource.class), anyString(), any()))
+                .thenReturn(new ChunkInputResult(structure,
+                        Map.of("extractorId", "plain-text", "extractorVersion", "v1"),
+                        preprocessing, false));
+        when(generalPlanner.plan(any())).thenReturn(
+                new ChunkPlanningResult(List.of(draft("Body", 4)), 5, 6));
+        ChunkPreviewWorker strategyAwareWorker = new ChunkPreviewWorker(
+                fileMapper, processingMapper, new DocumentStructureParserRegistry(List.of(parser)),
+                new ChunkInputProviderRegistry(List.of(provider)),
+                new ChunkStrategyRegistry(List.of(generalPlanner)), counter, persistence, processingService);
+        ChunkPreviewWorker.Job generalJob = new ChunkPreviewWorker.Job(
+                10L, 20L, "GENERAL", GeneralChunkConfig.defaults(), ContextConfig.generalDefaults(),
+                "general-deterministic-v1", 512, false, 1, List.of());
+
+        strategyAwareWorker.generate(generalJob);
+
+        verify(persistence).replace(eq(generalJob), anyString(), eq("general-deterministic-v1"),
+                eq(Map.of("delimiter", "\n", "delimiterMode", "LITERAL", "maxCharacters", 500,
+                        "collapseWhitespace", true, "removeUrls", false, "removeEmails", false)),
+                eq(Map.of("enabled", true, "mode", "CHARACTER_TAIL", "limit", 40,
+                        "unit", "CHARACTERS")),
+                eq(Map.of("extractorId", "plain-text", "extractorVersion", "v1",
+                        "tokenizerId", "tokenizer@test", "tokenHardLimit", 512)),
+                eq(Map.of("preprocessingSummary", preprocessing.toMap(), "delimiterMatched", false,
+                        "forcedSplitCount", 5, "tokenLimitedSplitCount", 6)),
+                eq(List.of(draft("Body", 4))));
+    }
+
+    @Test
+    void strategy_aware_worker_rejects_source_changed_after_extraction() throws Exception {
+        ChunkInputProvider provider = mock(ChunkInputProvider.class);
+        when(provider.strategyCode()).thenReturn("GENERAL");
+        when(provider.supportedFileTypes()).thenReturn(Set.of("*"));
+        when(provider.global()).thenReturn(true);
+        when(provider.provide(any(FileResource.class), anyString(), any())).thenAnswer(invocation -> {
+            Files.writeString(source, "changed while preview was running");
+            FileResource resource = invocation.getArgument(0);
+            return new ChunkInputResult(new ParsedStructure(resource, List.of()), Map.of(),
+                    PreprocessingSummary.empty(), true);
+        });
+        ChunkPlanningStrategy generalPlanner = mock(ChunkPlanningStrategy.class);
+        when(generalPlanner.code()).thenReturn("GENERAL");
+        when(generalPlanner.supportedFileTypes()).thenReturn(Set.of("*"));
+        when(generalPlanner.plannerVersion()).thenReturn("general-deterministic-v1");
+        when(generalPlanner.descriptor()).thenReturn(new ChunkStrategyDescriptor(
+                "GENERAL", "GLOBAL", Set.of("*"), "general-deterministic-v1",
+                List.of(), ContextConfig.generalDefaults()));
+        when(generalPlanner.plan(any())).thenReturn(
+                new ChunkPlanningResult(List.of(draft("Body", 4)), 0, 0));
+        TokenCounter counter = mock(TokenCounter.class);
+        when(counter.id()).thenReturn("tokenizer@test");
+        when(counter.count(anyString())).thenReturn(4);
+        ChunkPreviewWorker strategyAwareWorker = new ChunkPreviewWorker(
+                fileMapper, processingMapper, new DocumentStructureParserRegistry(List.of(parser)),
+                new ChunkInputProviderRegistry(List.of(provider)),
+                new ChunkStrategyRegistry(List.of(generalPlanner)), counter, persistence, processingService);
+        ChunkPreviewWorker.Job generalJob = new ChunkPreviewWorker.Job(
+                10L, 20L, "GENERAL", GeneralChunkConfig.defaults(), ContextConfig.generalDefaults(),
+                "general-deterministic-v1", 512, false, 1, List.of());
+
+        strategyAwareWorker.generate(generalJob);
+
+        verify(persistence, never()).replace(any(), anyString(), anyString(),
+                any(), any(), any(), any(), any());
+        verify(processingService).fail(eq(10L), eq(20L), eq(PipelineState.CHUNKING),
+                eq(1), eq(0), org.mockito.ArgumentMatchers.contains("源文件已发生变化"));
+    }
+
+    @Test
     void transactional_replacement_saves_drafts_then_moves_chunking_to_chunked() {
         DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
         FileProcessingService realProcessingService = mock(FileProcessingService.class);
@@ -283,6 +383,76 @@ class ChunkPreviewWorkerTest {
         assertEquals(Map.of("tokenizer", "exact-tokenizer"), metadata.getValue().getPolicySnapshot());
         verify(realProcessingService).transition(
                 10L, 20L, PipelineState.CHUNKING, PipelineState.CHUNKED, 1);
+    }
+
+    @Test
+    void general_replacement_persists_context_execution_summary_and_per_chunk_character_settings() {
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        when(processingMapper.findScopedForUpdate(20L, 1L, 10L)).thenReturn(processing());
+        when(chunkMapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(List.of());
+        when(processingMapper.update(any(FileProcessing.class), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        when(chunkMapper.insert(any(DocumentChunk.class))).thenReturn(1);
+        ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
+                chunkMapper, processingMapper, stateService);
+        ChunkPreviewWorker.Job generalJob = new ChunkPreviewWorker.Job(
+                10L, 20L, "GENERAL", GeneralChunkConfig.defaults(), ContextConfig.generalDefaults(),
+                "general-deterministic-v1", 512, false, 1, List.of());
+        Map<String, Object> policy = Map.of("delimiter", "\n", "delimiterMode", "LITERAL",
+                "maxCharacters", 500, "collapseWhitespace", true,
+                "removeUrls", false, "removeEmails", false);
+        Map<String, Object> context = Map.of("enabled", true, "limit", 40,
+                "unit", "CHARACTERS", "mode", "CHARACTER_TAIL");
+        Map<String, Object> execution = Map.of("extractorId", "plain-text",
+                "extractorVersion", "v1", "tokenizerId", "exact", "tokenHardLimit", 512);
+        Map<String, Object> summary = Map.of("delimiterMatched", false,
+                "forcedSplitCount", 1, "tokenLimitedSplitCount", 2,
+                "preprocessingSummary", Map.of("urlMatches", 3));
+
+        service.replace(generalJob, "source-hash", "general-deterministic-v1",
+                policy, context, execution, summary, List.of(draft("First", 2), draft("Second", 3)));
+
+        var chunks = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
+        verify(chunkMapper, times(2)).insert(chunks.capture());
+        assertTrue(chunks.getAllValues().stream().allMatch(DocumentChunk::getOverlapEnabled));
+        assertTrue(chunks.getAllValues().stream().allMatch(chunk -> chunk.getOverlapLimit() == 40));
+        assertTrue(chunks.getAllValues().stream().allMatch(
+                chunk -> chunk.getOverlapUnit() == OverlapUnit.CHARACTERS));
+        assertTrue(chunks.getAllValues().stream().allMatch(chunk -> chunk.getOverlapContent() == null));
+        assertTrue(chunks.getAllValues().stream().allMatch(chunk -> chunk.getOverlapCharacterCount() == 0));
+
+        var metadata = org.mockito.ArgumentCaptor.forClass(FileProcessing.class);
+        verify(processingMapper).update(metadata.capture(), any(LambdaUpdateWrapper.class));
+        assertEquals(policy, metadata.getValue().getPolicySnapshot());
+        assertEquals(context, metadata.getValue().getContextPolicy());
+        assertEquals(execution, metadata.getValue().getExecutionMetadata());
+        assertEquals(summary, metadata.getValue().getPreviewSummary());
+    }
+
+    @Test
+    void general_zero_overlap_is_saved_as_disabled_zero_characters() {
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        when(processingMapper.findScopedForUpdate(20L, 1L, 10L)).thenReturn(processing());
+        when(chunkMapper.findByFileForUpdate(20L, 1L, 10L)).thenReturn(List.of());
+        when(processingMapper.update(any(FileProcessing.class), any(LambdaUpdateWrapper.class))).thenReturn(1);
+        when(chunkMapper.insert(any(DocumentChunk.class))).thenReturn(1);
+        ChunkPreviewPersistenceService service = new ChunkPreviewPersistenceService(
+                chunkMapper, processingMapper, stateService);
+        ContextConfig disabled = new ContextConfig(false, 0, OverlapUnit.CHARACTERS,
+                com.starsea.ai.chunking.model.ContextMode.CHARACTER_TAIL);
+        ChunkPreviewWorker.Job generalJob = new ChunkPreviewWorker.Job(
+                10L, 20L, "GENERAL", GeneralChunkConfig.defaults(), disabled,
+                "general-deterministic-v1", 512, false, 1, List.of());
+
+        service.replace(generalJob, "source-hash", "general-deterministic-v1",
+                Map.of(), Map.of(), Map.of(), Map.of(), List.of(draft("First", 2)));
+
+        var chunk = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
+        verify(chunkMapper).insert(chunk.capture());
+        assertFalse(chunk.getValue().getOverlapEnabled());
+        assertEquals(0, chunk.getValue().getOverlapLimit());
+        assertEquals(OverlapUnit.CHARACTERS, chunk.getValue().getOverlapUnit());
     }
 
     @Test

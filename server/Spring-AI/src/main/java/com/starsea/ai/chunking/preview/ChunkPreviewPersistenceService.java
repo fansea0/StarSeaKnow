@@ -7,6 +7,7 @@ import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.model.SourceLocator;
+import com.starsea.ai.chunking.model.ContextConfig;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.FileProcessing;
@@ -42,6 +43,18 @@ public class ChunkPreviewPersistenceService {
     @Transactional
     public void replace(ChunkPreviewWorker.Job job, String sourceHash, String plannerVersion,
                         Map<String, Object> policySnapshot, List<ChunkDraft> drafts) {
+        ContextConfig context = job.contextConfig();
+        replace(job, sourceHash, plannerVersion, policySnapshot,
+                Map.of("enabled", context.enabled(), "mode", context.mode().name(),
+                        "limit", context.limit(), "unit", context.unit().name()),
+                Map.of(), Map.of(), drafts);
+    }
+
+    @Transactional
+    public void replace(ChunkPreviewWorker.Job job, String sourceHash, String plannerVersion,
+                        Map<String, Object> policySnapshot, Map<String, Object> contextPolicy,
+                        Map<String, Object> executionMetadata, Map<String, Object> previewSummary,
+                        List<ChunkDraft> drafts) {
         long tenantId = requireTenantId();
         FileProcessing lockedProcessing = processingMapper.findScopedForUpdate(
                 job.fileId(), tenantId, job.knowledgeId());
@@ -84,6 +97,9 @@ public class ChunkPreviewPersistenceService {
         metadata.setStrategyCode(job.strategyCode());
         metadata.setPlannerVersion(plannerVersion);
         metadata.setPolicySnapshot(Map.copyOf(policySnapshot));
+        metadata.setContextPolicy(Map.copyOf(contextPolicy));
+        metadata.setExecutionMetadata(Map.copyOf(executionMetadata));
+        metadata.setPreviewSummary(Map.copyOf(previewSummary));
         int updated = processingMapper.update(metadata, Wrappers.<FileProcessing>lambdaUpdate()
                 .eq(FileProcessing::getFileId, job.fileId())
                 .eq(FileProcessing::getTenantId, tenantId)
@@ -106,11 +122,15 @@ public class ChunkPreviewPersistenceService {
         chunk.setFileId(job.fileId());
         chunk.setPosition(position);
         chunk.setContent(draft.content());
-        chunk.setOverlapEnabled(false);
-        chunk.setOverlapTokenLimit(40);
+        ContextConfig context = job.contextConfig();
+        chunk.setOverlapEnabled(context.enabled());
+        chunk.setOverlapLimit(context.limit());
+        chunk.setOverlapUnit(context.unit());
         chunk.setOverlapContent(null);
         chunk.setOverlapSourceChunkId(null);
         chunk.setOverlapTokenCount(0);
+        chunk.setOverlapCharacterCount(0);
+        chunk.setOverlapReductionReason(null);
         chunk.setIndexContent(null);
         chunk.setSectionPath(draft.sectionPath());
         chunk.setSourceLocator(sourceLocator(draft.sourceLocator()));

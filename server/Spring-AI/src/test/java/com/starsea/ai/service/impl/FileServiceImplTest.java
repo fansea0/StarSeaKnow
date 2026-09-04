@@ -1,8 +1,11 @@
 package com.starsea.ai.service.impl;
 
 import com.starsea.ai.auth.AuthContext;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.extraction.ManagedExtractionCache;
+import com.starsea.ai.chunking.extraction.DocumentTextExtractorRegistry;
+import com.starsea.ai.chunking.extraction.ExtractionCapability;
 import com.starsea.ai.controller.FileController;
 import com.starsea.ai.domain.dto.AjaxResult;
 import com.starsea.ai.domain.FileProcessing;
@@ -64,6 +67,7 @@ class FileServiceImplTest {
     private FileProcessingMapper processingMapper;
     private TestTransactionManager transactionManager;
     private ManagedExtractionCache extractionCache;
+    private DocumentTextExtractorRegistry extractorRegistry;
     private FileServiceImpl service;
 
     @BeforeEach
@@ -74,8 +78,9 @@ class FileServiceImplTest {
         processingMapper = mock(FileProcessingMapper.class);
         transactionManager = new TestTransactionManager();
         extractionCache = mock(ManagedExtractionCache.class);
+        extractorRegistry = mock(DocumentTextExtractorRegistry.class);
         service = new FileServiceImpl(fileMapper, knowledgeFileMapper, knowledgeMapper,
-                processingMapper, extractionCache, transactionManager);
+                processingMapper, extractionCache, extractorRegistry, transactionManager);
         ReflectionTestUtils.setField(service, "path", uploadDirectory.toString());
         AuthContext.set(new AuthContext(AuthContext.Kind.BUSINESS, 7L, 1L, "tenant_admin", "jti-1"));
     }
@@ -264,10 +269,14 @@ class FileServiceImplTest {
     void file_list_uses_current_tenant_and_preserves_processing_fields() {
         FileVo row = new FileVo();
         row.setId(20L);
+        row.setType("txt");
+        row.setPath(uploadDirectory.resolve("1/10/source.txt").toString());
         row.setPipelineState(PipelineState.CHUNKING.code());
         row.setProgress(35);
         row.setProcessingError("parser failed");
         when(fileMapper.selectByKnowledgeId(1L, 10L)).thenReturn(List.of(row));
+        when(extractorRegistry.probe(Path.of(row.getPath()), "txt")).thenReturn(
+                new ExtractionCapability(true, "text/plain", "plain-text", "v1", 100, null));
 
         List<FileVo> files = service.listByKnowledgeId(10L);
 
@@ -275,6 +284,9 @@ class FileServiceImplTest {
         assertEquals(PipelineState.CHUNKING.code(), files.get(0).getPipelineState());
         assertEquals(35, files.get(0).getProgress());
         assertEquals("parser failed", files.get(0).getProcessingError());
+        var json = new ObjectMapper().valueToTree(files.get(0));
+        assertTrue(json.path("chunkingCapability").path("available").asBoolean());
+        assertFalse(json.has("path"));
         verify(fileMapper).selectByKnowledgeId(1L, 10L);
     }
 

@@ -2,6 +2,9 @@ package com.starsea.ai.chunking.api;
 
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.model.ChunkPolicy;
+import com.starsea.ai.chunking.model.ContextConfig;
+import com.starsea.ai.chunking.model.GeneralChunkConfig;
+import com.starsea.ai.chunking.model.OverlapUnit;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.preview.ChunkPreviewService;
 import com.starsea.ai.chunking.preview.ChunkCommandService;
@@ -9,9 +12,11 @@ import com.starsea.ai.chunking.preview.ChunkPreviewWorker;
 import com.starsea.ai.chunking.processing.ChunkTaskDispatcher;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.registry.ChunkStrategyDescriptor;
+import com.starsea.ai.chunking.registry.ChunkInputProviderRegistry;
 import com.starsea.ai.chunking.registry.ChunkStrategyRegistry;
 import com.starsea.ai.chunking.registry.DocumentStructureParserRegistry;
 import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
+import com.starsea.ai.chunking.spi.ChunkInputProvider;
 import com.starsea.ai.chunking.spi.DocumentStructureParser;
 import com.starsea.ai.config.GlobalExceptionHandler;
 import com.starsea.ai.domain.File;
@@ -64,6 +69,7 @@ class ChunkingControllerTest {
     private ChunkTaskDispatcher dispatcher;
     private DocumentChunkMapper chunkMapper;
     private ChunkPreviewWorker worker;
+    private ChunkInputProvider generalInput;
     private MockMvc mockMvc;
 
     @BeforeEach
@@ -82,15 +88,35 @@ class ChunkingControllerTest {
         when(markdownStrategy.descriptor()).thenReturn(new ChunkStrategyDescriptor(
                 "MARKDOWN_OPTIMIZED", "FILE_TYPE", Set.of("md", "markdown"),
                 "markdown-adaptive-v1", List.of()));
+        ChunkPlanningStrategy generalStrategy = mock(ChunkPlanningStrategy.class);
+        when(generalStrategy.code()).thenReturn("GENERAL");
+        when(generalStrategy.supportedFileTypes()).thenReturn(Set.of("*"));
+        when(generalStrategy.plannerVersion()).thenReturn("general-deterministic-v1");
+        when(generalStrategy.descriptor()).thenReturn(new ChunkStrategyDescriptor(
+                "GENERAL", "GLOBAL", Set.of("*"), "general-deterministic-v1",
+                List.of(), ContextConfig.generalDefaults()));
         DocumentStructureParser markdownParser = mock(DocumentStructureParser.class);
         when(markdownParser.supportedFileTypes()).thenReturn(Set.of("md", "markdown"));
+        generalInput = mock(ChunkInputProvider.class);
+        when(generalInput.strategyCode()).thenReturn("GENERAL");
+        when(generalInput.supportedFileTypes()).thenReturn(Set.of("*"));
+        when(generalInput.global()).thenReturn(true);
+        when(generalInput.capability(any())).thenReturn(ChunkInputProvider.Capability.supported());
+        ChunkInputProvider markdownInput = mock(ChunkInputProvider.class);
+        when(markdownInput.strategyCode()).thenReturn("MARKDOWN_OPTIMIZED");
+        when(markdownInput.supportedFileTypes()).thenReturn(Set.of("md", "markdown"));
+        when(markdownInput.capability(any())).thenReturn(ChunkInputProvider.Capability.supported());
 
         ChunkPreviewService service = new ChunkPreviewService(
                 processingMapper,
                 fileMapper,
                 chunkMapper,
-                new ChunkStrategyRegistry(List.of(markdownStrategy)),
+                new ChunkStrategyRegistry(List.of(generalStrategy, markdownStrategy),
+                        new com.fasterxml.jackson.databind.ObjectMapper().configure(
+                                com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
+                                false)),
                 new DocumentStructureParserRegistry(List.of(markdownParser)),
+                new ChunkInputProviderRegistry(List.of(generalInput, markdownInput)),
                 dispatcher,
                 worker);
         mockMvc = MockMvcBuilders.standaloneSetup(new ChunkingController(
@@ -111,13 +137,31 @@ class ChunkingControllerTest {
     }
 
     @Test
-    void markdown_capability_exposes_only_the_registered_markdown_strategy() throws Exception {
+    void markdown_capability_exposes_general_and_markdown_as_available() throws Exception {
         mockMvc.perform(get("/knowledge/{knowledgeId}/files/{fileId}/chunk-strategies",
                         KNOWLEDGE_ID, FILE_ID))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.fileType").value("md"))
-                .andExpect(jsonPath("$.strategies.length()").value(1))
-                .andExpect(jsonPath("$.strategies[0].code").value("MARKDOWN_OPTIMIZED"));
+                .andExpect(jsonPath("$.strategies.length()").value(2))
+                .andExpect(jsonPath("$.strategies[0].code").value("GENERAL"))
+                .andExpect(jsonPath("$.strategies[0].available").value(true))
+                .andExpect(jsonPath("$.strategies[0].defaultContextConfig.unit").value("CHARACTERS"))
+                .andExpect(jsonPath("$.strategies[1].code").value("MARKDOWN_OPTIMIZED"))
+                .andExpect(jsonPath("$.strategies[1].available").value(true));
+    }
+
+    @Test
+    void unavailable_general_capability_remains_visible_with_its_reason() throws Exception {
+        when(generalInput.capability(any())).thenReturn(
+                ChunkInputProvider.Capability.unavailable("No readable text extractor"));
+
+        mockMvc.perform(get("/knowledge/{knowledgeId}/files/{fileId}/chunk-strategies",
+                        KNOWLEDGE_ID, FILE_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.strategies[0].code").value("GENERAL"))
+                .andExpect(jsonPath("$.strategies[0].available").value(false))
+                .andExpect(jsonPath("$.strategies[0].reason").value("No readable text extractor"))
+                .andExpect(jsonPath("$.strategies[1].available").value(true));
     }
 
     @Test
@@ -166,6 +210,94 @@ class ChunkingControllerTest {
                                  "replaceEditedDrafts":false,"lockVersion":0}
                                 """))
                 .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    void invalid_general_delimiter_returns_a_stable_field_error_before_dispatch() throws Exception {
+        mockMvc.perform(post("/knowledge/{knowledgeId}/files/{fileId}/chunk-preview",
+                        KNOWLEDGE_ID, FILE_ID)
+                        .contentType("application/json")
+                        .content("""
+                                {"strategyCode":"GENERAL",
+                                 "strategyConfig":{"delimiter":"","delimiterMode":"LITERAL","maxCharacters":500,
+                                   "collapseWhitespace":true,"removeUrls":false,"removeEmails":false},
+                                 "contextConfig":{"enabled":true,"limit":40},
+                                 "replaceEditedDrafts":false,"lockVersion":0}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.data.code").value("INVALID_STRATEGY_CONFIG"))
+                .andExpect(jsonPath("$.data.fieldErrors.delimiter").exists());
+
+        verify(dispatcher, org.mockito.Mockito.never()).dispatch(
+                anyLong(), anyLong(), any(), any(), anyInt(), any(Runnable.class));
+    }
+
+    @Test
+    void null_general_delimiter_returns_a_stable_field_error_before_dispatch() throws Exception {
+        mockMvc.perform(post("/knowledge/{knowledgeId}/files/{fileId}/chunk-preview",
+                        KNOWLEDGE_ID, FILE_ID)
+                        .contentType("application/json")
+                        .content("""
+                                {"strategyCode":"GENERAL",
+                                 "strategyConfig":{"delimiter":null,"delimiterMode":"LITERAL","maxCharacters":500,
+                                   "collapseWhitespace":true,"removeUrls":false,"removeEmails":false},
+                                 "contextConfig":{"enabled":true,"limit":40},
+                                 "replaceEditedDrafts":false,"lockVersion":0}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.data.code").value("INVALID_STRATEGY_CONFIG"))
+                .andExpect(jsonPath("$.data.fieldErrors.delimiter").exists());
+
+        verify(dispatcher, org.mockito.Mockito.never()).dispatch(
+                anyLong(), anyLong(), any(), any(), anyInt(), any(Runnable.class));
+    }
+
+    @Test
+    void general_request_decodes_lf_once_and_dispatches_only_typed_validated_config() throws Exception {
+        doAnswer(invocation -> {
+            invocation.<Runnable>getArgument(5).run();
+            return null;
+        }).when(dispatcher).dispatch(eq(KNOWLEDGE_ID), eq(FILE_ID), eq(PipelineState.UPLOADED),
+                eq(PipelineState.CHUNKING), eq(0), any(Runnable.class));
+
+        mockMvc.perform(post("/knowledge/{knowledgeId}/files/{fileId}/chunk-preview",
+                        KNOWLEDGE_ID, FILE_ID)
+                        .contentType("application/json")
+                        .content("""
+                                {"strategyCode":"GENERAL",
+                                 "strategyConfig":{"delimiter":"\\n","delimiterMode":"LITERAL","maxCharacters":500,
+                                   "collapseWhitespace":true,"removeUrls":false,"removeEmails":false},
+                                 "contextConfig":{"enabled":true,"limit":40},
+                                 "replaceEditedDrafts":false,"lockVersion":0}
+                                """))
+                .andExpect(status().isAccepted());
+
+        var captor = org.mockito.ArgumentCaptor.forClass(ChunkPreviewWorker.Job.class);
+        verify(worker).generate(captor.capture());
+        GeneralChunkConfig config = (GeneralChunkConfig) captor.getValue().strategyConfig();
+        assertEquals("\n", config.delimiter());
+        assertEquals(OverlapUnit.CHARACTERS, captor.getValue().contextConfig().unit());
+        assertEquals("general-deterministic-v1", captor.getValue().plannerVersion());
+    }
+
+    @Test
+    void processing_returns_only_the_persisted_preview_summary() throws Exception {
+        FileProcessing processing = processing(1L, KNOWLEDGE_ID);
+        processing.setPreviewSummary(java.util.Map.of(
+                "preprocessingSummary", java.util.Map.of("urlMatches", 2, "emailMatches", 1),
+                "delimiterMatched", false,
+                "forcedSplitCount", 3,
+                "tokenLimitedSplitCount", 4));
+        when(processingMapper.selectById(FILE_ID)).thenReturn(processing);
+
+        mockMvc.perform(get("/knowledge/{knowledgeId}/files/{fileId}/processing",
+                        KNOWLEDGE_ID, FILE_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.preprocessingSummary.urlMatches").value(2))
+                .andExpect(jsonPath("$.preprocessingSummary.emailMatches").value(1))
+                .andExpect(jsonPath("$.delimiterMatched").value(false))
+                .andExpect(jsonPath("$.forcedSplitCount").value(3))
+                .andExpect(jsonPath("$.tokenLimitedSplitCount").value(4));
     }
 
     @Test

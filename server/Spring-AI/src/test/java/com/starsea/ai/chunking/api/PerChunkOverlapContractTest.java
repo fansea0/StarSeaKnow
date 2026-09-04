@@ -30,7 +30,9 @@ class PerChunkOverlapContractTest {
                 .collect(Collectors.toSet());
 
         assertTrue(fields.contains("overlapEnabled"));
-        assertTrue(fields.contains("overlapTokenLimit"));
+        assertTrue(fields.contains("overlapLimit"));
+        assertTrue(fields.contains("overlapUnit"));
+        assertTrue(fields.contains("overlapCharacterCount"));
     }
 
     @Test
@@ -50,7 +52,8 @@ class PerChunkOverlapContractTest {
 
     @Test
     void edit_request_binds_body_settings_and_required_lock_version() throws Exception {
-        assertEquals(List.of("content", "overlapEnabled", "overlapTokenLimit", "lockVersion"),
+        assertEquals(List.of("content", "overlapEnabled", "overlapLimit", "overlapUnit",
+                        "overlapTokenLimit", "lockVersion"),
                 recordComponents(EditChunkRequest.class));
         EditChunkRequest request = objectMapper.readValue("""
                 {"content":"正文","overlapEnabled":true,"overlapTokenLimit":64,"lockVersion":3}
@@ -59,7 +62,7 @@ class PerChunkOverlapContractTest {
 
         assertEquals("正文", json.get("content").asText());
         assertTrue(json.get("overlapEnabled").asBoolean());
-        assertEquals(64, json.get("overlapTokenLimit").asInt());
+        assertEquals(64, request.resolvedOverlapLimit());
         assertEquals(3, json.get("lockVersion").asInt());
     }
 
@@ -72,22 +75,25 @@ class PerChunkOverlapContractTest {
     void chunk_response_exposes_settings_and_derived_overlap_without_internal_source_id()
             throws Exception {
         assertTrue(recordComponents(ChunkResponse.class).containsAll(List.of(
-                "overlapEnabled", "overlapTokenLimit", "overlapContent",
-                "overlapTokenCount", "overlapUnavailableReason")));
+                "overlapEnabled", "overlapLimit", "overlapUnit", "overlapContent",
+                "overlapTokenCount", "overlapCharacterCount", "overlapUnavailableReason")));
         ChunkResponse response = objectMapper.readValue("""
                 {"publicId":"10000000-0000-0000-0000-000000000021","position":1,
                  "content":"正文","sectionPath":[],"sourceLocator":{},"tokenCount":2,
                  "status":0,"isModified":true,"lockVersion":4,
-                 "overlapEnabled":true,"overlapTokenLimit":40,
-                 "overlapContent":"前文。","overlapTokenCount":3,
-                 "overlapUnavailableReason":null}
+                 "overlapEnabled":true,"overlapLimit":40,"overlapUnit":"CHARACTERS",
+                 "overlapContent":"前文。","overlapTokenCount":3,"overlapCharacterCount":3,
+                 "overlapUnavailableReason":null,"lengthUnit":"CHARACTERS",
+                 "bodyLength":2,"indexLength":5,"overlapActualLength":3,"boundaryReason":{}}
                 """, ChunkResponse.class);
         JsonNode json = objectMapper.valueToTree(response);
 
         assertTrue(json.get("overlapEnabled").asBoolean());
-        assertEquals(40, json.get("overlapTokenLimit").asInt());
+        assertEquals(40, json.get("overlapLimit").asInt());
+        assertEquals("CHARACTERS", json.get("overlapUnit").asText());
         assertEquals("前文。", json.get("overlapContent").asText());
         assertEquals(3, json.get("overlapTokenCount").asInt());
+        assertEquals(3, json.get("overlapCharacterCount").asInt());
         assertTrue(json.get("overlapUnavailableReason").isNull());
         assertTrue(json.get("overlapSourceChunkId") == null);
     }

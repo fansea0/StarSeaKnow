@@ -157,15 +157,13 @@ public class ChunkCommandService {
         if (request.overlapEnabled() == null) {
             throw ChunkingException.unprocessable("Chunk overlapEnabled is required");
         }
-        if (request.overlapTokenLimit() == null
-                || request.overlapTokenLimit() < 1 || request.overlapTokenLimit() > 512) {
-            throw ChunkingException.unprocessable(
-                    "Chunk overlapTokenLimit must be between 1 and 512");
-        }
         long tenantId = requireTenantId();
         FileProcessing processing = lockMutableProcessing(knowledgeId, fileId, tenantId);
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, request.lockVersion());
+        int overlapLimit = requireOverlapLimit(request, target);
+        com.starsea.ai.chunking.model.OverlapUnit overlapUnit = target.getOverlapUnit() == null
+                ? com.starsea.ai.chunking.model.OverlapUnit.TOKENS : target.getOverlapUnit();
         TokenBudget budget = tokenBudget(processing, target.getSectionPath(), request.content());
         if (budget.total() > budget.maximum()) {
             throw ChunkingException.unprocessable("Edited chunk exceeds the token budget", Map.of(
@@ -183,7 +181,8 @@ public class ChunkCommandService {
         edited.setTokenCount(budget.body());
         edited.setContentHash(sha256(request.content()));
         edited.setOverlapEnabled(request.overlapEnabled());
-        edited.setOverlapTokenLimit(request.overlapTokenLimit());
+        edited.setOverlapLimit(overlapLimit);
+        edited.setOverlapUnit(overlapUnit);
         EnrichedChunk editedContext = enrich(previous, edited, budget.maximum());
         applyDerivedContext(edited, editedContext);
         DocumentChunk dependent = changedOverlapDependent(
@@ -581,17 +580,58 @@ public class ChunkCommandService {
     }
 
     private ChunkResponse toResponse(DocumentChunk chunk) {
+        com.starsea.ai.chunking.model.OverlapUnit unit = chunk.getOverlapUnit() == null
+                ? com.starsea.ai.chunking.model.OverlapUnit.TOKENS : chunk.getOverlapUnit();
+        int bodyLength = unit == com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS
+                ? codePoints(chunk.getContent()) : value(chunk.getTokenCount());
+        int indexLength = chunk.getIndexContent() == null ? bodyLength
+                : unit == com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS
+                ? codePoints(chunk.getIndexContent()) : tokenCounter.count(chunk.getIndexContent());
+        int actualLength = unit == com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS
+                ? value(chunk.getOverlapCharacterCount()) : value(chunk.getOverlapTokenCount());
         return new ChunkResponse(chunk.getPublicId(), value(chunk.getPosition()), chunk.getContent(),
                 chunk.getSectionPath(), chunk.getSourceLocator(), value(chunk.getTokenCount()),
                 value(chunk.getStatus()), Boolean.TRUE.equals(chunk.getIsModified()),
                 value(chunk.getLockVersion()), Boolean.TRUE.equals(chunk.getOverlapEnabled()),
-                overlapTokenLimit(chunk), chunk.getOverlapContent(),
-                value(chunk.getOverlapTokenCount()), overlapUnavailableReason(chunk));
+                overlapLimit(chunk), unit, chunk.getOverlapContent(), value(chunk.getOverlapTokenCount()),
+                value(chunk.getOverlapCharacterCount()), chunk.getOverlapReductionReason(),
+                overlapUnavailableReason(chunk), unit.name(), bodyLength, indexLength,
+                actualLength, chunk.getBoundaryReason());
     }
 
-    private int overlapTokenLimit(DocumentChunk chunk) {
-        Integer limit = chunk.getOverlapTokenLimit();
+    private int overlapLimit(DocumentChunk chunk) {
+        Integer limit = chunk.getOverlapLimit();
         return limit == null ? 40 : limit;
+    }
+
+    private int codePoints(String value) {
+        return value == null ? 0 : value.codePointCount(0, value.length());
+    }
+
+    private int requireOverlapLimit(EditChunkRequest request, DocumentChunk target) {
+        Integer limit = request.resolvedOverlapLimit();
+        com.starsea.ai.chunking.model.OverlapUnit expected = target.getOverlapUnit() == null
+                ? com.starsea.ai.chunking.model.OverlapUnit.TOKENS : target.getOverlapUnit();
+        com.starsea.ai.chunking.model.OverlapUnit requested = request.overlapUnit();
+        if (request.overlapTokenLimit() != null) {
+            if (requested != null && requested != com.starsea.ai.chunking.model.OverlapUnit.TOKENS) {
+                throw ChunkingException.unprocessable(
+                        "Legacy overlapTokenLimit always uses TOKENS");
+            }
+            requested = com.starsea.ai.chunking.model.OverlapUnit.TOKENS;
+        } else if (request.overlapLimit() != null && requested == null) {
+            throw ChunkingException.unprocessable("Chunk overlapUnit is required with overlapLimit");
+        }
+        if (requested != null && requested != expected) {
+            throw ChunkingException.unprocessable("Chunk overlapUnit does not match its strategy");
+        }
+        int maximum = expected == com.starsea.ai.chunking.model.OverlapUnit.TOKENS ? 512 : 1000;
+        if (limit == null || limit < 0 || limit > maximum
+                || Boolean.TRUE.equals(request.overlapEnabled()) && limit == 0) {
+            throw ChunkingException.unprocessable(
+                    "Chunk overlapLimit is invalid for " + expected.name());
+        }
+        return limit;
     }
 
     private String overlapUnavailableReason(DocumentChunk chunk) {

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.extraction.ManagedExtractionCache;
+import com.starsea.ai.chunking.extraction.DocumentTextExtractorRegistry;
 import com.starsea.ai.domain.FileProcessing;
 import com.starsea.ai.domain.Knowledge;
 import com.starsea.ai.domain.KnowledgeFile;
@@ -16,6 +17,7 @@ import com.starsea.ai.service.FileService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
@@ -53,18 +55,30 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
     private final KnowledgeMapper knowledgeMapper;
     private final FileProcessingMapper processingMapper;
     private final ManagedExtractionCache extractionCache;
+    private final DocumentTextExtractorRegistry extractorRegistry;
     private final TransactionTemplate transactionTemplate;
 
+    @Autowired
     public FileServiceImpl(FileMapper fileMapper, KnowledgeFileMapper knowledgeFileMapper,
                            KnowledgeMapper knowledgeMapper, FileProcessingMapper processingMapper,
-                           ManagedExtractionCache extractionCache,
+                           ManagedExtractionCache extractionCache, DocumentTextExtractorRegistry extractorRegistry,
                            PlatformTransactionManager transactionManager) {
         this.fileMapper = fileMapper;
         this.knowledgeFileMapper = knowledgeFileMapper;
         this.knowledgeMapper = knowledgeMapper;
         this.processingMapper = processingMapper;
         this.extractionCache = extractionCache;
+        this.extractorRegistry = extractorRegistry;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
+
+    /** Compatibility constructor retained for focused service tests. */
+    public FileServiceImpl(FileMapper fileMapper, KnowledgeFileMapper knowledgeFileMapper,
+                           KnowledgeMapper knowledgeMapper, FileProcessingMapper processingMapper,
+                           ManagedExtractionCache extractionCache,
+                           PlatformTransactionManager transactionManager) {
+        this(fileMapper, knowledgeFileMapper, knowledgeMapper, processingMapper,
+                extractionCache, null, transactionManager);
     }
 
     @Override
@@ -102,7 +116,26 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, com.starsea.ai.doma
 
     @Override
     public List<FileVo> listByKnowledgeId(Long knowledgeId) {
-        return fileMapper.selectByKnowledgeId(requireTenantId(), knowledgeId);
+        List<FileVo> rows = fileMapper.selectByKnowledgeId(requireTenantId(), knowledgeId);
+        for (FileVo row : rows) {
+            row.setChunkingCapability(chunkingCapability(row));
+        }
+        return rows;
+    }
+
+    private FileVo.ChunkingCapability chunkingCapability(FileVo row) {
+        if (extractorRegistry == null || row.getPath() == null || row.getPath().isBlank()) {
+            return new FileVo.ChunkingCapability(false,
+                    "暂时无法从该文件提取文本");
+        }
+        try {
+            var capability = extractorRegistry.probe(Path.of(row.getPath()), row.getType());
+            return new FileVo.ChunkingCapability(capability.available(), capability.available()
+                    ? null : capability.reason());
+        } catch (RuntimeException exception) {
+            return new FileVo.ChunkingCapability(false,
+                    "暂时无法从该文件提取文本");
+        }
     }
 
     @Override

@@ -52,6 +52,16 @@ public final class ChunkStrategyRegistry {
                 .orElseThrow(() -> new ChunkStrategyNotFoundException(code, fileType));
     }
 
+    public List<ChunkPlanningStrategy> matching(String fileType) {
+        String normalizedFileType = normalizeFileType(fileType);
+        return strategies.stream()
+                .filter(strategy -> isGlobal(strategy.descriptor())
+                        || strategy.supportedFileTypes().stream()
+                        .map(ChunkStrategyRegistry::normalizeFileType)
+                        .anyMatch(normalizedFileType::equals))
+                .toList();
+    }
+
     /** Converts and jointly validates request configuration before asynchronous dispatch. */
     public ValidatedPreviewConfig validatePreviewConfig(
             String code,
@@ -67,6 +77,9 @@ public final class ChunkStrategyRegistry {
         String normalizedCode = normalizeCode(strategy.code());
         try {
             if ("GENERAL".equals(normalizedCode)) {
+                validateKeys(rawStrategyConfig, Set.of("delimiter", "delimiterMode", "maxCharacters",
+                        "collapseWhitespace", "removeUrls", "removeEmails"));
+                validateKeys(rawContextConfig, Set.of("enabled", "overlapEnabled", "limit", "overlapTokens"));
                 GeneralChunkConfig config = convertWithDefaults(
                         rawStrategyConfig, generalDefaults(), GeneralChunkConfig.class);
                 ContextConfig context = context(rawContextConfig, strategy.descriptor().defaultContextConfig(),
@@ -77,6 +90,8 @@ public final class ChunkStrategyRegistry {
                 return new ValidatedPreviewConfig(config, context, ChunkPolicy.MAX_ALLOWED_TOKENS);
             }
             if ("MARKDOWN_OPTIMIZED".equals(normalizedCode)) {
+                validateKeys(rawStrategyConfig, Set.of("minTokens", "targetTokens", "maxTokens"));
+                validateKeys(rawContextConfig, Set.of("enabled", "overlapEnabled", "limit", "overlapTokens"));
                 ChunkPolicy config = convertWithDefaults(rawStrategyConfig, markdownDefaults(), ChunkPolicy.class);
                 ContextConfig context = context(rawContextConfig, strategy.descriptor().defaultContextConfig(),
                         OverlapUnit.TOKENS, ContextMode.COMPLETE_SENTENCE, false);
@@ -88,6 +103,16 @@ public final class ChunkStrategyRegistry {
         } catch (RuntimeException exception) {
             throw invalid(fieldFrom(exception), rootMessage(exception));
         }
+    }
+
+    private void validateKeys(Map<String, Object> values, Set<String> allowed) {
+        if (values == null) return;
+        values.keySet().stream()
+                .filter(key -> !allowed.contains(key))
+                .findFirst()
+                .ifPresent(key -> {
+                    throw invalid(key, key + " is not supported for this strategy");
+                });
     }
 
     private <T> T convertWithDefaults(Map<String, Object> raw, Map<String, Object> defaults, Class<T> type) {
