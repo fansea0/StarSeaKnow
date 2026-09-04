@@ -29,6 +29,12 @@ public interface ChunkVectorLifecycle {
     void enqueuePendingOwner(long tenantId, long knowledgeId, long fileId,
                              int indexingLockVersion);
 
+    default void writerStarted(Collection<CleanupObligation> obligations) {
+    }
+
+    default void writerFinished(Collection<CleanupObligation> obligations) {
+    }
+
     void resetAbandonedClaims();
 
     void drain();

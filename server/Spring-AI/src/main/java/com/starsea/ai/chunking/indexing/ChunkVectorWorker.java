@@ -2,6 +2,7 @@ package com.starsea.ai.chunking.indexing;
 
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.starsea.ai.chunking.api.ChunkingException;
+import com.starsea.ai.chunking.general.UnicodeText;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.chunking.model.EnrichedChunk;
@@ -142,6 +143,7 @@ public class ChunkVectorWorker {
     public void vectorizeBatch(BatchJob job) {
         java.util.concurrent.atomic.AtomicBoolean vectorMutationStarted =
                 new java.util.concurrent.atomic.AtomicBoolean();
+        vectorLifecycle.writerStarted(job.obligations());
         try {
             PreparedBatch prepared = prepared(job.file(), job.maxTokens(), job.processing(),
                     job.prepared(), job.allChunks(), job.chunks());
@@ -158,12 +160,15 @@ public class ChunkVectorWorker {
                 restoreBatch(job, failure);
             }
             drainAfterFailure(failure);
+        } finally {
+            finishWriter(job.obligations());
         }
     }
 
     public void vectorizeSingle(SingleJob job) {
         java.util.concurrent.atomic.AtomicBoolean vectorMutationStarted =
                 new java.util.concurrent.atomic.AtomicBoolean();
+        vectorLifecycle.writerStarted(job.obligations());
         try {
             PreparedBatch prepared = prepared(job.file(), job.maxTokens(), job.processing(),
                     job.prepared(), job.allChunks(), List.of(job.chunk()));
@@ -181,6 +186,16 @@ public class ChunkVectorWorker {
             }
             drainAfterFailure(failure);
             throw failure;
+        } finally {
+            finishWriter(job.obligations());
+        }
+    }
+
+    private void finishWriter(Collection<ChunkVectorLifecycle.CleanupObligation> obligations) {
+        try {
+            vectorLifecycle.writerFinished(obligations);
+        } catch (RuntimeException failure) {
+            log.error("Unable to acknowledge completed vector writer", failure);
         }
     }
 
@@ -226,8 +241,9 @@ public class ChunkVectorWorker {
         if (supplied == null || supplied.isEmpty()) {
             return enrich(allSnapshots, targets, maxTokens, file);
         }
-        Map<Long, ChunkSnapshot> remainingTargets = targets.stream()
+        Map<Long, ChunkSnapshot> targetsById = targets.stream()
                 .collect(Collectors.toMap(ChunkSnapshot::id, value -> value));
+        Map<Long, ChunkSnapshot> remainingTargets = new LinkedHashMap<>(targetsById);
         for (PreparedChunk value : supplied) {
             ChunkSnapshot target = remainingTargets.remove(value.id());
             if (target == null
@@ -247,7 +263,11 @@ public class ChunkVectorWorker {
                 && processing.runtimePolicy().strategyConfig() instanceof GeneralChunkConfig general
                 ? general.maxCharacters() : null;
         return new PreparedBatch(file, maxTokens, maxCharacters,
-                supplied.stream().map(PreparedChunk::enriched)
+                supplied.stream().map(value -> {
+                            EnrichedChunk enriched = value.enriched();
+                            enriched.chunk().setContent(targetsById.get(value.id()).content());
+                            return enriched;
+                        })
                         .sorted(Comparator.comparing(value -> value.chunk().getPosition(),
                                 Comparator.nullsLast(Integer::compareTo)))
                         .toList());
@@ -297,17 +317,19 @@ public class ChunkVectorWorker {
         List<ChunkVectorGateway.VectorDocument> documents = new ArrayList<>(prepared.chunks().size());
         for (EnrichedChunk enriched : prepared.chunks()) {
             DocumentChunk chunk = enriched.chunk();
-            documents.add(new ChunkVectorGateway.VectorDocument(
-                    Objects.requireNonNull(vectorIds.get(chunk.getId()), "vectorId"),
-                    chunk.getPublicId(),
-                    enriched.indexContent(),
-                    chunk.getTenantId(),
-                    chunk.getKnowledgeId(),
-                    chunk.getFileId(),
-                    prepared.file().publicId(),
-                    value(chunk.getPosition()),
-                    prepared.file().fileType(),
-                    chunk.getSectionPath()));
+            if (!UnicodeText.isBlank(chunk.getContent())) {
+                documents.add(new ChunkVectorGateway.VectorDocument(
+                        Objects.requireNonNull(vectorIds.get(chunk.getId()), "vectorId"),
+                        chunk.getPublicId(),
+                        enriched.indexContent(),
+                        chunk.getTenantId(),
+                        chunk.getKnowledgeId(),
+                        chunk.getFileId(),
+                        prepared.file().publicId(),
+                        value(chunk.getPosition()),
+                        prepared.file().fileType(),
+                        chunk.getSectionPath()));
+            }
         }
         for (ChunkVectorGateway.VectorDocument document : documents) {
             int exactTokens = tokenCounter.count(document.indexContent());
@@ -326,12 +348,15 @@ public class ChunkVectorWorker {
                 }
             }
         }
-        List<UUID> vectorIdsToReplace = documents.stream()
-                .map(ChunkVectorGateway.VectorDocument::vectorId)
+        List<UUID> vectorIdsToReplace = prepared.chunks().stream()
+                .map(enriched -> Objects.requireNonNull(
+                        vectorIds.get(enriched.chunk().getId()), "vectorId"))
                 .toList();
         mutationStarted.set(true);
         gateway.deleteAll(vectorIdsToReplace);
-        gateway.add(List.copyOf(documents));
+        if (!documents.isEmpty()) {
+            gateway.add(List.copyOf(documents));
+        }
     }
 
     private void validatePrepared(PreparedBatch prepared) {
@@ -339,7 +364,9 @@ public class ChunkVectorWorker {
             throw ChunkingException.conflict("Prepared vector batch is empty");
         }
         for (EnrichedChunk enriched : prepared.chunks()) {
-            if (enriched.indexContent() == null || enriched.indexContent().isBlank()) {
+            if (enriched.indexContent() == null
+                    || (!UnicodeText.isBlank(enriched.chunk().getContent())
+                    && UnicodeText.isBlank(enriched.indexContent()))) {
                 throw ChunkingException.unprocessable("Prepared index text must not be blank");
             }
             int tokens = tokenCounter.count(enriched.indexContent());

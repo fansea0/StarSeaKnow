@@ -120,10 +120,16 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
             return;
         }
         try {
-            logSummary(recoverTimedOut());
-            vectorLifecycle.drain();
-        } catch (RuntimeException failure) {
-            log.error("Unable to complete chunking recovery scan", failure);
+            try {
+                logSummary(recoverTimedOut());
+            } catch (RuntimeException failure) {
+                log.error("Unable to complete chunking recovery scan", failure);
+            }
+            try {
+                vectorLifecycle.drain();
+            } catch (RuntimeException failure) {
+                log.error("Unable to drain vector cleanup lifecycle", failure);
+            }
         } finally {
             scanInProgress.set(false);
         }
@@ -153,10 +159,15 @@ public class ChunkPipelineRecovery implements ApplicationRunner, AutoCloseable {
         int filesRecovered = 0;
         int chunksRecovered = 0;
         for (FileProcessing candidate : candidates) {
-            RecoverySummary result = transactions.execute(status -> recoverCandidate(candidate));
-            if (result != null) {
-                filesRecovered += result.filesRecovered();
-                chunksRecovered += result.chunksRecovered();
+            try {
+                RecoverySummary result = transactions.execute(status -> recoverCandidate(candidate));
+                if (result != null) {
+                    filesRecovered += result.filesRecovered();
+                    chunksRecovered += result.chunksRecovered();
+                }
+            } catch (RuntimeException failure) {
+                log.error("Unable to recover timed-out chunking file {}",
+                        candidate == null ? null : candidate.getFileId(), failure);
             }
         }
         return new RecoverySummary(filesRecovered, chunksRecovered);

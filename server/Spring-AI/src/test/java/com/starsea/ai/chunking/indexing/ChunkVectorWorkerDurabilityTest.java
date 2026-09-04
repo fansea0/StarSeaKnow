@@ -91,7 +91,28 @@ class ChunkVectorWorkerDurabilityTest {
         assertEquals(Set.of(), fixture.lifecycle.queued);
     }
 
+    @Test
+    void whitespace_body_activates_its_reserved_identity_without_embedding_and_cleans_old_vector() {
+        Fixture fixture = fixture(false, false, " \u3000\n", " \u3000\n");
+        UUID reserved = fixture.job.vectorId(fixture.chunk.getId());
+
+        fixture.worker.vectorizeBatch(fixture.job);
+
+        assertEquals(PipelineState.COMPLETED.code(), fixture.processing.getPipelineState());
+        assertEquals(ChunkStatus.ACTIVE.code(), fixture.chunk.getStatus());
+        assertEquals(reserved, fixture.chunk.getVectorId());
+        assertEquals(" \u3000\n", fixture.chunk.getIndexContent());
+        assertEquals(Map.of(), fixture.gateway.values);
+        assertEquals(0, fixture.gateway.addInvocations.get());
+        assertEquals(Set.of(), fixture.lifecycle.queued);
+    }
+
     private Fixture fixture(boolean uncertainCommit, boolean crashAfterAdd) {
+        return fixture(uncertainCommit, crashAfterAdd, "body", "new index");
+    }
+
+    private Fixture fixture(boolean uncertainCommit, boolean crashAfterAdd,
+                            String body, String indexContent) {
         FileProcessing processing = new FileProcessing();
         processing.setFileId(FILE_ID);
         processing.setTenantId(TENANT_ID);
@@ -112,7 +133,7 @@ class ChunkVectorWorkerDurabilityTest {
         chunk.setKnowledgeId(KNOWLEDGE_ID);
         chunk.setFileId(FILE_ID);
         chunk.setPosition(0);
-        chunk.setContent("body");
+        chunk.setContent(body);
         chunk.setContentHash("content-hash");
         chunk.setSectionPath(List.of());
         chunk.setStatus(ChunkStatus.INDEXING.code());
@@ -168,7 +189,7 @@ class ChunkVectorWorkerDurabilityTest {
         ChunkVectorWorker.ChunkSnapshot snapshot =
                 ChunkVectorWorker.ChunkSnapshot.fromIndexing(chunk);
         ChunkVectorWorker.PreparedChunk prepared = ChunkVectorWorker.PreparedChunk.from(
-                new EnrichedChunk(snapshot.detached(), null, null, 0, "new index"));
+                new EnrichedChunk(snapshot.detached(), null, null, 0, indexContent));
         ChunkVectorWorker.BatchJob job = new ChunkVectorWorker.BatchJob(
                 TENANT_ID, KNOWLEDGE_ID, FILE_ID, 5, "hash", 512,
                 ChunkVectorWorker.FileSnapshot.from(file), List.of(snapshot), List.of(snapshot),
@@ -244,6 +265,7 @@ class ChunkVectorWorkerDurabilityTest {
     private static final class InMemoryGateway implements ChunkVectorGateway {
         private final Map<UUID, String> values = new LinkedHashMap<>();
         private final boolean crashAfterAdd;
+        private final AtomicInteger addInvocations = new AtomicInteger();
 
         private InMemoryGateway(boolean crashAfterAdd) {
             this.crashAfterAdd = crashAfterAdd;
@@ -261,6 +283,7 @@ class ChunkVectorWorkerDurabilityTest {
 
         @Override
         public void add(List<VectorDocument> documents) {
+            addInvocations.incrementAndGet();
             documents.forEach(document -> values.put(document.vectorId(), document.indexContent()));
             if (crashAfterAdd) {
                 throw new SimulatedProcessDeath();

@@ -29,6 +29,15 @@ public class ChunkVectorCleanup implements Serializable {
     private UUID chunkPublicId;
     private Integer state;
     private Integer retryCount;
+    private OffsetDateTime nextAttemptAt;
+    @TableField(value = "writer_owner", typeHandler = UuidTypeHandler.class,
+            jdbcType = JdbcType.OTHER)
+    private UUID writerOwner;
+    private OffsetDateTime writerLeaseUntil;
+    @TableField(value = "claim_owner", typeHandler = UuidTypeHandler.class,
+            jdbcType = JdbcType.OTHER)
+    private UUID claimOwner;
+    private OffsetDateTime claimLeaseUntil;
     private String lastError;
     private OffsetDateTime createTime;
     private OffsetDateTime updateTime;

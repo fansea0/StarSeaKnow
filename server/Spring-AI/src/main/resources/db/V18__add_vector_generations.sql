@@ -46,13 +46,26 @@ CREATE TABLE chunk_vector_cleanup (
     chunk_public_id UUID NOT NULL,
     state SMALLINT NOT NULL DEFAULT 0 CHECK (state IN (0, 1)),
     retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    writer_owner UUID,
+    writer_lease_until TIMESTAMPTZ,
+    claim_owner UUID,
+    claim_lease_until TIMESTAMPTZ,
     last_error TEXT,
     create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE chunk_vector_cleanup
+    ADD CONSTRAINT chk_chunk_vector_cleanup_writer_lease
+        CHECK ((writer_owner IS NULL) = (writer_lease_until IS NULL)),
+    ADD CONSTRAINT chk_chunk_vector_cleanup_claim_lease
+        CHECK ((claim_owner IS NULL) = (claim_lease_until IS NULL)),
+    ADD CONSTRAINT chk_chunk_vector_cleanup_claim_state
+        CHECK ((state = 1) = (claim_owner IS NOT NULL));
+
 CREATE INDEX idx_chunk_vector_cleanup_pending
-    ON chunk_vector_cleanup(state, create_time);
+    ON chunk_vector_cleanup(state, next_attempt_at, id);
 
 COMMENT ON COLUMN document_chunk.vector_id IS
     'Physical vector-store document ID of the currently active chunk generation';

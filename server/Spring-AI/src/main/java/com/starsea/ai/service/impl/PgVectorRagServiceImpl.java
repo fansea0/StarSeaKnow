@@ -7,11 +7,12 @@ import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.mapper.DocumentChunkMapper;
+import com.starsea.ai.mapper.ChunkVectorCleanupMapper;
 import com.starsea.ai.openapi.retrieval.RetrievalQuery;
 import com.starsea.ai.openapi.retrieval.RetrievedChunk;
 import com.starsea.ai.service.FileService;
 import com.starsea.ai.service.RagService;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -37,13 +38,28 @@ import java.util.stream.Collectors;
  * @Date:2025/4/26 11:21
  */
 @Service
-@RequiredArgsConstructor
 public class PgVectorRagServiceImpl implements RagService {
 
     private final VectorStore vectorStore;
     @Lazy
     private final FileService fileService;
     private final DocumentChunkMapper chunkMapper;
+    private final ChunkVectorCleanupMapper cleanupMapper;
+
+    public PgVectorRagServiceImpl(VectorStore vectorStore, FileService fileService,
+                                  DocumentChunkMapper chunkMapper) {
+        this(vectorStore, fileService, chunkMapper, null);
+    }
+
+    @Autowired
+    public PgVectorRagServiceImpl(VectorStore vectorStore, FileService fileService,
+                                  DocumentChunkMapper chunkMapper,
+                                  ChunkVectorCleanupMapper cleanupMapper) {
+        this.vectorStore = vectorStore;
+        this.fileService = fileService;
+        this.chunkMapper = chunkMapper;
+        this.cleanupMapper = cleanupMapper;
+    }
 
 
     @Override
@@ -76,9 +92,12 @@ public class PgVectorRagServiceImpl implements RagService {
         String filter = tenantFilterExpression(tenantId)
                 + " && knowledgeId in [" + knowledgeIds + "]"
                 + " && fileId in [" + fileIds + "]";
+        long staleGenerations = cleanupMapper == null ? 0L
+                : Math.max(0L, cleanupMapper.countUnprotectedStale(
+                tenantId, query.knowledgeIds()));
         SearchRequest request = SearchRequest.builder()
                 .query(query.query())
-                .topK(overfetchTopK(query.topK()))
+                .topK(searchTopK(query.topK(), staleGenerations))
                 .similarityThreshold(query.scoreThreshold())
                 .filterExpression(filter)
                 .build();
@@ -165,11 +184,14 @@ public class PgVectorRagServiceImpl implements RagService {
                 && chunk.getSourceFileType() != null;
     }
 
-    private static int overfetchTopK(int topK) {
+    private static int searchTopK(int topK, long staleGenerations) {
         if (topK < 1) {
             throw new IllegalArgumentException("topK must be positive");
         }
-        return (int) Math.min(Math.max((long) topK * 8L, 256L), 1_024L);
+        if (staleGenerations >= Integer.MAX_VALUE - (long) topK) {
+            return Integer.MAX_VALUE;
+        }
+        return topK + (int) staleGenerations;
     }
 
     private static double normalizeScore(Double score) {

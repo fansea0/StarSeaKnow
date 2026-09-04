@@ -14,6 +14,16 @@
                 typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
         <result property="state" column="state" jdbcType="SMALLINT"/>
         <result property="retryCount" column="retry_count" jdbcType="INTEGER"/>
+        <result property="nextAttemptAt" column="next_attempt_at"
+                jdbcType="TIMESTAMP_WITH_TIMEZONE"/>
+        <result property="writerOwner" column="writer_owner" jdbcType="OTHER"
+                typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
+        <result property="writerLeaseUntil" column="writer_lease_until"
+                jdbcType="TIMESTAMP_WITH_TIMEZONE"/>
+        <result property="claimOwner" column="claim_owner" jdbcType="OTHER"
+                typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
+        <result property="claimLeaseUntil" column="claim_lease_until"
+                jdbcType="TIMESTAMP_WITH_TIMEZONE"/>
         <result property="lastError" column="last_error" jdbcType="LONGVARCHAR"/>
         <result property="createTime" column="create_time" jdbcType="TIMESTAMP_WITH_TIMEZONE"/>
         <result property="updateTime" column="update_time" jdbcType="TIMESTAMP_WITH_TIMEZONE"/>
@@ -24,8 +34,71 @@
             (vector_id, tenant_id, knowledge_id, file_id, chunk_public_id)
         VALUES
             (#{vectorId}, #{tenantId}, #{knowledgeId}, #{fileId}, #{chunkPublicId})
-        ON CONFLICT (vector_id) DO NOTHING
+        ON CONFLICT (vector_id) DO UPDATE
+        SET tenant_id = EXCLUDED.tenant_id,
+            knowledge_id = EXCLUDED.knowledge_id,
+            file_id = EXCLUDED.file_id,
+            chunk_public_id = EXCLUDED.chunk_public_id,
+            state = 0,
+            retry_count = 0,
+            next_attempt_at = CURRENT_TIMESTAMP,
+            claim_owner = NULL,
+            claim_lease_until = NULL,
+            last_error = NULL,
+            update_time = CURRENT_TIMESTAMP
     </insert>
+
+    <insert id="startWriter">
+        INSERT INTO chunk_vector_cleanup
+            (vector_id, tenant_id, knowledge_id, file_id, chunk_public_id,
+             writer_owner, writer_lease_until)
+        VALUES
+            (#{vectorId}, #{tenantId}, #{knowledgeId}, #{fileId}, #{chunkPublicId},
+             #{writerOwner}, CURRENT_TIMESTAMP + #{leaseSeconds} * INTERVAL '1 second')
+        ON CONFLICT (vector_id) DO UPDATE
+        SET tenant_id = EXCLUDED.tenant_id,
+            knowledge_id = EXCLUDED.knowledge_id,
+            file_id = EXCLUDED.file_id,
+            chunk_public_id = EXCLUDED.chunk_public_id,
+            state = 0,
+            retry_count = 0,
+            next_attempt_at = CURRENT_TIMESTAMP,
+            writer_owner = EXCLUDED.writer_owner,
+            writer_lease_until = EXCLUDED.writer_lease_until,
+            claim_owner = NULL,
+            claim_lease_until = NULL,
+            last_error = NULL,
+            update_time = CURRENT_TIMESTAMP
+    </insert>
+
+    <insert id="finishWriter">
+        INSERT INTO chunk_vector_cleanup
+            (vector_id, tenant_id, knowledge_id, file_id, chunk_public_id)
+        VALUES
+            (#{vectorId}, #{tenantId}, #{knowledgeId}, #{fileId}, #{chunkPublicId})
+        ON CONFLICT (vector_id) DO UPDATE
+        SET state = 0,
+            next_attempt_at = CURRENT_TIMESTAMP,
+            writer_owner = NULL,
+            writer_lease_until = NULL,
+            claim_owner = NULL,
+            claim_lease_until = NULL,
+            update_time = CURRENT_TIMESTAMP
+        WHERE chunk_vector_cleanup.writer_owner = #{writerOwner}
+    </insert>
+
+    <update id="renewWriterLeases">
+        UPDATE chunk_vector_cleanup
+        SET writer_lease_until = CURRENT_TIMESTAMP
+                + #{leaseSeconds} * INTERVAL '1 second',
+            update_time = CURRENT_TIMESTAMP
+        WHERE writer_owner = #{writerOwner}
+          AND vector_id IN
+          <foreach collection="vectorIds" item="vectorId"
+                   open="(" separator="," close=")">
+              #{vectorId}
+          </foreach>
+    </update>
 
     <insert id="enqueuePendingByOwner">
         INSERT INTO chunk_vector_cleanup
@@ -38,39 +111,70 @@
           AND status = 1
           AND indexing_lock_version = #{indexingLockVersion}
           AND pending_vector_id IS NOT NULL
-        ON CONFLICT (vector_id) DO NOTHING
+        ON CONFLICT (vector_id) DO UPDATE
+        SET tenant_id = EXCLUDED.tenant_id,
+            knowledge_id = EXCLUDED.knowledge_id,
+            file_id = EXCLUDED.file_id,
+            chunk_public_id = EXCLUDED.chunk_public_id,
+            state = 0,
+            retry_count = 0,
+            next_attempt_at = CURRENT_TIMESTAMP,
+            claim_owner = NULL,
+            claim_lease_until = NULL,
+            last_error = NULL,
+            update_time = CURRENT_TIMESTAMP
     </insert>
 
-    <select id="findDrainable" resultMap="CleanupResultMap">
-        SELECT q.*
-        FROM chunk_vector_cleanup q
-        WHERE q.state = 0
-          AND NOT EXISTS (
-              SELECT 1 FROM document_chunk dc
-              WHERE (dc.status = 2 AND dc.vector_id = q.vector_id)
-                 OR dc.pending_vector_id = q.vector_id
-          )
-        ORDER BY q.create_time, q.id
-        LIMIT #{limit}
-    </select>
-
-    <update id="claim">
+    <select id="claimDue" resultMap="CleanupResultMap">
+        WITH due AS (
+            SELECT candidate.id
+            FROM chunk_vector_cleanup candidate
+            WHERE candidate.state = 0
+              AND candidate.next_attempt_at &lt;= CURRENT_TIMESTAMP
+              AND (candidate.writer_owner IS NULL
+                   OR candidate.writer_lease_until &lt;= CURRENT_TIMESTAMP)
+              AND NOT EXISTS (
+                  SELECT 1 FROM document_chunk dc
+                  WHERE (dc.status = 2 AND dc.vector_id = candidate.vector_id)
+                     OR dc.pending_vector_id = candidate.vector_id
+              )
+            ORDER BY candidate.next_attempt_at, candidate.id
+            FOR UPDATE SKIP LOCKED
+            LIMIT #{limit}
+        )
         UPDATE chunk_vector_cleanup q
         SET state = 1,
+            claim_owner = #{claimOwner},
+            claim_lease_until = CURRENT_TIMESTAMP
+                + #{leaseSeconds} * INTERVAL '1 second',
             update_time = CURRENT_TIMESTAMP
+        FROM due
+        WHERE q.id = due.id
+        RETURNING q.*
+    </select>
+
+    <select id="lockClaimedForDelete" resultMap="CleanupResultMap">
+        SELECT q.*
+        FROM chunk_vector_cleanup q
         WHERE q.vector_id = #{vectorId}
-          AND q.state = 0
+          AND q.state = 1
+          AND q.claim_owner = #{claimOwner}
+          AND q.claim_lease_until &gt; CURRENT_TIMESTAMP
+          AND (q.writer_owner IS NULL OR q.writer_lease_until &lt;= CURRENT_TIMESTAMP)
           AND NOT EXISTS (
               SELECT 1 FROM document_chunk dc
               WHERE (dc.status = 2 AND dc.vector_id = q.vector_id)
                  OR dc.pending_vector_id = q.vector_id
           )
-    </update>
+        FOR UPDATE
+    </select>
 
     <delete id="deleteClaimed">
         DELETE FROM chunk_vector_cleanup
         WHERE vector_id = #{vectorId}
           AND state = 1
+          AND claim_owner = #{claimOwner}
+          AND (writer_owner IS NULL OR writer_lease_until &lt;= CURRENT_TIMESTAMP)
           AND NOT EXISTS (
               SELECT 1 FROM document_chunk dc
               WHERE (dc.status = 2
@@ -83,25 +187,63 @@
         UPDATE chunk_vector_cleanup
         SET state = 0,
             retry_count = retry_count + 1,
+            claim_owner = NULL,
+            claim_lease_until = NULL,
             last_error = LEFT(#{lastError}, 500),
+            next_attempt_at = CURRENT_TIMESTAMP
+                + LEAST(300, POWER(2, LEAST(retry_count, 8))) * INTERVAL '1 second',
             update_time = CURRENT_TIMESTAMP
         WHERE vector_id = #{vectorId}
           AND state = 1
+          AND claim_owner = #{claimOwner}
     </update>
 
-    <delete id="removeActiveObligations">
-        DELETE FROM chunk_vector_cleanup q
-        WHERE EXISTS (
-            SELECT 1 FROM document_chunk dc
-            WHERE dc.status = 2 AND dc.vector_id = q.vector_id
-        )
-    </delete>
+    <update id="deferForWriter">
+        UPDATE chunk_vector_cleanup
+        SET state = 0,
+            claim_owner = NULL,
+            claim_lease_until = NULL,
+            next_attempt_at = CURRENT_TIMESTAMP + INTERVAL '1 second',
+            update_time = CURRENT_TIMESTAMP
+        WHERE vector_id = #{vectorId}
+          AND state = 1
+          AND claim_owner = #{claimOwner}
+    </update>
+
+    <update id="reclaimExpiredClaims">
+        UPDATE chunk_vector_cleanup
+        SET state = 0,
+            claim_owner = NULL,
+            claim_lease_until = NULL,
+            next_attempt_at = CURRENT_TIMESTAMP,
+            update_time = CURRENT_TIMESTAMP
+        WHERE state = 1
+          AND claim_lease_until &lt;= CURRENT_TIMESTAMP
+    </update>
 
     <update id="resetAbandonedClaims">
         UPDATE chunk_vector_cleanup
         SET state = 0,
+            claim_owner = NULL,
+            claim_lease_until = NULL,
+            next_attempt_at = CURRENT_TIMESTAMP,
             update_time = CURRENT_TIMESTAMP
         WHERE state = 1
-          AND update_time &lt; CURRENT_TIMESTAMP - INTERVAL '1 minute'
+          AND claim_lease_until &lt;= CURRENT_TIMESTAMP
     </update>
+
+    <select id="countUnprotectedStale" resultType="long">
+        SELECT COUNT(*)
+        FROM chunk_vector_cleanup q
+        WHERE q.tenant_id = #{tenantId}
+          AND q.knowledge_id IN
+          <foreach collection="knowledgeIds" item="knowledgeId"
+                   open="(" separator="," close=")">
+              #{knowledgeId}
+          </foreach>
+          AND NOT EXISTS (
+              SELECT 1 FROM document_chunk dc
+              WHERE dc.status = 2 AND dc.vector_id = q.vector_id
+          )
+    </select>
 </mapper>

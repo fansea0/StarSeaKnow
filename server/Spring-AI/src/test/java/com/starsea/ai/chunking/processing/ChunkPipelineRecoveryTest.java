@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -149,6 +150,52 @@ class ChunkPipelineRecoveryTest {
                 "VECTORIZING timed out during recovery scan");
         order.verify(lifecycle).enqueuePendingOwner(1L, 10L, 20L, 8);
         order.verify(chunkMapper).restoreIndexingByFile(20L, 1L, 10L, 8);
+    }
+
+    @Test
+    void one_broken_recovery_candidate_does_not_block_the_next_candidate() {
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessing first = stale(PipelineState.CHUNKING, 4);
+        FileProcessing second = stale(PipelineState.CHUNKING, 6);
+        second.setFileId(21L);
+        when(processingMapper.findTimedOutAsync(any())).thenReturn(List.of(first, second));
+        when(processingMapper.transition(21L, 1L, 10L, 1, 7, 0, 6, 1,
+                "CHUNKING timed out during recovery scan")).thenReturn(1);
+        AtomicInteger transactions = new AtomicInteger();
+        TransactionOperations isolated = new TransactionOperations() {
+            @Override
+            public <T> T execute(TransactionCallback<T> action) {
+                if (transactions.getAndIncrement() == 0) {
+                    throw new IllegalStateException("first candidate unavailable");
+                }
+                return action.doInTransaction(mock(TransactionStatus.class));
+            }
+        };
+        ChunkPipelineRecovery recovery = new ChunkPipelineRecovery(
+                processingMapper, chunkMapper, isolated, mock(TaskScheduler.class),
+                Duration.ofMinutes(10), Duration.ofMinutes(1), Duration.ofMinutes(1),
+                Clock.fixed(NOW, ZoneOffset.UTC), ChunkVectorLifecycle.NOOP);
+
+        ChunkPipelineRecovery.RecoverySummary summary = recovery.recoverTimedOut();
+
+        assertEquals(1, summary.filesRecovered());
+        verify(processingMapper).transition(21L, 1L, 10L, 1, 7, 0, 6, 1,
+                "CHUNKING timed out during recovery scan");
+    }
+
+    @Test
+    void lifecycle_drain_runs_even_when_timeout_discovery_fails() {
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        ChunkVectorLifecycle lifecycle = mock(ChunkVectorLifecycle.class);
+        when(processingMapper.findTimedOutAsync(any()))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        ChunkPipelineRecovery recovery = recovery(processingMapper, chunkMapper, lifecycle);
+
+        recovery.scanScheduled();
+
+        verify(lifecycle).drain();
     }
 
     @Test

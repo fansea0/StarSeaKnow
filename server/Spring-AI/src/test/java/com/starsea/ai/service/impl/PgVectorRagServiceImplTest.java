@@ -5,6 +5,7 @@ import com.starsea.ai.chunking.model.ChunkStatus;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.mapper.DocumentChunkMapper;
+import com.starsea.ai.mapper.ChunkVectorCleanupMapper;
 import com.starsea.ai.openapi.retrieval.RetrievalQuery;
 import com.starsea.ai.openapi.retrieval.RetrievedChunk;
 import com.starsea.ai.service.FileService;
@@ -98,7 +99,7 @@ class PgVectorRagServiceImplTest {
                 result.get(0).sourceLocator());
         ArgumentCaptor<SearchRequest> search = ArgumentCaptor.forClass(SearchRequest.class);
         verify(fixture.vectorStore).similaritySearch(search.capture());
-        assertEquals(256, search.getValue().getTopK());
+        assertEquals(2, search.getValue().getTopK());
         String filter = search.getValue().getFilterExpression().toString();
         assertTrue(filter.contains("tenantId"));
         assertTrue(filter.contains("knowledgeId"));
@@ -134,15 +135,17 @@ class PgVectorRagServiceImplTest {
     }
 
     @Test
-    void requests_enough_candidates_for_the_current_generation_after_many_stale_ones() {
+    void requests_enough_candidates_after_more_than_1024_pending_generations() {
         Fixture fixture = fixture();
         UUID currentVectorId = UUID.fromString("99999999-9999-9999-9999-999999999999");
         List<Document> generations = new ArrayList<>();
-        for (int index = 0; index < 200; index++) {
+        for (int index = 0; index < 1_500; index++) {
             generations.add(candidate(UUID.nameUUIDFromBytes(("stale-" + index).getBytes()),
                     FIRST_CHUNK_ID, "stale " + index, 0.99 - index / 10_000.0));
         }
         generations.add(candidate(currentVectorId, FIRST_CHUNK_ID, "current", 0.80));
+        when(fixture.cleanupMapper.countUnprotectedStale(
+                TENANT_ID, Set.of(KNOWLEDGE_ID))).thenReturn(1_500L);
         when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
                 .thenReturn(generations);
         DocumentChunk current = chunk(FIRST_CHUNK_ID, TENANT_ID, KNOWLEDGE_ID, FILE_ID,
@@ -158,7 +161,43 @@ class PgVectorRagServiceImplTest {
                 result.stream().map(RetrievedChunk::chunkId).toList());
         ArgumentCaptor<SearchRequest> request = ArgumentCaptor.forClass(SearchRequest.class);
         verify(fixture.vectorStore).similaritySearch(request.capture());
-        assertTrue(request.getValue().getTopK() > 200);
+        assertEquals(1_501, request.getValue().getTopK());
+    }
+
+    @Test
+    void retrieval_bound_counts_pending_generations_as_possible_vector_candidates()
+            throws Exception {
+        Configuration configuration = new Configuration();
+        try (var input = getClass().getResourceAsStream(
+                "/mapper/ChunkVectorCleanupMapper.xml")) {
+            new XMLMapperBuilder(input, configuration, "mapper/ChunkVectorCleanupMapper.xml",
+                    configuration.getSqlFragments()).parse();
+        }
+        BoundSql bound = configuration.getMappedStatement(
+                        "com.starsea.ai.mapper.ChunkVectorCleanupMapper.countUnprotectedStale")
+                .getBoundSql(Map.of("tenantId", TENANT_ID,
+                        "knowledgeIds", Set.of(KNOWLEDGE_ID)));
+        String sql = bound.getSql().replaceAll("\\s+", " ").trim().toLowerCase();
+
+        assertTrue(sql.contains("dc.status = 2"), sql);
+        assertTrue(sql.contains("dc.vector_id = q.vector_id"), sql);
+        assertFalse(sql.contains("pending_vector_id"), sql);
+    }
+
+    @Test
+    void stale_generation_bound_is_overflow_safe() {
+        Fixture fixture = fixture();
+        when(fixture.cleanupMapper.countUnprotectedStale(
+                TENANT_ID, Set.of(KNOWLEDGE_ID))).thenReturn(Long.MAX_VALUE);
+        when(fixture.vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of());
+
+        fixture.service.retrieve(new RetrievalQuery(
+                "stars", Set.of(KNOWLEDGE_ID), 2, 0.0));
+
+        ArgumentCaptor<SearchRequest> request = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(fixture.vectorStore).similaritySearch(request.capture());
+        assertEquals(Integer.MAX_VALUE, request.getValue().getTopK());
     }
 
     @Test
@@ -389,7 +428,7 @@ class PgVectorRagServiceImplTest {
 
         ArgumentCaptor<SearchRequest> search = ArgumentCaptor.forClass(SearchRequest.class);
         verify(fixture.vectorStore).similaritySearch(search.capture());
-        assertEquals(256, search.getValue().getTopK());
+        assertEquals(20, search.getValue().getTopK());
     }
 
     @Test
@@ -440,6 +479,7 @@ class PgVectorRagServiceImplTest {
         VectorStore vectorStore = mock(VectorStore.class);
         FileService fileService = mock(FileService.class);
         DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        ChunkVectorCleanupMapper cleanupMapper = mock(ChunkVectorCleanupMapper.class);
         File file = new File();
         file.setId(FILE_ID);
         file.setPublicId(FILE_PUBLIC_ID);
@@ -448,8 +488,8 @@ class PgVectorRagServiceImplTest {
         file.setStatus(1);
         when(fileService.listEnabledByKnowledgeIds(TENANT_ID, Set.of(KNOWLEDGE_ID)))
                 .thenReturn(List.of(file));
-        return new Fixture(vectorStore, fileService, chunkMapper,
-                new PgVectorRagServiceImpl(vectorStore, fileService, chunkMapper));
+        return new Fixture(vectorStore, fileService, chunkMapper, cleanupMapper,
+                new PgVectorRagServiceImpl(vectorStore, fileService, chunkMapper, cleanupMapper));
     }
 
     private void assertCandidateRejected(Document candidate) {
@@ -526,6 +566,8 @@ class PgVectorRagServiceImplTest {
     }
 
     private record Fixture(VectorStore vectorStore, FileService fileService,
-                           DocumentChunkMapper chunkMapper, PgVectorRagServiceImpl service) {
+                           DocumentChunkMapper chunkMapper,
+                           ChunkVectorCleanupMapper cleanupMapper,
+                           PgVectorRagServiceImpl service) {
     }
 }
