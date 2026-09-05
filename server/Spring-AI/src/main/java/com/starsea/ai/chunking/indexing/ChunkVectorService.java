@@ -5,6 +5,7 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingApiModels.ConfirmRequest;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.runtime.ChunkRuntimePolicyResolver;
@@ -204,10 +205,15 @@ public class ChunkVectorService {
             }
             requireStableChunk(chunk);
         }
+        attachAndValidateHierarchy(chunks);
+        List<DocumentChunk> vectorizable = chunks.stream().filter(this::isVectorizable).toList();
+        if (vectorizable.isEmpty()) {
+            throw ChunkingException.unprocessable("Confirmation requires at least one vectorizable chunk");
+        }
         ChunkRuntimePolicy runtimePolicy = runtimePolicyResolver.resolve(processing);
         ChunkVectorWorker.ProcessingSnapshot processingSnapshot =
                 ChunkVectorWorker.ProcessingSnapshot.from(processing, runtimePolicyResolver);
-        List<ChunkVectorWorker.PreparedChunk> prepared = prepare(chunks, chunks, runtimePolicy);
+        List<ChunkVectorWorker.PreparedChunk> prepared = prepare(vectorizable, vectorizable, runtimePolicy);
 
         int vectorizingLockVersion;
         if (current == PipelineState.FAILED) {
@@ -225,10 +231,14 @@ public class ChunkVectorService {
                 .map(chunk -> markIndexing(chunk, tenantId, knowledgeId, fileId,
                         vectorizingLockVersion))
                 .toList();
-        int maxTokens = runtimePolicy.maxIndexTokens();
+        List<ChunkVectorWorker.ChunkSnapshot> vectorSnapshots = snapshots.stream()
+                .filter(ChunkVectorWorker.ChunkSnapshot::vectorizable).toList();
+        int maxTokens = chunks.stream().anyMatch(chunk -> chunkType(chunk) == ChunkType.PARENT)
+                ? childMaximum(processing.getPolicySnapshot(), runtimePolicy.maxIndexTokens())
+                : runtimePolicy.maxIndexTokens();
         return new ChunkVectorWorker.BatchJob(tenantId, knowledgeId, fileId,
                 vectorizingLockVersion, source.hash(), maxTokens,
-                source.file(), snapshots, snapshots, processingSnapshot, prepared);
+                source.file(), snapshots, vectorSnapshots, processingSnapshot, prepared);
     }
 
     private ChunkVectorWorker.SingleJob prepareSingle(long tenantId, long knowledgeId, long fileId,
@@ -249,6 +259,10 @@ public class ChunkVectorService {
                 .findFirst()
                 .orElseThrow(() -> ChunkingException.notFound(
                         "Chunk was not found in the requested file"));
+        attachAndValidateHierarchy(chunks);
+        if (!isVectorizable(target)) {
+            throw ChunkingException.unprocessable("A parent context chunk cannot be reindexed");
+        }
         ChunkStatus status = chunkStatus(target);
         if (status == ChunkStatus.INDEXING) {
             throw ChunkingException.conflict("An INDEXING chunk cannot be reindexed again");
@@ -287,6 +301,11 @@ public class ChunkVectorService {
     private List<ChunkVectorWorker.PreparedChunk> prepare(List<DocumentChunk> allChunks,
                                                           List<DocumentChunk> targets,
                                                           ChunkRuntimePolicy runtimePolicy) {
+        if ("PARENT_CHILD".equals(runtimePolicy.strategyCode())) {
+            // The worker owns the authoritative tokenizer/enricher. Compatibility constructors
+            // may install a code-point fallback here, which must not precompute token context.
+            return List.of();
+        }
         List<DocumentChunk> detached = allChunks.stream().map(this::detached).toList();
         java.util.Map<Long, EnrichedChunk> byId = contextEnricher.enrich(detached, runtimePolicy).stream()
                 .filter(value -> value != null && value.chunk() != null
@@ -311,9 +330,9 @@ public class ChunkVectorService {
     private ChunkVectorWorker.ChunkSnapshot markIndexing(DocumentChunk chunk, long tenantId,
                                                           long knowledgeId, long fileId,
                                                           int indexingLockVersion) {
-        UUID pendingVectorId = ChunkVectorWorker.vectorGenerationId(
+        UUID pendingVectorId = isVectorizable(chunk) ? ChunkVectorWorker.vectorGenerationId(
                 tenantId, knowledgeId, fileId, indexingLockVersion,
-                chunk.getPublicId(), value(chunk.getLockVersion()) + 1);
+                chunk.getPublicId(), value(chunk.getLockVersion()) + 1) : null;
         ChunkVectorWorker.ChunkSnapshot snapshot =
                 ChunkVectorWorker.ChunkSnapshot.afterMarking(
                         chunk, indexingLockVersion, pendingVectorId);
@@ -330,7 +349,6 @@ public class ChunkVectorService {
                 .eq("status", chunk.getStatus())
                 .eq("lock_version", chunk.getLockVersion())
                 .set("last_error", null)
-                .set("pending_vector_id", pendingVectorId)
                 .set("indexing_lock_version", indexingLockVersion)
                 .setSql("lock_version = lock_version + 1"));
         if (updated != 1) {
@@ -339,6 +357,48 @@ public class ChunkVectorService {
         chunk.setPendingVectorId(pendingVectorId);
         chunk.setIndexingLockVersion(indexingLockVersion);
         return snapshot;
+    }
+
+    private void attachAndValidateHierarchy(List<DocumentChunk> chunks) {
+        java.util.Map<Long, DocumentChunk> parents = chunks.stream()
+                .filter(chunk -> chunkType(chunk) == ChunkType.PARENT)
+                .collect(java.util.stream.Collectors.toMap(DocumentChunk::getId, chunk -> chunk));
+        for (DocumentChunk chunk : chunks) {
+            ChunkType type = chunkType(chunk);
+            if (type == ChunkType.CHILD) {
+                DocumentChunk parent = parents.get(chunk.getParentChunkId());
+                if (parent == null || parent.getPublicId() == null
+                        || value(parent.getPosition()) >= value(chunk.getPosition())) {
+                    throw ChunkingException.conflict("The current chunk hierarchy is invalid");
+                }
+                chunk.setParentPublicId(parent.getPublicId());
+            } else if (chunk.getParentChunkId() != null) {
+                throw ChunkingException.conflict("The current chunk hierarchy is invalid");
+            }
+        }
+    }
+
+    private boolean isVectorizable(DocumentChunk chunk) {
+        return chunkType(chunk) != ChunkType.PARENT;
+    }
+
+    private int childMaximum(java.util.Map<String, Object> policy, int fallback) {
+        Object raw = policy == null ? null : policy.get("childMaxTokens");
+        if (raw instanceof Number number && number.doubleValue() == number.intValue()) {
+            int value = number.intValue();
+            if (value >= 1 && value <= com.starsea.ai.chunking.model.ChunkPolicy.MAX_ALLOWED_TOKENS) {
+                return value;
+            }
+        }
+        return fallback;
+    }
+
+    private ChunkType chunkType(DocumentChunk chunk) {
+        try {
+            return ChunkType.fromCode(chunk.getChunkType() == null ? 0 : chunk.getChunkType());
+        } catch (IllegalArgumentException exception) {
+            throw ChunkingException.conflict("The current chunk type is invalid");
+        }
     }
 
     private void dispatch(Runnable task, java.util.function.Consumer<RuntimeException> onRejected) {

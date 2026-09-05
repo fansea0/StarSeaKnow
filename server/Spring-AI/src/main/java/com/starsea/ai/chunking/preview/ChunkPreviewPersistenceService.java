@@ -4,11 +4,14 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.model.ChunkDraft;
+import com.starsea.ai.chunking.model.ChunkPlan;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.model.SourceLocator;
 import com.starsea.ai.chunking.model.ContextConfig;
 import com.starsea.ai.chunking.model.EnrichedChunk;
+import com.starsea.ai.chunking.model.PlannedChunk;
 import com.starsea.ai.chunking.context.StrategyAwareChunkContextEnricher;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.runtime.ChunkRuntimePolicy;
@@ -26,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -150,6 +154,82 @@ public class ChunkPreviewPersistenceService {
                 PipelineState.CHUNKED, job.lockVersion());
     }
 
+    @Transactional
+    public void replacePlan(ChunkPreviewWorker.Job job, String sourceHash, String plannerVersion,
+                        Map<String, Object> policySnapshot, Map<String, Object> contextPolicy,
+                        Map<String, Object> executionMetadata, Map<String, Object> previewSummary,
+                        ChunkPlan plan) {
+        long tenantId = requireTenantId();
+        FileProcessing lockedProcessing = processingMapper.findScopedForUpdate(
+                job.fileId(), tenantId, job.knowledgeId());
+        if (lockedProcessing == null
+                || !Integer.valueOf(PipelineState.CHUNKING.code()).equals(lockedProcessing.getPipelineState())
+                || !Integer.valueOf(job.lockVersion()).equals(lockedProcessing.getLockVersion())) {
+            throw ChunkingException.conflict("Pipeline state or lock version changed before preview persistence");
+        }
+        List<DocumentChunk> existing = chunkMapper.findByFileForUpdate(
+                job.fileId(), tenantId, job.knowledgeId());
+        if (!job.existingChunks().equals(existing.stream()
+                .map(ChunkPreviewWorker.ExistingChunkSnapshot::from).toList())) {
+            throw ChunkingException.conflict("The current chunk set changed after preview confirmation");
+        }
+        for (DocumentChunk chunk : existing) {
+            if (ChunkStatus.fromCode(chunk.getStatus()) != ChunkStatus.DRAFT) {
+                throw ChunkingException.conflict("Only DRAFT chunks can be replaced by preview generation");
+            }
+            if (Boolean.TRUE.equals(chunk.getIsModified()) && !job.replaceEditedDrafts()) {
+                throw ChunkingException.conflict("Edited DRAFT chunks require explicit replacement confirmation");
+            }
+        }
+        int deleted = chunkMapper.deleteReplaceableDrafts(
+                job.fileId(), tenantId, job.knowledgeId(), job.replaceEditedDrafts());
+        if (deleted != existing.size()) {
+            throw ChunkingException.conflict("The current DRAFT set changed during replacement");
+        }
+
+        Map<String, DocumentChunk> parentsByKey = new HashMap<>();
+        java.util.ArrayList<DocumentChunk> inserted = new java.util.ArrayList<>(plan.chunks().size());
+        int position = 0;
+        for (PlannedChunk planned : plan.chunks()) {
+            DocumentChunk parent = planned.type() == ChunkType.CHILD
+                    ? parentsByKey.get(planned.parentKey()) : null;
+            if (planned.type() == ChunkType.CHILD && (parent == null || parent.getId() == null)) {
+                throw new IllegalArgumentException("The planned child references an unknown parent");
+            }
+            DocumentChunk entity = toEntity(tenantId, job, position++, planned, parent);
+            if (chunkMapper.insert(entity) != 1) {
+                throw new IllegalStateException("Unable to persist the complete DRAFT set");
+            }
+            inserted.add(entity);
+            if (planned.type() == ChunkType.PARENT) {
+                if (entity.getId() == null) {
+                    throw new IllegalStateException("The persisted parent has no database identifier");
+                }
+                parentsByKey.put(planned.key(), entity);
+            }
+        }
+
+        FileProcessing metadata = new FileProcessing();
+        metadata.setSourceHash(sourceHash);
+        metadata.setStrategyCode(job.strategyCode());
+        metadata.setPlannerVersion(plannerVersion);
+        metadata.setPolicySnapshot(Map.copyOf(policySnapshot));
+        metadata.setContextPolicy(Map.copyOf(contextPolicy));
+        metadata.setExecutionMetadata(Map.copyOf(executionMetadata));
+        metadata.setPreviewSummary(Map.copyOf(previewSummary));
+        int updated = processingMapper.update(metadata, Wrappers.<FileProcessing>lambdaUpdate()
+                .eq(FileProcessing::getFileId, job.fileId())
+                .eq(FileProcessing::getTenantId, tenantId)
+                .eq(FileProcessing::getKnowledgeId, job.knowledgeId())
+                .eq(FileProcessing::getPipelineState, PipelineState.CHUNKING.code())
+                .eq(FileProcessing::getLockVersion, job.lockVersion()));
+        if (updated != 1) {
+            throw ChunkingException.conflict("Pipeline state or lock version changed during preview persistence");
+        }
+        processingService.transition(job.knowledgeId(), job.fileId(), PipelineState.CHUNKING,
+                PipelineState.CHUNKED, job.lockVersion());
+    }
+
     private DocumentChunk toEntity(long tenantId, ChunkPreviewWorker.Job job,
                                    int position, ChunkDraft draft) {
         DocumentChunk chunk = new DocumentChunk();
@@ -178,6 +258,19 @@ public class ChunkPreviewPersistenceService {
         chunk.setIsModified(false);
         chunk.setLastError(null);
         chunk.setLockVersion(0);
+        return chunk;
+    }
+
+    private DocumentChunk toEntity(long tenantId, ChunkPreviewWorker.Job job, int position,
+                                   PlannedChunk planned, DocumentChunk parent) {
+        DocumentChunk chunk = toEntity(tenantId, job, position, planned.draft());
+        chunk.setChunkType(planned.type().code());
+        chunk.setParentChunkId(parent == null ? null : parent.getId());
+        chunk.setParentPublicId(parent == null ? null : parent.getPublicId());
+        chunk.setSiblingPosition(planned.siblingPosition());
+        chunk.setOverlapEnabled(planned.overlapEnabled());
+        chunk.setOverlapLimit(planned.overlapTokenLimit() <= 0 ? 40 : planned.overlapTokenLimit());
+        chunk.setOverlapUnit(com.starsea.ai.chunking.model.OverlapUnit.TOKENS);
         return chunk;
     }
 

@@ -11,6 +11,9 @@
         <result property="knowledgeId" column="knowledge_id" jdbcType="BIGINT"/>
         <result property="fileId" column="file_id" jdbcType="BIGINT"/>
         <result property="position" column="position" jdbcType="INTEGER"/>
+        <result property="chunkType" column="chunk_type" jdbcType="SMALLINT"/>
+        <result property="parentChunkId" column="parent_chunk_id" jdbcType="BIGINT"/>
+        <result property="siblingPosition" column="sibling_position" jdbcType="INTEGER"/>
         <result property="content" column="content" jdbcType="LONGVARCHAR"/>
         <result property="overlapEnabled" column="overlap_enabled" jdbcType="BOOLEAN"/>
         <result property="overlapLimit" column="overlap_limit" jdbcType="INTEGER"/>
@@ -40,6 +43,12 @@
         <result property="sourceFileType" column="source_file_type" jdbcType="VARCHAR"/>
         <result property="sourceKnowledgePublicId" column="source_knowledge_public_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
         <result property="sourceKnowledgeName" column="source_knowledge_name" jdbcType="VARCHAR"/>
+        <result property="parentPublicId" column="parent_public_id" jdbcType="OTHER" typeHandler="com.starsea.ai.auth.UuidTypeHandler"/>
+        <result property="parentContent" column="parent_content" jdbcType="LONGVARCHAR"/>
+        <result property="parentSectionPath" column="parent_section_path" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
+        <result property="parentSourceLocator" column="parent_source_locator" typeHandler="com.starsea.ai.openapi.credential.PostgresJsonbTypeHandler"/>
+        <result property="parentPosition" column="parent_position" jdbcType="INTEGER"/>
+        <result property="parentStatus" column="parent_status" jdbcType="SMALLINT"/>
     </resultMap>
 
     <update id="restoreIndexingByFile">
@@ -68,7 +77,13 @@
                f.file_name AS source_file_name,
                f.type AS source_file_type,
                k.public_id AS source_knowledge_public_id,
-               k.name AS source_knowledge_name
+               k.name AS source_knowledge_name,
+               parent.public_id AS parent_public_id,
+               parent.content AS parent_content,
+               parent.section_path AS parent_section_path,
+               parent.source_locator AS parent_source_locator,
+               parent.position AS parent_position,
+               parent.status AS parent_status
         FROM document_chunk dc
         JOIN knowledge k
           ON k.id = dc.knowledge_id
@@ -80,10 +95,19 @@
           ON kf.file_id = dc.file_id
          AND kf.knowledge_id = dc.knowledge_id
          AND kf.tenant_id = dc.tenant_id
+        LEFT JOIN document_chunk parent
+          ON parent.id = dc.parent_chunk_id
+         AND parent.tenant_id = dc.tenant_id
+         AND parent.knowledge_id = dc.knowledge_id
+         AND parent.file_id = dc.file_id
+         AND parent.chunk_type = 1
+         AND parent.status = 2
         WHERE dc.tenant_id = #{tenantId}
           AND f.tenant_id = #{tenantId}
           AND kf.tenant_id = #{tenantId}
           AND dc.status = 2
+          AND dc.chunk_type IN (0, 2)
+          AND (dc.chunk_type = 0 OR parent.id IS NOT NULL)
           AND f.status = 1
           AND dc.content IS NOT NULL
           AND dc.content ~ U&amp;'[^\0009-\000D\001C-\0020\00A0\1680\2000-\200A\2028\2029\202F\205F\3000]'
@@ -104,12 +128,17 @@
     </select>
 
     <select id="findByFile" resultMap="DocumentChunkResultMap">
-        SELECT *
-        FROM document_chunk
-        WHERE file_id = #{fileId}
-          AND tenant_id = #{tenantId}
-          AND knowledge_id = #{knowledgeId}
-        ORDER BY position
+        SELECT dc.*, parent.public_id AS parent_public_id
+        FROM document_chunk dc
+        LEFT JOIN document_chunk parent
+          ON parent.id = dc.parent_chunk_id
+         AND parent.tenant_id = dc.tenant_id
+         AND parent.knowledge_id = dc.knowledge_id
+         AND parent.file_id = dc.file_id
+        WHERE dc.file_id = #{fileId}
+          AND dc.tenant_id = #{tenantId}
+          AND dc.knowledge_id = #{knowledgeId}
+        ORDER BY dc.position
     </select>
 
     <select id="findByFileForUpdate" resultMap="DocumentChunkResultMap">
@@ -171,5 +200,22 @@
           AND public_id = #{chunkPublicId}
           AND status &lt;&gt; 1
           AND lock_version = #{lockVersion}
+    </delete>
+
+    <delete id="deleteEmptyParent">
+        DELETE FROM document_chunk parent
+        WHERE parent.id = #{parentId}
+          AND parent.tenant_id = #{tenantId}
+          AND parent.knowledge_id = #{knowledgeId}
+          AND parent.file_id = #{fileId}
+          AND parent.chunk_type = 1
+          AND NOT EXISTS (
+              SELECT 1
+              FROM document_chunk child
+              WHERE child.parent_chunk_id = parent.id
+                AND child.tenant_id = #{tenantId}
+                AND child.knowledge_id = #{knowledgeId}
+                AND child.file_id = #{fileId}
+          )
     </delete>
 </mapper>

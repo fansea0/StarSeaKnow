@@ -56,4 +56,9 @@ public interface DocumentChunkMapper extends BaseMapper<DocumentChunk> {
                      @Param("knowledgeId") long knowledgeId,
                      @Param("chunkPublicId") UUID chunkPublicId,
                      @Param("lockVersion") int lockVersion);
+
+    int deleteEmptyParent(@Param("parentId") long parentId,
+                          @Param("tenantId") long tenantId,
+                          @Param("knowledgeId") long knowledgeId,
+                          @Param("fileId") long fileId);
 }

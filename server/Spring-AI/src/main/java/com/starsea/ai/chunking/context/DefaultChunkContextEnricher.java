@@ -77,7 +77,8 @@ public final class DefaultChunkContextEnricher implements ChunkContextEnricher {
             String withoutOverlap = contentBuilder.build(current.getSectionPath(), null, body);
             int baseTokens = tokenCounter.count(withoutOverlap);
             if (baseTokens > maxTokens) {
-                throw new IllegalArgumentException("Current index text exceeds maxTokens");
+                throw new IllegalArgumentException("Current index text exceeds maxTokens: position="
+                        + current.getPosition() + ", tokens=" + baseTokens + ", maxTokens=" + maxTokens);
             }
 
             String overlap = null;

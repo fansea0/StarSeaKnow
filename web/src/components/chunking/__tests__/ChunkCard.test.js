@@ -76,6 +76,27 @@ describe('ChunkCard', () => {
     expect(wrapper.get('textarea').element.value).toBe('原始正文')
   })
 
+  it('uses a supplied child label and hides overlap controls without dropping server overlap payload', async () => {
+    updateChunk.mockResolvedValue({ data: { ...chunk, content: '子块已编辑', overlapEnabled: true, overlapTokenLimit: 32, lockVersion: 5 } })
+    const wrapper = mount(ChunkCard, {
+      props: {
+        knowledgeId: '11', fileId: '22', chunk: { ...chunk, overlapEnabled: true, overlapTokenLimit: 32 },
+        label: '检索子块 01', showOverlapControls: false,
+      },
+      global: { plugins: [ElementPlus] },
+    })
+
+    expect(wrapper.text()).toContain('检索子块 01')
+    expect(wrapper.find('[data-testid="overlap-switch"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-chunk"]').trigger('click')
+    await wrapper.get('textarea').setValue('子块已编辑')
+    await vi.advanceTimersByTimeAsync(650)
+
+    expect(updateChunk).toHaveBeenCalledWith('11', '22', 'chunk-1', {
+      content: '子块已编辑', overlapEnabled: true, overlapTokenLimit: 32, lockVersion: 4,
+    })
+  })
+
   it('debounces edits for 650ms, sends the complete editable contract, then reports saved', async () => {
     const pending = deferred()
     updateChunk.mockReturnValue(pending.promise)

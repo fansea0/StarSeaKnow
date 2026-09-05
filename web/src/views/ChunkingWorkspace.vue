@@ -74,7 +74,7 @@
           <div class="completion-banner__copy">
             <span class="completion-banner__eyebrow mono">INDEX / READY</span>
             <strong>索引建立完成</strong>
-            <p>已将 {{ chunks.length }} 个分块写入向量索引，现在可以在知识库中使用这份文档。</p>
+            <p>已将 {{ completionCountText }} 写入向量索引，现在可以在知识库中使用这份文档。</p>
           </div>
           <div class="completion-banner__actions">
             <el-button data-testid="back-to-knowledge" @click="backToKnowledge">返回知识库</el-button>
@@ -85,6 +85,7 @@
           :knowledge-id="knowledgeId"
           :file-id="fileId"
           :chunks="chunks"
+          :hierarchy="chunkHierarchy"
           :loading="chunksLoading || (processingLoading && !processingLoaded)"
           :loading-label="processingLoading && !processingLoaded ? '正在读取文件处理状态…' : '正在读取分块…'"
           :file-state="processing.state"
@@ -117,10 +118,13 @@
       :server-conflict="confirmConflict"
       :reloading="confirmReloading"
       :blocked="!canConfirm || confirmConflict || hasBlockingChunkSaves || fileMutationInProgress"
-      :total-count="chunks.length"
+      :total-count="chunkHierarchy.vectorCount"
       :enabled-count="overlapEnabledCount"
       :generated-count="overlapGeneratedCount"
       :unit-summary="overlapUnitSummary"
+      :hierarchical="chunkHierarchy.hierarchical"
+      :parent-count="chunkHierarchy.parentCount"
+      :child-count="chunkHierarchy.childCount"
       @confirm="submitVectorization"
       @reload="reloadConfirmState"
     />
@@ -138,6 +142,7 @@ import {
   reindexChunk,
 } from '../api/chunking'
 import { mergeStrategies } from '../features/chunking/strategyCatalog'
+import { groupChunks } from '../features/chunking/chunkHierarchy'
 import ChunkPreviewPanel from '../components/chunking/ChunkPreviewPanel.vue'
 import ChunkStrategyPanel from '../components/chunking/ChunkStrategyPanel.vue'
 import ContextConfirmDialog from '../components/chunking/ContextConfirmDialog.vue'
@@ -162,10 +167,18 @@ function descriptorStrategyConfig(strategy) {
       ...defaults,
     }
   }
+  if (strategy?.code === 'PARENT_CHILD') {
+    return {
+      parentMode: 'PARAGRAPH', parentMaxTokens: 1024,
+      childMaxTokens: 256, childOverlapTokens: 32,
+      ...defaults,
+    }
+  }
   return defaults
 }
 
 function descriptorContextConfig(strategy) {
+  if (strategy?.code === 'PARENT_CHILD') return {}
   const fallback = strategy?.code === 'GENERAL' ? { enabled: true, limit: 40 } : { enabled: false, limit: 40 }
   const source = strategy?.defaultContextConfig || {}
   const limit = Number.isInteger(source.limit) ? source.limit : (Number.isInteger(source.overlapTokens) ? source.overlapTokens : fallback.limit)
@@ -271,11 +284,17 @@ export default {
       return this.processingLoaded && !this.processingLoading && !this.chunksLoading
         && this.isCompleted && this.chunksLoadedKey === this.currentChunksKey && this.chunks.length > 0
     },
+    chunkHierarchy() { return groupChunks(this.chunks) },
+    completionCountText() {
+      return this.chunkHierarchy.hierarchical
+        ? `${this.chunkHierarchy.vectorCount} 个检索单元`
+        : `${this.chunkHierarchy.vectorCount} 个分块`
+    },
     canPreview() {
       return this.processingLoaded && !this.processingLoading && previewStates.has(Number(this.processing.state))
     },
     canConfirm() {
-      return this.processingLoaded && !this.processingLoading && confirmStates.has(Number(this.processing.state)) && this.chunks.length > 0
+      return this.processingLoaded && !this.processingLoading && confirmStates.has(Number(this.processing.state)) && this.chunkHierarchy.vectorCount > 0
     },
     canRetryPreview() {
       return this.processingLoaded && !this.processingLoading && this.showRetryPreview && this.retainedChunksLoaded
@@ -445,7 +464,9 @@ export default {
         [code]: {
           ...base,
           strategyConfig: { ...base.strategyConfig, ...(this.processing.policySnapshot || {}) },
-          contextConfig: normalizedContextConfig(this.processing.contextPolicy, base.contextConfig),
+          contextConfig: code === 'PARENT_CHILD'
+            ? {}
+            : normalizedContextConfig(this.processing.contextPolicy, base.contextConfig),
         },
       }
       this.restoredStrategyCodes.add(code)

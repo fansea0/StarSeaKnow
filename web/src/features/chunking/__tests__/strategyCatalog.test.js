@@ -29,6 +29,16 @@ describe('mergeStrategies', () => {
     expect(mergeStrategies('pdf', [])).toEqual([expect.objectContaining({ code: 'PARENT_CHILD', disabled: true })])
   })
 
+  it('uses an available backend parent-child descriptor instead of the local placeholder', () => {
+    const strategies = mergeStrategies('md', [
+      { code: 'PARENT_CHILD', available: true, configFields: [{ key: 'childMaxTokens', defaultValue: 256 }] },
+    ])
+
+    expect(strategies).toEqual([
+      expect.objectContaining({ code: 'PARENT_CHILD', disabled: false, title: '父子分块' }),
+    ])
+  })
+
   it('normalizes requested and supported file types before matching', () => {
     const strategies = mergeStrategies('.MD', [
       { code: 'MARKDOWN_OPTIMIZED', supportedFileTypes: ['.MD', '.mArKdOwN'], available: true },

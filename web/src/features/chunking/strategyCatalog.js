@@ -9,6 +9,10 @@ const presentation = {
     title: '通用分块',
     description: '按分隔符和字符上限快速、确定地拆分可提取文档。',
   },
+  PARENT_CHILD: {
+    title: '父子分块',
+    description: '对子块建立向量，命中后返回完整父块作为回答上下文。',
+  },
   MARKDOWN_OPTIMIZED: {
     title: 'MD 自适应分块',
     description: '按 Markdown 标题结构生成可调整的语义分块。',
@@ -36,7 +40,7 @@ export function mergeStrategies(fileType, backendStrategies) {
   const backendCatalog = strategies
     .filter((strategy) => {
       const code = normalizeStrategyCode(strategy?.code)
-      if (!code || code === 'PARENT_CHILD' || seenCodes.has(code)) {
+      if (!code || seenCodes.has(code)) {
         return false
       }
 
@@ -46,6 +50,9 @@ export function mergeStrategies(fileType, backendStrategies) {
     .map(strategy => enrichDescriptor(strategy, normalizeStrategyCode(strategy.code)))
 
   const rank = code => ({ GENERAL: 0, PARENT_CHILD: 1, MARKDOWN_OPTIMIZED: 2 }[code] ?? 3)
-  return [...backendCatalog, ...placeholderStrategies.map(strategy => ({ ...strategy }))]
+  const placeholders = placeholderStrategies
+    .filter(strategy => !seenCodes.has(strategy.code))
+    .map(strategy => ({ ...strategy }))
+  return [...backendCatalog, ...placeholders]
     .sort((left, right) => rank(left.code) - rank(right.code))
 }

@@ -67,4 +67,14 @@ describe('chunking API client', () => {
     createPreview(11, 22, request)
     expect(http.post).toHaveBeenCalledWith('/knowledge/11/files/22/chunk-preview', request)
   })
+
+  it('preserves the legacy token-only overlap contract used by parent-child children', () => {
+    updateChunk(11, 22, 'child-1', {
+      content: 'updated child', overlapEnabled: true, overlapTokenLimit: 32, lockVersion: 5,
+    })
+
+    expect(http.patch).toHaveBeenCalledWith('/knowledge/11/files/22/chunks/child-1', {
+      content: 'updated child', overlapEnabled: true, overlapTokenLimit: 32, lockVersion: 5,
+    })
+  })
 })

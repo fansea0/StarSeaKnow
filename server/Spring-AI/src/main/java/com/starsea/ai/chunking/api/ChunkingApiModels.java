@@ -35,6 +35,11 @@ public final class ChunkingApiModels {
                             "maxTokens", strategyConfig.maxTokens()),
                     null, replaceEditedDrafts, lockVersion);
         }
+
+        public PreviewRequest(String strategyCode, Map<String, Object> strategyConfig,
+                              boolean replaceEditedDrafts, int lockVersion) {
+            this(strategyCode, strategyConfig, null, replaceEditedDrafts, lockVersion);
+        }
     }
 
     public record EditChunkRequest(String content, Boolean overlapEnabled,
@@ -77,13 +82,15 @@ public final class ChunkingApiModels {
                                 int overlapCharacterCount, String overlapReductionReason,
                                 String overlapUnavailableReason, String lengthUnit,
                                 int bodyLength, Integer indexLength, int overlapActualLength,
-                                Map<String, Object> boundaryReason) {
+                                Map<String, Object> boundaryReason, String chunkType,
+                                UUID parentPublicId, int siblingPosition) {
         public ChunkResponse(UUID publicId, int position, String content,
                              List<String> sectionPath, Map<String, Object> sourceLocator,
                              int tokenCount, int status, boolean isModified, int lockVersion) {
             this(publicId, position, content, sectionPath, sourceLocator, tokenCount,
                     status, isModified, lockVersion, false, 40, OverlapUnit.TOKENS,
-                    null, 0, 0, null, null, "TOKENS", tokenCount, null, 0, Map.of());
+                    null, 0, 0, null, null, "TOKENS", tokenCount, null, 0,
+                    Map.of(), "SINGLE", null, position);
         }
 
         /** Legacy token-only response constructor. */
@@ -98,13 +105,48 @@ public final class ChunkingApiModels {
                     OverlapUnit.TOKENS, overlapContent, overlapTokenCount,
                     overlapContent == null ? 0 : overlapContent.codePointCount(0, overlapContent.length()),
                     null, overlapUnavailableReason, "TOKENS", tokenCount, null,
-                    overlapTokenCount, Map.of());
+                    overlapTokenCount, Map.of(), "SINGLE", null, position);
+        }
+
+        /** Parent-child compatibility constructor using token overlap metadata. */
+        public ChunkResponse(UUID publicId, int position, String content,
+                             List<String> sectionPath, Map<String, Object> sourceLocator,
+                             int tokenCount, int status, boolean isModified, int lockVersion,
+                             boolean overlapEnabled, int overlapTokenLimit,
+                             String overlapContent, int overlapTokenCount,
+                             String overlapUnavailableReason, String chunkType,
+                             UUID parentPublicId, int siblingPosition) {
+            this(publicId, position, content, sectionPath, sourceLocator, tokenCount,
+                    status, isModified, lockVersion, overlapEnabled, overlapTokenLimit,
+                    OverlapUnit.TOKENS, overlapContent, overlapTokenCount,
+                    overlapContent == null ? 0
+                            : overlapContent.codePointCount(0, overlapContent.length()),
+                    null, overlapUnavailableReason, "TOKENS", tokenCount, null,
+                    overlapTokenCount, Map.of(), chunkType, parentPublicId, siblingPosition);
+        }
+
+        /** Compatibility constructor for callers that predate hierarchy metadata. */
+        public ChunkResponse(UUID publicId, int position, String content,
+                             List<String> sectionPath, Map<String, Object> sourceLocator,
+                             int tokenCount, int status, boolean isModified, int lockVersion,
+                             boolean overlapEnabled, int overlapLimit, OverlapUnit overlapUnit,
+                             String overlapContent, int overlapTokenCount,
+                             int overlapCharacterCount, String overlapReductionReason,
+                             String overlapUnavailableReason, String lengthUnit,
+                             int bodyLength, Integer indexLength, int overlapActualLength,
+                             Map<String, Object> boundaryReason) {
+            this(publicId, position, content, sectionPath, sourceLocator, tokenCount,
+                    status, isModified, lockVersion, overlapEnabled, overlapLimit, overlapUnit,
+                    overlapContent, overlapTokenCount, overlapCharacterCount,
+                    overlapReductionReason, overlapUnavailableReason, lengthUnit, bodyLength,
+                    indexLength, overlapActualLength, boundaryReason, "SINGLE", null, position);
         }
 
         public ChunkResponse {
             sectionPath = sectionPath == null ? List.of() : List.copyOf(sectionPath);
             sourceLocator = sourceLocator == null ? Map.of() : Map.copyOf(sourceLocator);
             boundaryReason = boundaryReason == null ? Map.of() : Map.copyOf(boundaryReason);
+            chunkType = chunkType == null ? "SINGLE" : chunkType;
         }
 
         @JsonIgnore

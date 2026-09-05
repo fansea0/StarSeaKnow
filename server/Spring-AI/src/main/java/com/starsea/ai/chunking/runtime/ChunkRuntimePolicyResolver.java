@@ -7,6 +7,7 @@ import com.starsea.ai.chunking.model.ContextMode;
 import com.starsea.ai.chunking.model.DelimiterMode;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
 import com.starsea.ai.chunking.model.OverlapUnit;
+import com.starsea.ai.chunking.model.ParentChildPolicy;
 import com.starsea.ai.domain.FileProcessing;
 import org.springframework.stereotype.Component;
 
@@ -37,8 +38,25 @@ public final class ChunkRuntimePolicyResolver {
         return switch (code) {
             case "MARKDOWN_OPTIMIZED" -> markdown(code, policy, context, execution);
             case "GENERAL" -> general(code, policy, context, execution);
+            case "PARENT_CHILD" -> parentChild(code, policy, execution);
             default -> throw new IllegalArgumentException("Unknown persisted chunk strategy: " + strategyCode);
         };
+    }
+
+    private ChunkRuntimePolicy parentChild(String code, Map<String, Object> policy,
+                                           Map<String, Object> execution) {
+        ParentChildPolicy defaults = ParentChildPolicy.defaults();
+        ParentChildPolicy config = new ParentChildPolicy(
+                enumValue(policy, "parentMode", ParentChildPolicy.ParentMode.class, defaults.parentMode()),
+                integer(policy, "parentMaxTokens", defaults.parentMaxTokens()),
+                integer(policy, "childMaxTokens", defaults.childMaxTokens()),
+                integer(policy, "childOverlapTokens", defaults.childOverlapTokens()));
+        ContextConfig contextConfig = new ContextConfig(config.childOverlapTokens() > 0,
+                Math.max(config.childOverlapTokens(), 1), OverlapUnit.TOKENS,
+                ContextMode.COMPLETE_SENTENCE);
+        int maxIndexTokens = integer(execution, "tokenHardLimit", config.childMaxTokens());
+        return new ChunkRuntimePolicy(code, config, contextConfig, maxIndexTokens,
+                string(execution, "tokenizerId", string(policy, "tokenizer", null)));
     }
 
     private ChunkRuntimePolicy markdown(String code, Map<String, Object> policy,

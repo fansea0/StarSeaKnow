@@ -11,6 +11,7 @@ import com.starsea.ai.chunking.indexing.ChunkVectorGateway;
 import com.starsea.ai.chunking.indexing.ChunkVectorLifecycle;
 import com.starsea.ai.chunking.indexing.DurableChunkVectorLifecycle;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
@@ -185,6 +186,8 @@ public class ChunkCommandService {
         ChunkRuntimePolicy runtimePolicy = runtimePolicyResolver.resolve(processing);
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, request.lockVersion());
+        ChunkType targetType = requireVectorizable(target, "edited");
+        requireChildOverlapMatchesPolicy(processing, targetType, request);
         int overlapLimit = requireOverlapLimit(request, target);
         com.starsea.ai.chunking.model.OverlapUnit overlapUnit = target.getOverlapUnit() == null
                 ? com.starsea.ai.chunking.model.OverlapUnit.TOKENS : target.getOverlapUnit();
@@ -238,6 +241,7 @@ public class ChunkCommandService {
         ChunkRuntimePolicy runtimePolicy = runtimePolicyResolver.resolve(processing);
         DocumentChunk target = requireLockedChunk(
                 knowledgeId, fileId, tenantId, chunkPublicId, lockVersion);
+        ChunkType targetType = requireVectorizable(target, "deleted");
         DocumentChunk dependentCandidate = lockOverlapDependent(
                 fileId, tenantId, knowledgeId, target);
         DocumentChunk dependent = changedOverlapAfterSourceDeletion(
@@ -251,6 +255,9 @@ public class ChunkCommandService {
         if (deleted != 1) {
             throw ChunkingException.conflict("Chunk state or lock version changed concurrently");
         }
+        if (targetType == ChunkType.CHILD && target.getParentChunkId() != null) {
+            chunkMapper.deleteEmptyParent(target.getParentChunkId(), tenantId, knowledgeId, fileId);
+        }
         int adjustingLockVersion = moveToAdjustingIfNeeded(processing, knowledgeId, fileId);
         scheduleVectorCleanup(tenantId, knowledgeId, fileId, adjustingLockVersion,
                 vectorObligations(tenantId, knowledgeId, fileId, target, dependent));
@@ -261,8 +268,8 @@ public class ChunkCommandService {
     public void requireConfirmable(long knowledgeId, long fileId) {
         long tenantId = requireTenantId();
         requireScopedProcessing(knowledgeId, fileId, tenantId);
-        if (chunkMapper.findByFile(fileId, tenantId, knowledgeId).isEmpty()) {
-            throw ChunkingException.unprocessable("Confirmation requires at least one chunk");
+        if (chunkMapper.findByFile(fileId, tenantId, knowledgeId).stream().noneMatch(this::isVectorizable)) {
+            throw ChunkingException.unprocessable("Confirmation requires at least one chunk that can be vectorized");
         }
     }
 
@@ -437,8 +444,9 @@ public class ChunkCommandService {
         if (target.getPosition() == null) {
             return null;
         }
-        return chunkMapper.findScopedByPosition(
+        DocumentChunk previous = chunkMapper.findScopedByPosition(
                 fileId, tenantId, knowledgeId, target.getPosition() - 1);
+        return isVectorizable(previous) && sameParent(target, previous) ? previous : null;
     }
 
     private DocumentChunk lockOverlapDependent(
@@ -452,6 +460,8 @@ public class ChunkCommandService {
         return dependent != null
                 && Integer.valueOf(expectedPosition).equals(dependent.getPosition())
                 && Boolean.TRUE.equals(dependent.getOverlapEnabled())
+                && isVectorizable(dependent)
+                && sameParent(target, dependent)
                 ? dependent : null;
     }
 
@@ -519,6 +529,9 @@ public class ChunkCommandService {
         copy.setTenantId(source.getTenantId());
         copy.setKnowledgeId(source.getKnowledgeId());
         copy.setFileId(source.getFileId());
+        copy.setChunkType(source.getChunkType());
+        copy.setParentChunkId(source.getParentChunkId());
+        copy.setSiblingPosition(source.getSiblingPosition());
         copy.setPosition(source.getPosition());
         copy.setContent(source.getContent());
         copy.setOverlapEnabled(source.getOverlapEnabled());
@@ -600,7 +613,7 @@ public class ChunkCommandService {
     private void addVectorObligation(
             LinkedHashSet<ChunkVectorLifecycle.CleanupObligation> obligations,
             long tenantId, long knowledgeId, long fileId, DocumentChunk chunk) {
-        UUID vectorId = currentVectorId(chunk);
+        UUID vectorId = isVectorizable(chunk) ? currentVectorId(chunk) : null;
         if (vectorId != null) {
             obligations.add(new ChunkVectorLifecycle.CleanupObligation(
                     vectorId, tenantId, knowledgeId, fileId, chunk.getPublicId()));
@@ -689,7 +702,57 @@ public class ChunkCommandService {
                 overlapLimit(chunk), unit, chunk.getOverlapContent(), value(chunk.getOverlapTokenCount()),
                 value(chunk.getOverlapCharacterCount()), chunk.getOverlapReductionReason(),
                 overlapUnavailableReason(chunk), unit.name(), bodyLength, indexLength,
-                actualLength, chunk.getBoundaryReason());
+                actualLength, chunk.getBoundaryReason(), chunkType(chunk).name(),
+                chunk.getParentPublicId(), siblingPosition(chunk));
+    }
+
+    private ChunkType requireVectorizable(DocumentChunk chunk, String action) {
+        ChunkType type = chunkType(chunk);
+        if (type == ChunkType.PARENT) {
+            throw ChunkingException.unprocessable("A parent context chunk cannot be " + action);
+        }
+        return type;
+    }
+
+    private boolean isVectorizable(DocumentChunk chunk) {
+        return chunk != null && chunkType(chunk) != ChunkType.PARENT;
+    }
+
+    private ChunkType chunkType(DocumentChunk chunk) {
+        return ChunkType.fromCode(chunk == null || chunk.getChunkType() == null ? 0 : chunk.getChunkType());
+    }
+
+    private int siblingPosition(DocumentChunk chunk) {
+        return chunk.getSiblingPosition() == null ? value(chunk.getPosition()) : chunk.getSiblingPosition();
+    }
+
+    private boolean sameParent(DocumentChunk left, DocumentChunk right) {
+        if (chunkType(left) != ChunkType.CHILD) {
+            return chunkType(right) != ChunkType.PARENT;
+        }
+        return chunkType(right) == ChunkType.CHILD
+                && Objects.equals(left.getParentChunkId(), right.getParentChunkId());
+    }
+
+    private void requireChildOverlapMatchesPolicy(FileProcessing processing, ChunkType type,
+                                                  EditChunkRequest request) {
+        if (type != ChunkType.CHILD) return;
+        Object raw = processing.getPolicySnapshot() == null ? null
+                : processing.getPolicySnapshot().get("childOverlapTokens");
+        if (!(raw instanceof Number number) || number.doubleValue() != number.intValue()
+                || number.intValue() < 0 || number.intValue() > 128) {
+            throw ChunkingException.conflict("The child overlap policy snapshot is invalid");
+        }
+        int configured = number.intValue();
+        int requested = request.resolvedOverlapLimit() == null ? -1 : request.resolvedOverlapLimit();
+        com.starsea.ai.chunking.model.OverlapUnit unit = request.overlapUnit();
+        if (request.overlapTokenLimit() != null) unit = com.starsea.ai.chunking.model.OverlapUnit.TOKENS;
+        if (!Objects.equals(request.overlapEnabled(), configured > 0)
+                || requested != Math.max(configured, 1)
+                || unit != null && unit != com.starsea.ai.chunking.model.OverlapUnit.TOKENS) {
+            throw ChunkingException.unprocessable(
+                    "Child overlap settings must match the file strategy snapshot");
+        }
     }
 
     private int overlapLimit(DocumentChunk chunk) {

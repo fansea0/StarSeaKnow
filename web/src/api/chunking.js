@@ -21,11 +21,14 @@ export function getChunks(knowledgeId, fileId) {
 }
 
 export function updateChunk(knowledgeId, fileId, chunkPublicId, request) {
+  const legacyTokenLimit = request?.overlapLimit == null && request?.overlapTokenLimit != null
+  const overlap = legacyTokenLimit
+    ? { overlapTokenLimit: request.overlapTokenLimit }
+    : { overlapLimit: request?.overlapLimit, overlapUnit: request?.overlapUnit }
   return http.patch(filePath(knowledgeId, fileId, `/chunks/${chunkPublicId}`), {
     content: request?.content,
     overlapEnabled: request?.overlapEnabled,
-    overlapLimit: request?.overlapLimit,
-    overlapUnit: request?.overlapUnit,
+    ...overlap,
     lockVersion: request?.lockVersion,
   })
 }

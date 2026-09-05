@@ -1,7 +1,7 @@
 <template>
   <article class="chunk-card" :aria-disabled="actionsDisabled ? 'true' : 'false'">
     <header class="chunk-ribbon">
-      <span class="chunk-code mono">CHUNK {{ chunkNumber }}</span>
+      <span class="chunk-code mono">{{ cardLabel }}</span>
       <nav
         data-testid="section-path"
         :title="sectionPathText"
@@ -41,7 +41,7 @@
         <el-button v-if="conflict" link data-testid="reload-chunk" @click="$emit('reload', localChunk.publicId)">重新加载</el-button>
       </div>
 
-      <section class="overlap-setting" data-testid="overlap-switch">
+      <section v-if="showOverlapControls" class="overlap-setting" data-testid="overlap-switch">
         <div class="overlap-setting__heading">
           <strong>补充上文</strong>
           <span>使用服务端生成的相邻正文补充当前块语境</span>
@@ -54,7 +54,7 @@
         />
       </section>
 
-      <div v-if="overlapEnabled" class="overlap-details">
+      <div v-if="showOverlapControls && overlapEnabled" class="overlap-details">
         <label class="overlap-limit" data-testid="overlap-token-limit">
           <span>补充上限</span>
           <el-input-number
@@ -135,6 +135,8 @@ const props = defineProps({
   reindexDisabled: { type: Boolean, default: false },
   reloadEpoch: { type: Number, default: 0 },
   contextConfigFields: { type: Array, default: () => [] },
+  label: { type: String, default: '' },
+  showOverlapControls: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['updated', 'deleted', 'reload', 'reindex', 'save-state', 'delete-state'])
@@ -142,7 +144,9 @@ const localChunk = reactive({ ...props.chunk })
 const editing = ref(false)
 const editorValue = ref(props.chunk.content || '')
 const overlapEnabled = ref(Boolean(props.chunk.overlapEnabled))
-const initialOverlapLimit = chunk => chunk.overlapLimit ?? chunk.overlapTokenLimit
+const initialOverlapLimit = chunk => props.showOverlapControls
+  ? (chunk.overlapLimit ?? chunk.overlapTokenLimit)
+  : (chunk.overlapTokenLimit ?? chunk.overlapLimit)
 const overlapLimit = ref(initialOverlapLimit(props.chunk))
 const saveStatus = ref('')
 const errorMessage = ref('')
@@ -178,6 +182,7 @@ const boundaryMessages = Object.freeze({
 })
 
 const chunkNumber = computed(() => String((Number(localChunk.position) || 0) + 1).padStart(2, '0'))
+const cardLabel = computed(() => props.label || `CHUNK ${chunkNumber.value}`)
 const actionsDisabled = computed(() => props.disabled || deleteInProgress.value || Number(localChunk.status) === 1)
 const sectionPathText = computed(() => localChunk.sectionPath?.length ? localChunk.sectionPath.join(' / ') : '文档正文')
 const sourceLocatorText = computed(() => formatSourceLocator(localChunk.sourceLocator))
@@ -395,9 +400,13 @@ async function saveBody() {
   conflict.value = false
   saveStatus.value = '保存中'
   try {
+    const overlapPayload = props.showOverlapControls
+      ? { overlapLimit: snapshot.overlapLimit, overlapUnit: overlapUnit.value }
+      : { overlapTokenLimit: snapshot.overlapLimit }
     const response = await updateChunk(props.knowledgeId, props.fileId, localChunk.publicId, {
-      ...snapshot,
-      overlapUnit: overlapUnit.value,
+      content: snapshot.content,
+      overlapEnabled: snapshot.overlapEnabled,
+      ...overlapPayload,
       lockVersion: localChunk.lockVersion,
     })
     if (generation !== requestGeneration) return

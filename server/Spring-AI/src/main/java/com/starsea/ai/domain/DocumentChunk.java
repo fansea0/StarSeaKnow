@@ -30,6 +30,9 @@ public class DocumentChunk implements Serializable {
     private Long knowledgeId;
     private Long fileId;
     private Integer position;
+    private Integer chunkType;
+    private Long parentChunkId;
+    private Integer siblingPosition;
     private String content;
     private Boolean overlapEnabled;
     private Integer overlapLimit;
@@ -94,6 +97,24 @@ public class DocumentChunk implements Serializable {
     public void setOverlapTokenLimit(Integer overlapTokenLimit) {
         this.overlapLimit = overlapTokenLimit;
     }
+
+    @TableField(exist = false)
+    private UUID parentPublicId;
+
+    @TableField(exist = false)
+    private String parentContent;
+
+    @TableField(exist = false)
+    private List<String> parentSectionPath;
+
+    @TableField(exist = false)
+    private Map<String, Object> parentSourceLocator;
+
+    @TableField(exist = false)
+    private Integer parentPosition;
+
+    @TableField(exist = false)
+    private Integer parentStatus;
 
     @TableField(exist = false)
     private static final long serialVersionUID = 1L;

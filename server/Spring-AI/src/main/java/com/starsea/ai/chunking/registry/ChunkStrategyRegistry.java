@@ -8,6 +8,7 @@ import com.starsea.ai.chunking.model.ContextConfig;
 import com.starsea.ai.chunking.model.ContextMode;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
 import com.starsea.ai.chunking.model.OverlapUnit;
+import com.starsea.ai.chunking.model.ParentChildPolicy;
 import com.starsea.ai.chunking.model.ValidatedPreviewConfig;
 import com.starsea.ai.chunking.spi.ChunkPlanningStrategy;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -96,6 +97,17 @@ public final class ChunkStrategyRegistry {
                 ContextConfig context = context(rawContextConfig, strategy.descriptor().defaultContextConfig(),
                         OverlapUnit.TOKENS, ContextMode.COMPLETE_SENTENCE, false);
                 return new ValidatedPreviewConfig(config, context, ChunkPolicy.MAX_ALLOWED_TOKENS);
+            }
+            if ("PARENT_CHILD".equals(normalizedCode)) {
+                validateKeys(rawStrategyConfig, Set.of("parentMode", "parentMaxTokens",
+                        "childMaxTokens", "childOverlapTokens"));
+                validateKeys(rawContextConfig, Set.of());
+                ParentChildPolicy config = convertWithDefaults(
+                        rawStrategyConfig, parentChildDefaults(), ParentChildPolicy.class);
+                ContextConfig context = new ContextConfig(config.childOverlapTokens() > 0,
+                        Math.max(config.childOverlapTokens(), 1), OverlapUnit.TOKENS,
+                        ContextMode.COMPLETE_SENTENCE);
+                return new ValidatedPreviewConfig(config, context, config.childMaxTokens());
             }
             throw invalid("strategyCode", "The strategy does not declare a supported config contract");
         } catch (ChunkingException exception) {
@@ -187,6 +199,14 @@ public final class ChunkStrategyRegistry {
                 "targetTokens", config.targetTokens(), "maxTokens", config.maxTokens());
     }
 
+    private Map<String, Object> parentChildDefaults() {
+        ParentChildPolicy config = ParentChildPolicy.defaults();
+        return Map.of("parentMode", config.parentMode().name(),
+                "parentMaxTokens", config.parentMaxTokens(),
+                "childMaxTokens", config.childMaxTokens(),
+                "childOverlapTokens", config.childOverlapTokens());
+    }
+
     private ChunkingException invalid(String field, String message) {
         return ChunkingException.unprocessable("Invalid chunk strategy configuration", Map.of(
                 "code", "INVALID_STRATEGY_CONFIG",
@@ -196,7 +216,8 @@ public final class ChunkStrategyRegistry {
     private String fieldFrom(RuntimeException exception) {
         String message = rootMessage(exception);
         for (String field : List.of("delimiterMode", "delimiter", "maxCharacters",
-                "minTokens", "targetTokens", "maxTokens", "enabled", "limit")) {
+                "minTokens", "targetTokens", "maxTokens", "parentMode", "parentMaxTokens",
+                "childMaxTokens", "childOverlapTokens", "enabled", "limit")) {
             if (message.startsWith(field + ":") || message.contains("[\"" + field + "\"]")) {
                 return field;
             }

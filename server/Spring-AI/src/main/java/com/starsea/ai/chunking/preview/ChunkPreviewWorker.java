@@ -5,6 +5,8 @@ import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.general.UnicodeText;
 import com.starsea.ai.chunking.model.ChunkDraft;
 import com.starsea.ai.chunking.model.ChunkPolicy;
+import com.starsea.ai.chunking.model.ChunkPlan;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.ChunkInputResult;
 import com.starsea.ai.chunking.model.ChunkPlanningRequest;
 import com.starsea.ai.chunking.model.ChunkPlanningResult;
@@ -14,6 +16,8 @@ import com.starsea.ai.chunking.model.FileResource;
 import com.starsea.ai.chunking.model.GeneralChunkConfig;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.PipelineState;
+import com.starsea.ai.chunking.model.ParentChildPolicy;
+import com.starsea.ai.chunking.model.PlannedChunk;
 import com.starsea.ai.chunking.model.PreviewSummary;
 import com.starsea.ai.chunking.processing.FileProcessingService;
 import com.starsea.ai.chunking.registry.ChunkInputProviderRegistry;
@@ -138,20 +142,30 @@ public class ChunkPreviewWorker {
                 ChunkInputProvider provider = inputProviderRegistry.require(
                         job.strategyCode(), source.file().getType());
                 ChunkInputResult input = provider.provide(resource, sourceHash, job.strategyConfig());
-                ChunkPlanningResult planning = planner.plan(new ChunkPlanningRequest(
-                        input.structure(), job.strategyConfig(), job.contextConfig(), job.maxIndexTokens()));
-                List<ChunkDraft> drafts = validateDrafts(
-                        planning.drafts(), job.strategyConfig(), job.maxIndexTokens());
                 verifyUnchangedSource(source.path(), sourceHash);
                 Map<String, Object> executionMetadata = new LinkedHashMap<>(input.extractorMetadata());
                 executionMetadata.put("tokenizerId", tokenCounter.id());
                 executionMetadata.put("tokenHardLimit", job.maxIndexTokens());
-                PreviewSummary summary = new PreviewSummary(input.preprocessingSummary(),
-                        input.delimiterMatched(), planning.forcedSplitCount(),
-                        planning.tokenLimitedSplitCount());
-                persistence.replace(job, sourceHash, job.plannerVersion(),
-                        policySnapshot(job.strategyConfig()), contextSnapshot(job.contextConfig()),
-                        Map.copyOf(executionMetadata), summary.toMap(), drafts);
+                if (job.strategyConfig() instanceof ParentChildPolicy parentChild) {
+                    ChunkPlan plan = validatePlan(planner.planConfigured(
+                            input.structure(), parentChildSnapshot(parentChild)));
+                    PreviewSummary summary = new PreviewSummary(input.preprocessingSummary(),
+                            input.delimiterMatched(), 0, 0);
+                    persistence.replacePlan(job, sourceHash, job.plannerVersion(),
+                            policySnapshot(job.strategyConfig()), contextSnapshot(job.contextConfig()),
+                            Map.copyOf(executionMetadata), summary.toMap(), plan);
+                } else {
+                    ChunkPlanningResult planning = planner.plan(new ChunkPlanningRequest(
+                            input.structure(), job.strategyConfig(), job.contextConfig(), job.maxIndexTokens()));
+                    List<ChunkDraft> drafts = validateDrafts(
+                            planning.drafts(), job.strategyConfig(), job.maxIndexTokens());
+                    PreviewSummary summary = new PreviewSummary(input.preprocessingSummary(),
+                            input.delimiterMatched(), planning.forcedSplitCount(),
+                            planning.tokenLimitedSplitCount());
+                    persistence.replace(job, sourceHash, job.plannerVersion(),
+                            policySnapshot(job.strategyConfig()), contextSnapshot(job.contextConfig()),
+                            Map.copyOf(executionMetadata), summary.toMap(), drafts);
+                }
             }
         } catch (Exception exception) {
             markFailed(job, exception);
@@ -164,10 +178,17 @@ public class ChunkPreviewWorker {
                                         FileResource resource) {
         DocumentStructureParser parser = parserRegistry.require(resource.fileType());
         ParsedStructure structure = parser.parse(resource);
-        ChunkPolicy policy = job.policy();
-        List<ChunkDraft> drafts = validateDrafts(planner.plan(structure, policy),
-                policy, job.maxIndexTokens());
-        persistence.replace(job, sourceHash, planner.plannerVersion(), policySnapshot(policy), drafts);
+        if (job.strategyConfig() instanceof ParentChildPolicy parentChild) {
+            ChunkPlan plan = validatePlan(planner.planConfigured(structure, parentChildSnapshot(parentChild)));
+            persistence.replacePlan(job, sourceHash, planner.plannerVersion(), policySnapshot(parentChild),
+                    contextSnapshot(job.contextConfig()), Map.of("tokenizerId", tokenCounter.id(),
+                            "tokenHardLimit", job.maxIndexTokens()), Map.of(), plan);
+        } else {
+            ChunkPolicy policy = job.policy();
+            List<ChunkDraft> drafts = validateDrafts(planner.plan(structure, policy),
+                    policy, job.maxIndexTokens());
+            persistence.replace(job, sourceHash, planner.plannerVersion(), policySnapshot(policy), drafts);
+        }
     }
 
     private SourceSnapshot createSnapshot(long fileId, String fileType, Path source) throws IOException {
@@ -286,6 +307,46 @@ public class ChunkPreviewWorker {
         return List.copyOf(normalized);
     }
 
+    private ChunkPlan validatePlan(ChunkPlan plan) {
+        if (plan == null || plan.chunks().isEmpty()) {
+            throw new IllegalArgumentException("The source document produced no chunks");
+        }
+        boolean vectorizable = false;
+        Map<String, PlannedChunk> preceding = new LinkedHashMap<>();
+        java.util.ArrayList<PlannedChunk> normalized = new java.util.ArrayList<>(plan.chunks().size());
+        for (PlannedChunk planned : plan.chunks()) {
+            ChunkDraft draft = planned.draft();
+            if (draft == null || UnicodeText.isBlank(draft.content())) {
+                throw new IllegalArgumentException("The planner produced an invalid chunk");
+            }
+            int bodyTokens = tokenCounter.count(draft.content());
+            int totalTokens = tokenCounter.count(ChunkIndexContentBuilder.preview(
+                    draft.sectionPath(), draft.content()));
+            if (bodyTokens < 0 || totalTokens < 0 || planned.type() != ChunkType.PARENT
+                    && (totalTokens > plan.indexMaxTokens()
+                    || totalTokens > ChunkPolicy.MAX_ALLOWED_TOKENS)) {
+                throw new IllegalArgumentException("The planner produced a chunk that exceeds the token budget");
+            }
+            if (planned.type() == ChunkType.CHILD) {
+                PlannedChunk parent = preceding.get(planned.parentKey());
+                if (parent == null || parent.type() != ChunkType.PARENT) {
+                    throw new IllegalArgumentException("The planner produced an invalid parent-child relationship");
+                }
+            }
+            vectorizable |= planned.type() != ChunkType.PARENT;
+            PlannedChunk value = new PlannedChunk(planned.key(), planned.parentKey(), planned.type(),
+                    planned.siblingPosition(), new ChunkDraft(draft.sectionPath(), draft.content(),
+                    draft.sourceLocator(), bodyTokens, draft.boundaryReason()),
+                    planned.overlapEnabled(), planned.overlapTokenLimit());
+            normalized.add(value);
+            preceding.put(value.key(), value);
+        }
+        if (!vectorizable) {
+            throw new IllegalArgumentException("The source document produced no vectorizable chunks");
+        }
+        return new ChunkPlan(normalized, plan.indexMaxTokens());
+    }
+
     private Map<String, Object> policySnapshot(ChunkStrategyConfig config) {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         if (config instanceof ChunkPolicy policy) {
@@ -300,10 +361,20 @@ public class ChunkPreviewWorker {
             snapshot.put("collapseWhitespace", general.collapseWhitespace());
             snapshot.put("removeUrls", general.removeUrls());
             snapshot.put("removeEmails", general.removeEmails());
+        } else if (config instanceof ParentChildPolicy parentChild) {
+            snapshot.putAll(parentChildSnapshot(parentChild));
+            snapshot.put("tokenizer", tokenCounter.id());
         } else {
             throw new IllegalArgumentException("Unsupported chunk strategy config");
         }
         return Map.copyOf(snapshot);
+    }
+
+    private Map<String, Object> parentChildSnapshot(ParentChildPolicy policy) {
+        return Map.of("parentMode", policy.parentMode().name(),
+                "parentMaxTokens", policy.parentMaxTokens(),
+                "childMaxTokens", policy.childMaxTokens(),
+                "childOverlapTokens", policy.childOverlapTokens());
     }
 
     private Map<String, Object> contextSnapshot(ContextConfig context) {
@@ -336,6 +407,7 @@ public class ChunkPreviewWorker {
 
     private void markFailed(Job job, Exception exception) {
         String message = failureSummary(exception);
+        log.error("Chunk preview failed for file {}", job.fileId(), exception);
         try {
             processingService.fail(job.knowledgeId(), job.fileId(), PipelineState.CHUNKING,
                     job.lockVersion(), 0, message);

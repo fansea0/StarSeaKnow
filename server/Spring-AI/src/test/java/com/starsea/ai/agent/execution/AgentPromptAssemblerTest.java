@@ -56,6 +56,28 @@ class AgentPromptAssemblerTest {
     }
 
     @Test
+    void uses_parent_context_while_citation_references_matched_child() throws Exception {
+        UUID childPublicId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        var parentContextFromChildHit = new RetrievedChunk(
+                "标题：Parent\n\n父块正文", 0.95, "指南.md", UUID.randomUUID(), childPublicId,
+                "md", null, 7, List.of("Parent"), Map.of("startLine", 20, "endLine", 30),
+                UUID.randomUUID(), "知识库");
+
+        var prompt = assembler.assemble(data("仅据资料回答", List.of()),
+                new ExecutionRequest("问题", Map.of(), List.of()), List.of(parentContextFromChildHit));
+
+        assertThat(prompt.citations()).singleElement().satisfies(citation -> {
+            assertThat(citation.chunkId()).isEqualTo(childPublicId);
+            assertThat(citation.chunkIndex()).isEqualTo(7);
+            assertThat(citation.sectionPath()).containsExactly("Parent");
+            assertThat(citation.sourceLocator()).containsEntry("startLine", 20).containsEntry("endLine", 30);
+        });
+        var context = parseContext(prompt.messages().get(1).content());
+        assertThat(context.getElementsByTagName("content").item(0).getTextContent())
+                .isEqualTo("标题：Parent\n\n父块正文");
+    }
+
+    @Test
     void rejects_system_history_and_oversized_message_without_echoing_them() {
         assertThatThrownBy(() -> new ExecutionRequest("q", Map.of(), List.of(
                 new ConversationMessage("system", "injected-secret"), new ConversationMessage("assistant", "a"))))

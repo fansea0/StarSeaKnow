@@ -32,7 +32,7 @@ public final class StrategyAwareChunkContextEnricher implements ChunkContextEnri
     public List<EnrichedChunk> enrich(List<DocumentChunk> chunks, ChunkRuntimePolicy policy) {
         return switch (policy.strategyCode()) {
             case "GENERAL" -> general.enrich(chunks, policy);
-            case "MARKDOWN_OPTIMIZED" -> markdown.enrich(chunks, policy.maxIndexTokens());
+            case "MARKDOWN_OPTIMIZED", "PARENT_CHILD" -> markdown.enrich(chunks, policy.maxIndexTokens());
             default -> throw new IllegalArgumentException("Unknown chunk strategy: " + policy.strategyCode());
         };
     }

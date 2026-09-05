@@ -5,6 +5,7 @@ import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.general.UnicodeText;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
 import com.starsea.ai.chunking.processing.FileProcessingService;
@@ -218,6 +219,7 @@ public class ChunkVectorWorker {
                                  int maxTokens,
                                  FileSnapshot file) {
         List<DocumentChunk> detachedChunks = allSnapshots.stream()
+                .filter(ChunkSnapshot::vectorizable)
                 .map(ChunkSnapshot::detached)
                 .toList();
         List<EnrichedChunk> enriched = enricher.enrich(detachedChunks, maxTokens);
@@ -332,7 +334,7 @@ public class ChunkVectorWorker {
                         prepared.file().publicId(),
                         value(chunk.getPosition()),
                         prepared.file().fileType(),
-                        chunk.getSectionPath()));
+                        chunk.getSectionPath(), chunkType(chunk), chunk.getParentPublicId()));
             }
         }
         for (ChunkVectorGateway.VectorDocument document : documents) {
@@ -413,6 +415,13 @@ public class ChunkVectorWorker {
                 job.fileId(), job.tenantId(), job.knowledgeId());
         Map<Long, DocumentChunk> currentById = byId(chunks);
         requireExactChunkSet(currentById, job.allChunks());
+        for (ChunkSnapshot snapshot : job.allChunks()) {
+            if (!snapshot.vectorizable()) {
+                DocumentChunk current = currentById.get(snapshot.id());
+                requireSnapshot(current, snapshot);
+                activateParent(current, snapshot);
+            }
+        }
         for (EnrichedChunk enriched : prepared.chunks()) {
             ChunkSnapshot snapshot = job.snapshot(enriched.chunk().getId());
             DocumentChunk current = currentById.get(snapshot.id());
@@ -486,6 +495,24 @@ public class ChunkVectorWorker {
         current.setIndexingLockVersion(null);
     }
 
+    private void activateParent(DocumentChunk current, ChunkSnapshot snapshot) {
+        DocumentChunk patch = new DocumentChunk();
+        patch.setStatus(ChunkStatus.ACTIVE.code());
+        UpdateWrapper<DocumentChunk> update = chunkScope(current, snapshot)
+                .set("vector_id", null)
+                .set("pending_vector_id", null)
+                .set("indexing_lock_version", null)
+                .set("last_error", null)
+                .setSql("lock_version = lock_version + 1");
+        if (chunkMapper.update(patch, update) != 1) {
+            throw ChunkingException.conflict("Parent chunk changed before activation");
+        }
+        current.setStatus(ChunkStatus.ACTIVE.code());
+        current.setVectorId(null);
+        current.setPendingVectorId(null);
+        current.setIndexingLockVersion(null);
+    }
+
     private void restoreBatch(BatchJob job, RuntimeException original) {
         try {
             transactions.executeWithoutResult(status -> {
@@ -495,7 +522,7 @@ public class ChunkVectorWorker {
                 requireExactJobChunks(job.tenantId(), job.knowledgeId(), job.fileId(),
                         job.allChunks(), job.chunks());
                 restoreIndexingTargets(job.tenantId(), job.knowledgeId(), job.fileId(),
-                        job.chunks(), null);
+                        job.allChunks(), null);
                 stateService.fail(job.knowledgeId(), job.fileId(), PipelineState.VECTORIZING,
                         value(processing.getLockVersion()), 0, failureSummary(original));
             });
@@ -679,6 +706,10 @@ public class ChunkVectorWorker {
                 || !Objects.equals(current.getKnowledgeId(), expected.knowledgeId())
                 || !Objects.equals(current.getFileId(), expected.fileId())
                 || !Objects.equals(current.getPosition(), expected.position())
+                || (current.getChunkType() == null ? 0 : current.getChunkType()) != expected.chunkType().code()
+                || !Objects.equals(current.getParentChunkId(), expected.parentChunkId())
+                || !Objects.equals(current.getSiblingPosition() == null ? current.getPosition()
+                        : current.getSiblingPosition(), expected.siblingPosition())
                 || !Objects.equals(current.getContent(), expected.content())
                 || !Objects.equals(current.getLockVersion(), expected.lockVersion())
                 || !Objects.equals(current.getContentHash(), expected.contentHash())
@@ -713,6 +744,10 @@ public class ChunkVectorWorker {
                 || !Objects.equals(current.getKnowledgeId(), expected.knowledgeId())
                 || !Objects.equals(current.getFileId(), expected.fileId())
                 || !Objects.equals(current.getPosition(), expected.position())
+                || (current.getChunkType() == null ? 0 : current.getChunkType()) != expected.chunkType().code()
+                || !Objects.equals(current.getParentChunkId(), expected.parentChunkId())
+                || !Objects.equals(current.getSiblingPosition() == null ? current.getPosition()
+                        : current.getSiblingPosition(), expected.siblingPosition())
                 || !Objects.equals(current.getContent(), expected.content())
                 || !Objects.equals(current.getSectionPath() == null ? List.of() : current.getSectionPath(),
                 expected.sectionPath())
@@ -785,6 +820,14 @@ public class ChunkVectorWorker {
         }
     }
 
+    private ChunkType chunkType(DocumentChunk chunk) {
+        try {
+            return ChunkType.fromCode(chunk.getChunkType() == null ? 0 : chunk.getChunkType());
+        } catch (IllegalArgumentException exception) {
+            throw ChunkingException.conflict("The current chunk type is invalid");
+        }
+    }
+
     private String failureSummary(RuntimeException failure) {
         String message = failure.getMessage();
         if (message == null || message.isBlank()) {
@@ -831,7 +874,11 @@ public class ChunkVectorWorker {
             UUID vectorId,
             UUID pendingVectorId,
             Integer indexingLockVersion,
-            int lockVersion) {
+            int lockVersion,
+            ChunkType chunkType,
+            Long parentChunkId,
+            UUID parentChunkPublicId,
+            Integer siblingPosition) {
 
         public ChunkSnapshot {
             Objects.requireNonNull(publicId, "publicId");
@@ -839,6 +886,7 @@ public class ChunkVectorWorker {
             sectionPath = sectionPath == null ? List.of() : List.copyOf(sectionPath);
             sourceLocator = immutableMap(sourceLocator);
             boundaryReason = immutableMap(boundaryReason);
+            chunkType = chunkType == null ? ChunkType.SINGLE : chunkType;
         }
 
         public static ChunkSnapshot afterMarking(DocumentChunk chunk, int indexingLockVersion,
@@ -872,7 +920,13 @@ public class ChunkVectorWorker {
                     chunk.getOverlapEnabled(), chunk.getOverlapLimit(), chunk.getOverlapUnit(),
                     chunk.getSectionPath(), chunk.getSourceLocator(), chunk.getBoundaryReason(),
                     chunk.getTokenCount(), status, chunk.getIsModified(), chunk.getVectorId(),
-                    pendingVectorId, indexingLockVersion, lockVersion);
+                    pendingVectorId, indexingLockVersion, lockVersion,
+                    chunkType(chunk), chunk.getParentChunkId(), chunk.getParentPublicId(),
+                    chunk.getSiblingPosition() == null ? chunk.getPosition() : chunk.getSiblingPosition());
+        }
+
+        public boolean vectorizable() {
+            return chunkType != ChunkType.PARENT;
         }
 
         DocumentChunk detached() {
@@ -883,6 +937,10 @@ public class ChunkVectorWorker {
             chunk.setKnowledgeId(knowledgeId);
             chunk.setFileId(fileId);
             chunk.setPosition(position);
+            chunk.setChunkType(chunkType.code());
+            chunk.setParentChunkId(parentChunkId);
+            chunk.setParentPublicId(parentChunkPublicId);
+            chunk.setSiblingPosition(siblingPosition);
             chunk.setContent(content);
             chunk.setContentHash(contentHash);
             chunk.setOverlapEnabled(overlapEnabled);
@@ -904,6 +962,10 @@ public class ChunkVectorWorker {
         /** Legacy accessor retained for token-only callers for one release. */
         public Integer overlapTokenLimit() {
             return overlapLimit;
+        }
+
+        private static ChunkType chunkType(DocumentChunk chunk) {
+            return ChunkType.fromCode(chunk.getChunkType() == null ? 0 : chunk.getChunkType());
         }
 
         private static Map<String, Object> immutableMap(Map<String, Object> source) {
@@ -1100,9 +1162,9 @@ public class ChunkVectorWorker {
         boolean matches(FileProcessing processing, ChunkRuntimePolicyResolver resolver) {
             return Objects.equals(strategyCode, processing.getStrategyCode())
                     && Objects.equals(plannerVersion, processing.getPlannerVersion())
-                    && Objects.equals(policySnapshot, processing.getPolicySnapshot())
-                    && Objects.equals(contextPolicy, processing.getContextPolicy())
-                    && Objects.equals(executionMetadata, processing.getExecutionMetadata())
+                    && Objects.equals(policySnapshot, ChunkSnapshot.immutableMap(processing.getPolicySnapshot()))
+                    && Objects.equals(contextPolicy, ChunkSnapshot.immutableMap(processing.getContextPolicy()))
+                    && Objects.equals(executionMetadata, ChunkSnapshot.immutableMap(processing.getExecutionMetadata()))
                     && Objects.equals(runtimePolicy, resolver.resolve(processing));
         }
     }
@@ -1111,11 +1173,13 @@ public class ChunkVectorWorker {
                                 long fileId, Integer position, List<String> sectionPath,
                                 Long overlapSourceChunkId, String overlapContent,
                                 int overlapTokenCount, int overlapCharacterCount,
-                                String overlapReductionReason, String indexContent) {
+                                String overlapReductionReason, String indexContent,
+                                ChunkType chunkType, UUID parentChunkPublicId) {
         public PreparedChunk {
             Objects.requireNonNull(publicId, "publicId");
             sectionPath = sectionPath == null ? List.of() : List.copyOf(sectionPath);
             Objects.requireNonNull(indexContent, "indexContent");
+            chunkType = chunkType == null ? ChunkType.SINGLE : chunkType;
         }
 
         public static PreparedChunk from(EnrichedChunk value) {
@@ -1124,7 +1188,9 @@ public class ChunkVectorWorker {
                     chunk.getKnowledgeId(), chunk.getFileId(), chunk.getPosition(),
                     chunk.getSectionPath(), value.overlapSourceChunkId(), value.overlapContent(),
                     value.overlapTokenCount(), value.overlapCharacterCount(),
-                    value.overlapReductionReason(), value.indexContent());
+                    value.overlapReductionReason(), value.indexContent(),
+                    ChunkType.fromCode(chunk.getChunkType() == null ? 0 : chunk.getChunkType()),
+                    chunk.getParentPublicId());
         }
 
         EnrichedChunk enriched() {
@@ -1136,6 +1202,8 @@ public class ChunkVectorWorker {
             chunk.setFileId(fileId);
             chunk.setPosition(position);
             chunk.setSectionPath(sectionPath);
+            chunk.setChunkType(chunkType.code());
+            chunk.setParentPublicId(parentChunkPublicId);
             return new EnrichedChunk(chunk, overlapSourceChunkId, overlapContent,
                     overlapTokenCount, overlapCharacterCount, overlapReductionReason, indexContent);
         }

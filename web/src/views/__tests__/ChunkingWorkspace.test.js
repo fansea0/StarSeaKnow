@@ -211,6 +211,45 @@ describe('ChunkingWorkspace', () => {
     expect(wrapper.get('[data-strategy="MARKDOWN_OPTIMIZED"]').classes()).toContain('is-selected')
   })
 
+  it('submits backend parent-child settings without the general overlap contract', async () => {
+    getStrategies.mockResolvedValue({
+      data: {
+        ...strategyResponse.data,
+        strategies: [
+          ...strategyResponse.data.strategies,
+          {
+            code: 'PARENT_CHILD', available: true, supportedFileTypes: ['md'], plannerVersion: 'parent-v1',
+            configFields: [
+              { key: 'parentMode', defaultValue: 'PARAGRAPH' },
+              { key: 'parentMaxTokens', defaultValue: 1024 },
+              { key: 'childMaxTokens', defaultValue: 256 },
+              { key: 'childOverlapTokens', defaultValue: 32 },
+            ],
+            contextConfigFields: [],
+          },
+        ],
+      },
+    })
+    const wrapper = mountWorkspace()
+    await flushPromises()
+
+    await wrapper.get('[data-strategy="PARENT_CHILD"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="create-preview"]').trigger('click')
+    await flushPromises()
+
+    expect(createPreview).toHaveBeenCalledWith('11', '22', {
+      strategyCode: 'PARENT_CHILD',
+      strategyConfig: {
+        parentMode: 'PARAGRAPH', parentMaxTokens: 1024,
+        childMaxTokens: 256, childOverlapTokens: 32,
+      },
+      contextConfig: {},
+      replaceEditedDrafts: false,
+      lockVersion: 3,
+    })
+  })
+
   it('keeps independent GENERAL and Markdown form state and submits actual delimiters with context', async () => {
     const wrapper = mountWorkspace()
     await flushPromises()

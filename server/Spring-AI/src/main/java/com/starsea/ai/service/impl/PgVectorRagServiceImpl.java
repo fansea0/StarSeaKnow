@@ -4,7 +4,9 @@ import com.starsea.ai.auth.AuthContext;
 import com.starsea.ai.auth.AuthErrorCode;
 import com.starsea.ai.auth.AuthException;
 import com.starsea.ai.chunking.general.UnicodeText;
+import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.domain.DocumentChunk;
 import com.starsea.ai.domain.File;
 import com.starsea.ai.mapper.DocumentChunkMapper;
@@ -145,7 +147,7 @@ public class PgVectorRagServiceImpl implements RagService {
         return candidates.stream()
                 .filter(candidate -> currentGeneration(
                         candidate, activeChunks.get(candidate.publicId())))
-                .filter(candidate -> emitted.add(candidate.publicId()))
+                .filter(candidate -> emitted.add(contextIdentity(activeChunks.get(candidate.publicId()))))
                 .map(candidate -> toRetrievedChunk(candidate, activeChunks.get(candidate.publicId())))
                 .filter(Objects::nonNull)
                 .limit(query.topK())
@@ -167,6 +169,15 @@ public class PgVectorRagServiceImpl implements RagService {
     private static RetrievedChunk toRetrievedChunk(ScoredCandidate candidate, DocumentChunk chunk) {
         if (chunk == null) {
             return null;
+        }
+        if (isChild(chunk)) {
+            return new RetrievedChunk(
+                    ChunkIndexContentBuilder.preview(chunk.getParentSectionPath(), chunk.getParentContent()),
+                    candidate.score(), chunk.getSourceFileName(), chunk.getSourceDocumentPublicId(),
+                    chunk.getPublicId(), chunk.getSourceFileType(),
+                    mapInteger(chunk.getParentSourceLocator(), "pageNumber", "page_number"),
+                    chunk.getParentPosition(), chunk.getParentSectionPath(), chunk.getParentSourceLocator(),
+                    chunk.getSourceKnowledgePublicId(), chunk.getSourceKnowledgeName());
         }
         return new RetrievedChunk(chunk.getIndexContent(), candidate.score(), chunk.getSourceFileName(),
                 chunk.getSourceDocumentPublicId(), chunk.getPublicId(), chunk.getSourceFileType(),
@@ -200,7 +211,27 @@ public class PgVectorRagServiceImpl implements RagService {
                 && !UnicodeText.isBlank(chunk.getIndexContent())
                 && chunk.getSourceDocumentPublicId() != null
                 && chunk.getSourceFileName() != null
-                && chunk.getSourceFileType() != null;
+                && chunk.getSourceFileType() != null
+                && hasValidHierarchyContext(chunk);
+    }
+
+    private static boolean hasValidHierarchyContext(DocumentChunk chunk) {
+        int type = chunk.getChunkType() == null ? ChunkType.SINGLE.code() : chunk.getChunkType();
+        if (type == ChunkType.SINGLE.code()) return true;
+        return type == ChunkType.CHILD.code()
+                && chunk.getParentChunkId() != null
+                && chunk.getParentPublicId() != null
+                && !UnicodeText.isBlank(chunk.getParentContent())
+                && chunk.getParentPosition() != null
+                && Integer.valueOf(ChunkStatus.ACTIVE.code()).equals(chunk.getParentStatus());
+    }
+
+    private static boolean isChild(DocumentChunk chunk) {
+        return chunk != null && Integer.valueOf(ChunkType.CHILD.code()).equals(chunk.getChunkType());
+    }
+
+    private static UUID contextIdentity(DocumentChunk chunk) {
+        return isChild(chunk) ? chunk.getParentPublicId() : chunk.getPublicId();
     }
 
     private static int initialSearchLimit(int topK, long staleGenerations) {

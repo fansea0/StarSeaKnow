@@ -54,6 +54,14 @@
       @field-change="$emit('field-change', $event)"
     />
 
+    <ParentChildStrategyConfig
+      v-else-if="selectedCode === 'PARENT_CHILD'"
+      :initial-values="strategyConfig"
+      :disabled="configDisabled"
+      @config-change="$emit('config-change', $event)"
+      @validity-change="$emit('validity-change', $event)"
+    />
+
     <p v-if="error" class="strategy-error" role="alert">{{ error }}</p>
 
     <footer v-if="showPreviewAction" class="strategy-panel__footer">
@@ -73,6 +81,7 @@
 import { computed } from 'vue'
 import GeneralStrategyConfig from './GeneralStrategyConfig.vue'
 import MarkdownStrategyConfig from './MarkdownStrategyConfig.vue'
+import ParentChildStrategyConfig from './ParentChildStrategyConfig.vue'
 
 const props = defineProps({
   strategies: { type: Array, default: () => [] },

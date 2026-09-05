@@ -8,6 +8,7 @@ import com.starsea.ai.chunking.api.ChunkingController;
 import com.starsea.ai.chunking.api.ChunkingException;
 import com.starsea.ai.chunking.context.ChunkIndexContentBuilder;
 import com.starsea.ai.chunking.model.ChunkStatus;
+import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.ContextPolicy;
 import com.starsea.ai.chunking.model.EnrichedChunk;
 import com.starsea.ai.chunking.model.PipelineState;
@@ -80,6 +81,8 @@ class ChunkVectorServiceTest {
             UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final UUID SECOND_PUBLIC_ID =
             UUID.fromString("22222222-2222-2222-2222-222222222222");
+    private static final UUID PARENT_PUBLIC_ID =
+            UUID.fromString("33333333-3333-3333-3333-333333333333");
 
     @TempDir
     Path tempDir;
@@ -355,6 +358,241 @@ class ChunkVectorServiceTest {
         assertEquals(73, detached.getOverlapTokenLimit());
         assertEquals(com.starsea.ai.chunking.model.OverlapUnit.CHARACTERS,
                 detached.getOverlapUnit());
+    }
+
+    @Test
+    void confirmation_marks_every_hierarchy_row_but_schedules_only_children() throws Exception {
+        DocumentChunk parent = chunk(1L, PARENT_PUBLIC_ID, ChunkStatus.DRAFT, 0, "parent");
+        parent.setChunkType(ChunkType.PARENT.code());
+        DocumentChunk first = chunk(2L, FIRST_PUBLIC_ID, ChunkStatus.DRAFT, 0, "first");
+        first.setChunkType(ChunkType.CHILD.code());
+        first.setParentChunkId(parent.getId());
+        first.setParentPublicId(PARENT_PUBLIC_ID);
+        DocumentChunk second = chunk(3L, SECOND_PUBLIC_ID, ChunkStatus.DRAFT, 0, "second");
+        second.setChunkType(ChunkType.CHILD.code());
+        second.setParentChunkId(parent.getId());
+        second.setParentPublicId(PARENT_PUBLIC_ID);
+        Fixture fixture = fixture(PipelineState.CHUNKED, 3, sourceHash(),
+                List.of(parent, first, second));
+        fixture.processing.setPolicySnapshot(Map.of(
+                "childMaxTokens", 256, "childOverlapTokens", 32));
+        when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.CHUNKED,
+                PipelineState.CONFIRMED, 3)).thenReturn(new FileProcessingService.Transition(
+                KNOWLEDGE_ID, FILE_ID, PipelineState.CHUNKED, PipelineState.CONFIRMED,
+                4, 100, null, null));
+        when(fixture.stateService.transition(KNOWLEDGE_ID, FILE_ID, PipelineState.CONFIRMED,
+                PipelineState.VECTORIZING, 4)).thenReturn(new FileProcessingService.Transition(
+                KNOWLEDGE_ID, FILE_ID, PipelineState.CONFIRMED, PipelineState.VECTORIZING,
+                5, 0, null, null));
+
+        fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3));
+        fixture.dispatched.get().run();
+
+        var jobCaptor = org.mockito.ArgumentCaptor.forClass(ChunkVectorWorker.BatchJob.class);
+        verify(fixture.worker).vectorizeBatch(jobCaptor.capture());
+        assertEquals(List.of(PARENT_PUBLIC_ID, FIRST_PUBLIC_ID, SECOND_PUBLIC_ID),
+                jobCaptor.getValue().allChunks().stream()
+                        .map(ChunkVectorWorker.ChunkSnapshot::publicId).toList());
+        assertEquals(List.of(FIRST_PUBLIC_ID, SECOND_PUBLIC_ID),
+                jobCaptor.getValue().chunks().stream()
+                        .map(ChunkVectorWorker.ChunkSnapshot::publicId).toList());
+        assertEquals(256, jobCaptor.getValue().maxTokens());
+        verify(fixture.chunkMapper, times(3)).update(any(), any(Wrapper.class));
+    }
+
+    @Test
+    void confirmation_rejects_a_parent_only_file_before_state_changes() throws Exception {
+        DocumentChunk parent = chunk(1L, PARENT_PUBLIC_ID, ChunkStatus.DRAFT, 0, "parent");
+        parent.setChunkType(ChunkType.PARENT.code());
+        Fixture fixture = fixture(PipelineState.CHUNKED, 3, sourceHash(), List.of(parent));
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> fixture.service.confirm(KNOWLEDGE_ID, FILE_ID, new ConfirmRequest(3)));
+
+        assertEquals(422, failure.status().value());
+        verify(fixture.stateService, never()).transition(
+                anyLong(), anyLong(), any(), any(), anyInt());
+        verify(fixture.chunkMapper, never()).update(any(), any(Wrapper.class));
+        verify(fixture.worker, never()).vectorizeBatch(any());
+    }
+
+    @Test
+    void parent_cannot_be_reindexed() throws Exception {
+        DocumentChunk parent = chunk(1L, PARENT_PUBLIC_ID, ChunkStatus.ACTIVE, 2, "parent");
+        parent.setChunkType(ChunkType.PARENT.code());
+        Fixture fixture = fixture(PipelineState.COMPLETED, 7, sourceHash(), List.of(parent));
+
+        ChunkingException failure = assertThrows(ChunkingException.class,
+                () -> fixture.service.reindex(KNOWLEDGE_ID, FILE_ID, PARENT_PUBLIC_ID));
+
+        assertEquals(422, failure.status().value());
+        verify(fixture.stateService, never()).transition(
+                anyLong(), anyLong(), any(), any(), anyInt());
+        verify(fixture.chunkMapper, never()).update(any(), any(Wrapper.class));
+        verify(fixture.worker, never()).vectorizeSingle(any());
+    }
+
+    @Test
+    void batch_enriches_and_vectors_only_children_then_activates_parent_and_children() {
+        RecordingTransactionManager transactionManager = new RecordingTransactionManager();
+        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        FileMapper fileMapper = mock(FileMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
+        TokenCounter tokenCounter = mock(TokenCounter.class);
+        ChunkVectorGateway gateway = mock(ChunkVectorGateway.class);
+        FileProcessing processing = processing(PipelineState.VECTORIZING, 5, "hash");
+        DocumentChunk parent = hierarchicalChunk(
+                1L, PARENT_PUBLIC_ID, ChunkType.PARENT, null, null, ChunkStatus.INDEXING, 1);
+        DocumentChunk first = hierarchicalChunk(
+                2L, FIRST_PUBLIC_ID, ChunkType.CHILD, 1L, PARENT_PUBLIC_ID,
+                ChunkStatus.INDEXING, 1);
+        DocumentChunk second = hierarchicalChunk(
+                3L, SECOND_PUBLIC_ID, ChunkType.CHILD, 1L, PARENT_PUBLIC_ID,
+                ChunkStatus.INDEXING, 1);
+        List<DocumentChunk> rows = List.of(parent, first, second);
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(rows);
+        when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
+        AtomicReference<List<DocumentChunk>> enrichedInputs = new AtomicReference<>();
+        when(enricher.enrich(any(), eq(512))).thenAnswer(invocation -> {
+            List<DocumentChunk> inputs = invocation.getArgument(0);
+            enrichedInputs.set(inputs);
+            return inputs.stream().map(value ->
+                    new EnrichedChunk(value, null, null, 0, value.getContent())).toList();
+        });
+        when(tokenCounter.count(any())).thenReturn(10);
+        when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
+        ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
+                stateService, enricher, tokenCounter, gateway, transactions);
+
+        worker.vectorizeBatch(hierarchyBatchJob(rows, 5));
+
+        assertEquals(List.of(ChunkType.CHILD.code(), ChunkType.CHILD.code()),
+                enrichedInputs.get().stream().map(DocumentChunk::getChunkType).toList());
+        org.mockito.ArgumentCaptor<List<ChunkVectorGateway.VectorDocument>> documents =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(gateway).add(documents.capture());
+        assertEquals(List.of(FIRST_PUBLIC_ID, SECOND_PUBLIC_ID),
+                documents.getValue().stream()
+                        .map(ChunkVectorGateway.VectorDocument::publicId).toList());
+        assertTrue(documents.getValue().stream().allMatch(document ->
+                document.chunkType() == ChunkType.CHILD));
+        assertTrue(documents.getValue().stream().allMatch(document ->
+                PARENT_PUBLIC_ID.equals(document.parentChunkPublicId())));
+        var patches = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
+        verify(chunkMapper, times(3)).update(patches.capture(), any(Wrapper.class));
+        assertTrue(patches.getAllValues().stream()
+                .allMatch(patch -> patch.getStatus() == ChunkStatus.ACTIVE.code()));
+        assertNull(patches.getAllValues().get(0).getIndexContent());
+        verify(stateService).transition(KNOWLEDGE_ID, FILE_ID,
+                PipelineState.VECTORIZING, PipelineState.COMPLETED, 5);
+    }
+
+    @Test
+    void batch_failure_cleans_only_child_vectors_and_restores_every_indexing_row() {
+        RecordingTransactionManager transactionManager = new RecordingTransactionManager();
+        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        FileMapper fileMapper = mock(FileMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
+        TokenCounter tokenCounter = mock(TokenCounter.class);
+        ChunkVectorGateway gateway = mock(ChunkVectorGateway.class);
+        FileProcessing processing = processing(PipelineState.VECTORIZING, 5, "hash");
+        DocumentChunk parent = hierarchicalChunk(
+                1L, PARENT_PUBLIC_ID, ChunkType.PARENT, null, null, ChunkStatus.INDEXING, 1);
+        DocumentChunk first = hierarchicalChunk(
+                2L, FIRST_PUBLIC_ID, ChunkType.CHILD, 1L, PARENT_PUBLIC_ID,
+                ChunkStatus.INDEXING, 1);
+        DocumentChunk second = hierarchicalChunk(
+                3L, SECOND_PUBLIC_ID, ChunkType.CHILD, 1L, PARENT_PUBLIC_ID,
+                ChunkStatus.INDEXING, 1);
+        List<DocumentChunk> rows = List.of(parent, first, second);
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(rows);
+        when(enricher.enrich(any(), eq(512))).thenAnswer(invocation -> {
+            List<DocumentChunk> inputs = invocation.getArgument(0);
+            return inputs.stream().map(value ->
+                    new EnrichedChunk(value, null, null, 0, value.getContent())).toList();
+        });
+        when(tokenCounter.count(any())).thenReturn(10);
+        when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
+        doThrow(new IllegalStateException("embedding unavailable")).when(gateway).add(any());
+        ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
+                stateService, enricher, tokenCounter, gateway, transactions);
+
+        worker.vectorizeBatch(hierarchyBatchJob(rows, 5));
+
+        var deletedIds = org.mockito.ArgumentCaptor.forClass(UUID.class);
+        verify(gateway, times(2)).delete(deletedIds.capture());
+        assertTrue(deletedIds.getAllValues().stream().noneMatch(id ->
+                id.equals(PARENT_PUBLIC_ID) || id.equals(FIRST_PUBLIC_ID) || id.equals(SECOND_PUBLIC_ID)));
+        var patches = org.mockito.ArgumentCaptor.forClass(DocumentChunk.class);
+        verify(chunkMapper, times(3)).update(patches.capture(), any(Wrapper.class));
+        assertTrue(patches.getAllValues().stream()
+                .allMatch(patch -> patch.getStatus() == ChunkStatus.DRAFT.code()));
+        verify(stateService).fail(KNOWLEDGE_ID, FILE_ID, PipelineState.VECTORIZING,
+                5, 0, "embedding unavailable");
+    }
+
+    @Test
+    void single_child_reindex_ignores_parent_during_enrichment_and_completes_with_active_parent() {
+        RecordingTransactionManager transactionManager = new RecordingTransactionManager();
+        TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+        FileProcessingMapper processingMapper = mock(FileProcessingMapper.class);
+        FileMapper fileMapper = mock(FileMapper.class);
+        DocumentChunkMapper chunkMapper = mock(DocumentChunkMapper.class);
+        FileProcessingService stateService = mock(FileProcessingService.class);
+        ChunkContextEnricher enricher = mock(ChunkContextEnricher.class);
+        TokenCounter tokenCounter = mock(TokenCounter.class);
+        ChunkVectorGateway gateway = mock(ChunkVectorGateway.class);
+        FileProcessing processing = processing(PipelineState.VECTORIZING, 8, "hash");
+        DocumentChunk parent = hierarchicalChunk(
+                1L, PARENT_PUBLIC_ID, ChunkType.PARENT, null, null, ChunkStatus.ACTIVE, 2);
+        DocumentChunk child = hierarchicalChunk(
+                2L, FIRST_PUBLIC_ID, ChunkType.CHILD, 1L, PARENT_PUBLIC_ID,
+                ChunkStatus.INDEXING, 3);
+        when(processingMapper.findScopedForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(processing);
+        when(chunkMapper.findByFileForUpdate(FILE_ID, TENANT_ID, KNOWLEDGE_ID))
+                .thenReturn(List.of(parent, child));
+        when(fileMapper.selectById(FILE_ID)).thenReturn(file(tempDir.resolve("source.md")));
+        AtomicReference<List<DocumentChunk>> enrichedInputs = new AtomicReference<>();
+        when(enricher.enrich(any(), eq(512))).thenAnswer(invocation -> {
+            List<DocumentChunk> inputs = invocation.getArgument(0);
+            enrichedInputs.set(inputs);
+            DocumentChunk detachedChild = inputs.get(0);
+            return List.of(new EnrichedChunk(
+                    detachedChild, null, null, 0, detachedChild.getContent()));
+        });
+        when(tokenCounter.count(any())).thenReturn(10);
+        when(chunkMapper.update(any(), any(Wrapper.class))).thenReturn(1);
+        ChunkVectorWorker worker = new ChunkVectorWorker(processingMapper, fileMapper, chunkMapper,
+                stateService, enricher, tokenCounter, gateway, transactions);
+        ChunkVectorWorker.ChunkSnapshot parentSnapshot =
+                ChunkVectorWorker.ChunkSnapshot.current(parent);
+        ChunkVectorWorker.ChunkSnapshot childSnapshot =
+                ChunkVectorWorker.ChunkSnapshot.fromIndexing(child);
+        ChunkVectorWorker.SingleJob job = new ChunkVectorWorker.SingleJob(
+                TENANT_ID, KNOWLEDGE_ID, FILE_ID, 8, "hash", 512,
+                new ChunkVectorWorker.FileSnapshot(
+                        FILE_PUBLIC_ID, tempDir.resolve("source.md").toString(), "md"),
+                List.of(parentSnapshot, childSnapshot), childSnapshot);
+
+        worker.vectorizeSingle(job);
+
+        assertEquals(List.of(ChunkType.CHILD.code()),
+                enrichedInputs.get().stream().map(DocumentChunk::getChunkType).toList());
+        verify(stateService).transition(KNOWLEDGE_ID, FILE_ID,
+                PipelineState.VECTORIZING, PipelineState.COMPLETED, 8);
     }
 
     @Test
@@ -1205,6 +1443,31 @@ class ChunkVectorServiceTest {
         chunk.setStatus(status.code());
         chunk.setLockVersion(lockVersion);
         return chunk;
+    }
+
+    private static DocumentChunk hierarchicalChunk(long id, UUID publicId, ChunkType type,
+                                                    Long parentId, UUID parentPublicId,
+                                                    ChunkStatus status, int lockVersion) {
+        DocumentChunk chunk = chunk(id, publicId, status, lockVersion,
+                type == ChunkType.PARENT ? "parent" : "child-" + id);
+        chunk.setChunkType(type.code());
+        chunk.setParentChunkId(parentId);
+        chunk.setParentPublicId(parentPublicId);
+        return chunk;
+    }
+
+    private ChunkVectorWorker.BatchJob hierarchyBatchJob(List<DocumentChunk> rows,
+                                                          int fileLockVersion) {
+        List<ChunkVectorWorker.ChunkSnapshot> allSnapshots = rows.stream()
+                .map(ChunkVectorWorker.ChunkSnapshot::fromIndexing).toList();
+        List<ChunkVectorWorker.ChunkSnapshot> targets = rows.stream()
+                .filter(chunk -> chunk.getChunkType() != ChunkType.PARENT.code())
+                .map(ChunkVectorWorker.ChunkSnapshot::fromIndexing).toList();
+        return new ChunkVectorWorker.BatchJob(TENANT_ID, KNOWLEDGE_ID, FILE_ID,
+                fileLockVersion, "hash", 512,
+                new ChunkVectorWorker.FileSnapshot(
+                        FILE_PUBLIC_ID, tempDir.resolve("source.md").toString(), "md"),
+                allSnapshots, targets);
     }
 
     private ChunkVectorWorker.BatchJob batchJob(DocumentChunk chunk, int fileLockVersion,

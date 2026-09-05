@@ -63,6 +63,23 @@ class ExternalRetrievalControllerTest {
         assertEquals(11, record.metadata().get("end_line"));
     }
 
+    @Test
+    void preserves_parent_context_and_matched_child_id_in_public_response() throws Exception {
+        RetrievedChunk parentContextFromChildHit = new RetrievedChunk(
+                "标题：Parent\n\nparent body", 0.95, "guide.md", DOCUMENT_ID, CHUNK_ID,
+                "md", null, 7, List.of("Parent"), Map.of("startLine", 20, "endLine", 30));
+
+        ExternalRetrievalController.RetrievalRecord record = retrieve(
+                List.of(parentContextFromChildHit)).records().get(0);
+
+        assertEquals("标题：Parent\n\nparent body", record.content());
+        assertEquals(CHUNK_ID.toString(), record.metadata().get("chunk_id"));
+        assertEquals(7, record.metadata().get("chunk_index"));
+        assertEquals(List.of("Parent"), record.metadata().get("section_path"));
+        assertEquals(20, record.metadata().get("start_line"));
+        assertEquals(30, record.metadata().get("end_line"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("validLineNumbers")
     void normalizes_each_supported_integral_start_line_to_integer(

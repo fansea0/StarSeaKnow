@@ -56,7 +56,8 @@ public class ChunkingConfiguration {
         ClassPathResource resource = new ClassPathResource(tokenizerResource);
         verifyChecksum(resource, expectedSha256);
         try (InputStream input = resource.getInputStream()) {
-            return new HuggingFaceTokenCounter(HuggingFaceTokenizer.newInstance(input, Map.of()), TOKENIZER_ID);
+            return new HuggingFaceTokenCounter(
+                    HuggingFaceTokenizer.newInstance(input, Map.of("truncation", "false")), TOKENIZER_ID);
         } catch (IOException e) {
             throw new IllegalStateException("Unable to load tokenizer resource: " + tokenizerResource, e);
         }

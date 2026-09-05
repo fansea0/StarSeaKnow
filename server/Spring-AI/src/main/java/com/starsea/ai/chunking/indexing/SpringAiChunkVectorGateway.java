@@ -2,6 +2,7 @@ package com.starsea.ai.chunking.indexing;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.starsea.ai.chunking.model.ChunkType;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Component;
@@ -51,6 +52,10 @@ public final class SpringAiChunkVectorGateway implements ChunkVectorGateway {
         metadata.put("chunkIndex", source.chunkIndex());
         metadata.put("fileType", source.fileType());
         metadata.put("sectionPath", sectionPathJson(source.sectionPath()));
+        metadata.put("chunkType", source.chunkType().name());
+        if (source.chunkType() == ChunkType.CHILD) {
+            metadata.put("parentChunkId", source.parentChunkPublicId().toString());
+        }
         return new Document(source.vectorId().toString(), source.indexContent(), metadata);
     }
 
