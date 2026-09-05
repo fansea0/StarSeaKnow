@@ -72,6 +72,10 @@
             <span class="kb-side__label">文档</span>
             <span class="kb-side__count mono">{{ String(docList.length).padStart(2, '0') }}</span>
           </button>
+          <button v-if="evaluationAllowed" type="button" class="kb-side__item" :class="{ 'is-active': activeTab === 'evaluation' }" data-testid="knowledge-evaluation-tab" @click="activeTab = 'evaluation'">
+            <el-icon class="kb-side__icon"><DataAnalysis /></el-icon>
+            <span class="kb-side__label">检索评测</span>
+          </button>
           <button
             type="button"
             class="kb-side__item"
@@ -85,6 +89,7 @@
       </aside>
 
       <section class="kb-content">
+        <EvaluationWorkbench v-if="activeTab === 'evaluation' && evaluationAllowed" :key="knowledgeId" :knowledge-id="knowledgeId" />
         <!-- 文档 Tab -->
         <div v-show="activeTab === 'docs'" class="kb-docs">
           <!-- Toolbar -->
@@ -299,8 +304,11 @@
 <script>
 import axios from 'axios'
 import { apiUrl } from '../api/http'
+import EvaluationWorkbench from '../components/evaluation/EvaluationWorkbench.vue'
+import { useEvaluationAccess } from '../components/evaluation/useEvaluationAccess'
 import {
   Check,
+  DataAnalysis,
   Close,
   Delete,
   Document,
@@ -317,7 +325,10 @@ import {
 
 export default {
   name: 'KnowledgeDetail',
+  setup() { return { evaluationAllowed: useEvaluationAccess() } },
   components: {
+    EvaluationWorkbench,
+    DataAnalysis,
     Check,
     Close,
     Delete,

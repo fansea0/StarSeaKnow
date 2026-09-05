@@ -1,5 +1,5 @@
 <template>
-  <article class="chunk-card" :aria-disabled="actionsDisabled ? 'true' : 'false'">
+  <article v-bind="attrs" class="chunk-card" :aria-disabled="actionsDisabled ? 'true' : 'false'">
     <header class="chunk-ribbon">
       <span class="chunk-code mono">{{ cardLabel }}</span>
       <nav
@@ -96,6 +96,15 @@
       </div>
       <div class="chunk-actions">
         <el-button
+          v-if="evaluationAllowed"
+          link
+          type="primary"
+          data-testid="evaluate-chunk"
+          :disabled="actionsDisabled || evaluationBlocked"
+          :title="evaluationBlocked ? '请先完成保存，再冻结实际文本' : '相似度测试 / 加入评测'"
+          @click="openEvaluation"
+        >相似度测试 / 加入评测</el-button>
+        <el-button
           v-if="showReindex"
           link
           type="primary"
@@ -119,12 +128,23 @@
       </div>
     </footer>
   </article>
+  <el-drawer v-if="evaluationOpen && evaluationAllowed" v-model="evaluationOpen" title="相似度测试 / 加入评测" size="min(1120px, 96vw)" append-to-body destroy-on-close :close-on-click-modal="false">
+    <EvaluationWorkbench :knowledge-id="knowledgeId" :initial-chunk-id="localChunk.publicId" />
+  </el-drawer>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, reactive, ref, useAttrs, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { deleteChunk, updateChunk } from '../../api/chunking'
+import { useEvaluationAccess } from '../evaluation/useEvaluationAccess'
+
+const EvaluationWorkbench = defineAsyncComponent(() => import('../evaluation/EvaluationWorkbench.vue'))
+defineOptions({ inheritAttrs: false })
+const attrs = useAttrs()
+const evaluationAllowed = useEvaluationAccess()
+const evaluationOpen = ref(false)
+const evaluationBlocked = ref(false)
 
 const props = defineProps({
   knowledgeId: { type: [String, Number], required: true },
@@ -289,7 +309,8 @@ function matchesServer(snapshot = currentSnapshot()) {
 function reportSaveState() {
   if (destroyed) return
   const dirty = !matchesServer()
-const pending = Boolean(saveTimer || saveInFlight || queuedSave)
+  const pending = Boolean(saveTimer || saveInFlight || queuedSave)
+  evaluationBlocked.value = dirty || pending || saveError
   emit('save-state', {
     publicId: localChunk.publicId,
     dirty,
@@ -463,6 +484,11 @@ async function saveBody() {
 function requestReindex() {
   if (actionsDisabled.value || props.reindexDisabled) return
   emit('reindex', localChunk)
+}
+
+function openEvaluation() {
+  if (actionsDisabled.value || evaluationBlocked.value || !evaluationAllowed.value) return
+  evaluationOpen.value = true
 }
 
 async function requestDelete() {

@@ -4,14 +4,19 @@
       <div>
         <span class="model-page__eyebrow">MODELS · 模型</span>
         <h1>集中管理模型预设</h1>
-        <p>按厂商维护一次 API Key 与 Base URL，智能体里直接选用，省去重复配置。</p>
+        <p>{{ modelTab === 'embedding' ? '连接本地 Ollama，为相同问题比较不同向量模型的检索效果，无需 API Key。' : '按厂商维护一次 API Key 与 Base URL，智能体里直接选用，省去重复配置。' }}</p>
       </div>
-      <button class="sea-button sea-button--primary" type="button" data-testid="add-custom-provider" @click="openCustomProvider">
+      <button v-if="modelTab === 'chat'" class="sea-button sea-button--primary" type="button" data-testid="add-custom-provider" @click="openCustomProvider">
         + 自定义厂商
       </button>
     </header>
 
-    <div class="model-shell">
+    <nav class="evaluation ev-tabs" role="tablist" aria-label="模型类型" style="margin-bottom: 18px">
+      <button class="ev-button" role="tab" :aria-selected="modelTab === 'chat'" @click="modelTab = 'chat'">对话模型</button>
+      <button v-if="evaluationAllowed" class="ev-button" role="tab" data-testid="embedding-tab" :aria-selected="modelTab === 'embedding'" @click="modelTab = 'embedding'">向量模型</button>
+    </nav>
+    <EmbeddingModels v-if="modelTab === 'embedding' && evaluationAllowed" />
+    <div v-show="modelTab === 'chat'" class="model-shell">
       <aside class="provider-rail" aria-label="厂商">
         <label class="provider-search">
           <span class="sr-only">搜索厂商</span>
@@ -179,6 +184,8 @@
 
 <script setup>
 import { computed, getCurrentInstance, onMounted, reactive, ref } from 'vue'
+import EmbeddingModels from '../components/evaluation/EmbeddingModels.vue'
+import { useEvaluationAccess } from '../components/evaluation/useEvaluationAccess'
 import {
   addProviderModel,
   createProviderConnection,
@@ -190,6 +197,8 @@ import {
 } from '../api/modelProviders'
 
 const instance = getCurrentInstance()
+const modelTab = ref('chat')
+const evaluationAllowed = useEvaluationAccess()
 const providers = ref([])
 const loading = ref(true)
 const loadError = ref('')
