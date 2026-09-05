@@ -119,6 +119,10 @@ class ParentChildChunkingWorkflowTest {
                 .allMatch(chunk -> chunk.getParentChunkId() == null));
         Map<Long, DocumentChunk> parentsById = parents.stream()
                 .collect(java.util.stream.Collectors.toMap(DocumentChunk::getId, parent -> parent));
+        assertTrue(parents.stream().allMatch(parent -> parent.getContent().contains("# 招生咨询")));
+        assertTrue(children.stream().allMatch(child -> !child.getContent().contains("# 招生咨询")));
+        assertTrue(children.stream().allMatch(child -> !Objects.equals(
+                parentsById.get(child.getParentChunkId()).getContent(), child.getContent())));
         assertEquals(IntStream.range(0, parents.size()).boxed().toList(), parents.stream()
                 .map(DocumentChunk::getSiblingPosition).toList());
         assertTrue(children.stream().allMatch(chunk -> parentsById.containsKey(chunk.getParentChunkId())

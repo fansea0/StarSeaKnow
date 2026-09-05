@@ -131,6 +131,28 @@ class MarkdownParentChildPlanningStrategyTest {
         assertEquals(2, plan.chunks().stream().filter(chunk -> chunk.type() == ChunkType.CHILD).count());
     }
 
+    @Test
+    void paragraph_parent_keeps_section_context_when_one_child_would_otherwise_match_it() {
+        ParsedStructure structure = structure(List.of(
+                block("heading", BlockType.HEADING, "# Alpha", "Alpha", 1, List.of("Alpha")),
+                block("body", BlockType.PARAGRAPH, "alpha detail", "alpha detail", null, List.of("Alpha"))));
+
+        ChunkPlan plan = strategy.planConfigured(structure, Map.of(
+                "parentMode", "PARAGRAPH",
+                "parentMaxTokens", 1024,
+                "childMaxTokens", 120,
+                "childOverlapTokens", 0));
+
+        PlannedChunk parent = plan.chunks().stream()
+                .filter(chunk -> chunk.type() == ChunkType.PARENT).findFirst().orElseThrow();
+        PlannedChunk child = plan.chunks().stream()
+                .filter(chunk -> chunk.type() == ChunkType.CHILD).findFirst().orElseThrow();
+
+        assertTrue(parent.draft().content().contains("# Alpha"));
+        assertEquals("alpha detail", child.draft().content());
+        assertFalse(parent.draft().content().equals(child.draft().content()));
+    }
+
     private void assertEveryChildReferencesEarlierParent(ChunkPlan plan) {
         for (int index = 0; index < plan.chunks().size(); index++) {
             PlannedChunk chunk = plan.chunks().get(index);

@@ -5,6 +5,7 @@ import com.starsea.ai.chunking.model.ChunkPlan;
 import com.starsea.ai.chunking.model.ChunkPolicy;
 import com.starsea.ai.chunking.model.ChunkType;
 import com.starsea.ai.chunking.model.ContextConfig;
+import com.starsea.ai.chunking.model.BlockType;
 import com.starsea.ai.chunking.model.ParentChildPolicy;
 import com.starsea.ai.chunking.model.ParsedStructure;
 import com.starsea.ai.chunking.model.PlannedChunk;
@@ -106,23 +107,24 @@ public final class MarkdownParentChildPlanningStrategy implements ChunkPlanningS
                 new ChunkPolicy(childMin, childTarget, policy.childMaxTokens()));
         return policy.parentMode() == ParentChildPolicy.ParentMode.FULL_DOCUMENT
                 ? fullDocumentPlan(structure, children, policy)
-                : paragraphPlan(children, policy);
+                : paragraphPlan(structure, children, policy);
     }
 
-    private ChunkPlan paragraphPlan(List<ChunkDraft> children, ParentChildPolicy policy) {
+    private ChunkPlan paragraphPlan(ParsedStructure structure, List<ChunkDraft> children,
+                                    ParentChildPolicy policy) {
         List<PlannedChunk> output = new ArrayList<>();
         List<ChunkDraft> group = new ArrayList<>();
         int parentPosition = 0;
         for (ChunkDraft child : children) {
             if (!group.isEmpty() && (!samePath(group.get(0), child) || strongStart(child)
-                    || parentTokens(group, child) > policy.parentMaxTokens())) {
-                addParagraphGroup(output, group, parentPosition++, policy);
+                    || parentTokens(structure, group, child) > policy.parentMaxTokens())) {
+                addParagraphGroup(output, structure, group, parentPosition++, policy);
                 group.clear();
             }
             group.add(child);
         }
         if (!group.isEmpty()) {
-            addParagraphGroup(output, group, parentPosition, policy);
+            addParagraphGroup(output, structure, group, parentPosition, policy);
         }
         return new ChunkPlan(output, policy.childMaxTokens());
     }
@@ -146,11 +148,12 @@ public final class MarkdownParentChildPlanningStrategy implements ChunkPlanningS
         return new ChunkPlan(output, policy.childMaxTokens());
     }
 
-    private void addParagraphGroup(List<PlannedChunk> output, List<ChunkDraft> group,
-                                   int parentPosition, ParentChildPolicy policy) {
+    private void addParagraphGroup(List<PlannedChunk> output, ParsedStructure structure,
+                                   List<ChunkDraft> group, int parentPosition, ParentChildPolicy policy) {
         String parentKey = "parent-" + parentPosition;
+        List<StructuredBlock> contextBlocks = sectionHeadingContext(structure, group.get(0));
         output.add(new PlannedChunk(parentKey, null, ChunkType.PARENT, parentPosition,
-                parentDraft(group), false, 40));
+                parentDraft(group, contextBlocks), false, 40));
         for (int index = 0; index < group.size(); index++) {
             output.add(child("child-" + parentPosition + "-" + index, parentKey, index, group.get(index), policy));
         }
@@ -163,22 +166,80 @@ public final class MarkdownParentChildPlanningStrategy implements ChunkPlanningS
                 Math.max(policy.childOverlapTokens(), 1));
     }
 
-    private ChunkDraft parentDraft(List<ChunkDraft> children) {
+    private ChunkDraft parentDraft(List<ChunkDraft> children, List<StructuredBlock> contextBlocks) {
         ChunkDraft first = children.get(0);
         ChunkDraft last = children.get(children.size() - 1);
-        String content = children.stream().map(ChunkDraft::content).reduce((left, right) -> left + "\n\n" + right).orElse("");
-        return new ChunkDraft(first.sectionPath(), content, combineDraftLocators(children), tokenCounter.count(content),
+        String childContent = children.stream().map(ChunkDraft::content)
+                .reduce((left, right) -> left + "\n\n" + right).orElse("");
+        String sectionContext = contextBlocks.stream().map(StructuredBlock::rawText)
+                .filter(text -> text != null && !text.isBlank())
+                .reduce((left, right) -> left + "\n\n" + right).orElse("");
+        String content = sectionContext == null || sectionContext.isBlank()
+                ? childContent : sectionContext + "\n\n" + childContent;
+        List<SourceLocator> locators = new ArrayList<>();
+        locators.addAll(contextBlocks.stream().map(StructuredBlock::sourceLocator)
+                .filter(Objects::nonNull).toList());
+        locators.addAll(children.stream().map(ChunkDraft::sourceLocator)
+                .filter(Objects::nonNull).toList());
+        return new ChunkDraft(first.sectionPath(), content, combineLocators(locators), tokenCounter.count(content),
                 Map.of("start", first.boundaryReason().getOrDefault("start", "PARAGRAPH_END"),
                         "end", last.boundaryReason().getOrDefault("end", "PARAGRAPH_END")));
     }
 
-    private int parentTokens(List<ChunkDraft> existing, ChunkDraft next) {
+    private int parentTokens(ParsedStructure structure, List<ChunkDraft> existing, ChunkDraft next) {
         String content = existing.stream().map(ChunkDraft::content)
                 .reduce((left, right) -> left + "\n\n" + right)
                 .map(current -> current + "\n\n" + next.content())
                 .orElse(next.content());
+        String context = sectionContext(structure, existing.get(0));
+        if (!context.isBlank()) {
+            content = context + "\n\n" + content;
+        }
         return tokenCounter.count(MarkdownChunkPlanningStrategy.previewIndexText(
                 existing.get(0).sectionPath(), content));
+    }
+
+    private String sectionContext(ParsedStructure structure, ChunkDraft child) {
+        return sectionHeadingContext(structure, child).stream().map(StructuredBlock::rawText)
+                .filter(text -> text != null && !text.isBlank())
+                .reduce((left, right) -> left + "\n\n" + right).orElse("");
+    }
+
+    private List<StructuredBlock> sectionHeadingContext(ParsedStructure structure, ChunkDraft child) {
+        List<String> path = child.sectionPath();
+        if (path == null || path.isEmpty()) {
+            return List.of();
+        }
+        int firstChildIndex = firstChildBlockIndex(structure, child);
+        List<StructuredBlock> headings = new ArrayList<>();
+        for (int depth = 1; depth <= path.size(); depth++) {
+            List<String> prefix = path.subList(0, depth);
+            StructuredBlock selected = null;
+            for (int index = 0; index < firstChildIndex; index++) {
+                StructuredBlock block = structure.blocks().get(index);
+                if (block.type() == BlockType.HEADING
+                        && block.sectionPath().equals(prefix)) {
+                    selected = block;
+                }
+            }
+            if (selected != null) {
+                headings.add(selected);
+            }
+        }
+        return List.copyOf(headings);
+    }
+
+    private int firstChildBlockIndex(ParsedStructure structure, ChunkDraft child) {
+        if (child.sourceLocator() == null || child.sourceLocator().blockIds().isEmpty()) {
+            return structure.blocks().size();
+        }
+        String firstBlockId = child.sourceLocator().blockIds().get(0);
+        for (int index = 0; index < structure.blocks().size(); index++) {
+            if (firstBlockId.equals(structure.blocks().get(index).blockId())) {
+                return index;
+            }
+        }
+        return structure.blocks().size();
     }
 
     private boolean samePath(ChunkDraft first, ChunkDraft second) {
